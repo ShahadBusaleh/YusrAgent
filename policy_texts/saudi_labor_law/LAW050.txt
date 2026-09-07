@@ -1,0 +1,7 @@
+Law ID: LAW050
+Category: Special Leave
+Article: 113
+Title: Bereavement Leave - Spouse or Parents/Children
+Rule: An employee is entitled to five days of paid leave upon the death of a spouse or one of the employee's parents or children.
+Conditions: The deceased must fall within the relationships specified by law.
+Exceptions: The employer may request supporting documentation.

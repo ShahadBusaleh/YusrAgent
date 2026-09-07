@@ -1,0 +1,7 @@
+Law ID: LAW029
+Category: Weekly Rest
+Article: 104
+Title: Weekly Rest Day
+Rule: Friday is the normal weekly rest day for employees.
+Conditions: Applies under the standard weekly rest arrangement.
+Exceptions: An employer may substitute another day for certain employees after notifying the competent labor office.

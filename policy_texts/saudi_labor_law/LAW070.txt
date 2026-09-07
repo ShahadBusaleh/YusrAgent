@@ -1,0 +1,7 @@
+Law ID: LAW070
+Category: Work Regulation
+Article: 4
+Title: Legally Compliant Internal Policy
+Rule: A company internal policy must be consistent with the Labor Law, Executive Regulations, Ministry decisions, and the approved work-regulation framework.
+Conditions: Applies to company-specific HR policies and work regulations.
+Exceptions: Any conflicting provision must be corrected or disregarded according to the applicable legal process.

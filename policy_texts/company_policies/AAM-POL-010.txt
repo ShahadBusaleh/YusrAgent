@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-010
+Section: 03 Disciplinary
+Policy Name: Disciplinary Investigation
+Purpose: Ensure disciplinary matters are investigated fairly
+Rule: AAM investigates disciplinary matters before making a disciplinary decision and gathers relevant information and statements.
+Conditions: Employees may provide information in their defense.

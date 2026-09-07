@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-022
+Section: 04 Leave
+Policy Name: Return From Leave
+Purpose: Define the return-from-leave process
+Rule: Employees returning from leave must complete the required return-from-leave notification with their line manager and HR.
+Conditions: The notification is used for HR and payroll records.

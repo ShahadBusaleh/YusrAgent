@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-020
+Section: 04 Leave
+Policy Name: Unpaid Leave
+Purpose: Define conditions for unpaid leave
+Rule: Unpaid leave may be granted in exceptional circumstances subject to management and HR approval.
+Conditions: Eligibility conditions and approval requirements apply.

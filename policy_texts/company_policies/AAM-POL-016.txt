@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-016
+Section: 04 Leave
+Policy Name: Unauthorized Leave
+Purpose: Define unauthorized absence and leave
+Rule: Sick leave without proper certification, unapproved vacation extensions, and absence without prior authorization are treated as unauthorized leave.
+Conditions: Unauthorized leave may result in applicable deductions or disciplinary action.

@@ -1,0 +1,7 @@
+Law ID: LAW015
+Category: Wages
+Article: 95
+Title: Wage Determination
+Rule: If the contract or work regulation does not specify the wage, the wage for similar work in the establishment is considered; otherwise applicable occupational norms are considered.
+Conditions: Applies when wage is not specified in the contract or work regulation.
+Exceptions: The labor court may determine the wage when no applicable benchmark exists.

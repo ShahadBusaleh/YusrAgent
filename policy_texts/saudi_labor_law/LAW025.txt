@@ -1,0 +1,7 @@
+Law ID: LAW025
+Category: Rest Periods
+Article: 101
+Title: Rest Period Duration
+Rule: The rest period must be at least 30 minutes at a time during the total working hours.
+Conditions: Applies to normal working arrangements.
+Exceptions: Special cases may have regulated alternatives.

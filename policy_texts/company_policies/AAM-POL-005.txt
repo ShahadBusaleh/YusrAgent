@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-005
+Section: 02 Terms and Conditions
+Policy Name: Email and Internet Use
+Purpose: Define acceptable use of electronic resources
+Rule: Employees must use email and internet resources responsibly and for legitimate Group business purposes.
+Conditions: Employees must follow data protection and internet security requirements.

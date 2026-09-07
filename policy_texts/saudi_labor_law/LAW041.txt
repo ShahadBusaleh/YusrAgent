@@ -1,0 +1,7 @@
+Law ID: LAW041
+Category: Annual Leave
+Article: 109
+Title: No Cash Substitution During Employment
+Rule: An employee may not waive annual leave or receive cash instead of taking it while the employment relationship continues.
+Conditions: Applies during employment.
+Exceptions: Unused entitlement may be payable when employment ends under Article 111.

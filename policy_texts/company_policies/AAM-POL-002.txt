@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-002
+Section: 02 Terms and Conditions
+Policy Name: Time Keeping and Punctuality
+Purpose: Define attendance and punctuality requirements
+Rule: Employees must accurately record their entry and departure times using the approved attendance system.
+Conditions: Employees are responsible for accurate attendance records.

@@ -1,0 +1,7 @@
+Law ID: LAW009
+Category: Wages
+Article: 92
+Title: Wage Deductions
+Rule: An employer may not deduct amounts from an employee's wage for private rights without written consent except for legally permitted cases.
+Conditions: Written consent is generally required.
+Exceptions: The Labor Law lists specific permitted deductions.

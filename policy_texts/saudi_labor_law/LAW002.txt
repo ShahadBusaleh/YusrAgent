@@ -1,0 +1,7 @@
+Law ID: LAW002
+Category: Wages
+Article: 90
+Title: Wage Payment Currency
+Rule: Wages and amounts due to the employee must be paid in the official currency of Saudi Arabia.
+Conditions: Applies to covered employees.
+Exceptions: Subject to the payment rules in the Labor Law.

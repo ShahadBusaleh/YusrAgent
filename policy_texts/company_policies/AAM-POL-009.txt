@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-009
+Section: 02 Terms and Conditions
+Policy Name: Business Travel
+Purpose: Control work-related travel
+Rule: Employees traveling for business must obtain the required approval before travel and submit supporting bills after the trip.
+Conditions: Travel must be work-related and properly approved.

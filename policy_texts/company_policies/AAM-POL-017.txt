@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-017
+Section: 04 Leave
+Policy Name: Hajj Leave
+Purpose: Define company Hajj leave
+Rule: Eligible employees may receive Hajj leave according to the conditions stated in the policy.
+Conditions: The policy specifies eligibility and operational limitations.

@@ -1,0 +1,7 @@
+Law ID: LAW011
+Category: Wages
+Article: 92
+Title: Social Insurance Deduction
+Rule: Statutory social insurance contributions may be deducted from the employee's wage.
+Conditions: The contribution must be legally due.
+Exceptions: Only legally applicable contributions may be deducted.

@@ -1,0 +1,7 @@
+Law ID: LAW056
+Category: Education Leave
+Article: 115
+Title: Exam Leave Without Pay
+Rule: For repeated academic years, the employee may receive unpaid leave for the actual examination days.
+Conditions: Applies when the examination is for a repeated academic year.
+Exceptions: The employee must comply with the applicable request procedure.

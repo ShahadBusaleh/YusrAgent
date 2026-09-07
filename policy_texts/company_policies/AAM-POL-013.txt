@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-013
+Section: 04 Leave
+Policy Name: Annual Leave
+Purpose: Define annual leave entitlement and planning
+Rule: Employees receive annual leave according to company policy and applicable Saudi Labor Law, with leave planned between the employee and line manager.
+Conditions: Leave timing considers workload, business commitments, colleagues' leave, and staffing.

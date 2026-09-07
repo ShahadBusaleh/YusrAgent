@@ -1,0 +1,7 @@
+Law ID: LAW031
+Category: Weekly Rest
+Article: 105
+Title: Accumulated Weekly Rest
+Rule: In remote locations or work requiring continuous operation, weekly rest may be accumulated for a period not exceeding eight weeks under specified conditions.
+Conditions: Requires agreement between employer and employees and Ministry approval.
+Exceptions: The statutory conditions for accumulation must be satisfied.

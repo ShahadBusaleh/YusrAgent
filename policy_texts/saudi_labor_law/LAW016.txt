@@ -1,0 +1,7 @@
+Law ID: LAW016
+Category: Wages
+Article: 96
+Title: Piecework Wage Calculation
+Rule: For piecework or production-based wages, the average actual daily wage may be used for calculating certain statutory rights.
+Conditions: The employee must have qualifying piecework or production-based pay.
+Exceptions: The calculation follows the statutory method.

@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-015
+Section: 04 Leave
+Policy Name: Sick Leave
+Purpose: Define sick leave reporting requirements
+Rule: Employees must notify their Department Head on the first day of sickness and provide the required medical certificate.
+Conditions: Medical documentation must be provided through an accredited authority.

@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-025
+Section: 05 Benefits
+Policy Name: Suggestion Program
+Purpose: Allow employees to submit improvement ideas
+Rule: Employees may submit suggestions related to improving operations, reducing costs, solving problems, or improving services.
+Conditions: Suggestions should describe the problem, proposed solution, and expected benefit.

@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-003
+Section: 02 Terms and Conditions
+Policy Name: Head Office Working Hours
+Purpose: Define standard working hours
+Rule: Standard Head Office working hours are 8:00 AM to 5:00 PM with a one-hour lunch break.
+Conditions: Applies to Head Office employees.

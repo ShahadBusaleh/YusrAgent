@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-021
+Section: 04 Leave
+Policy Name: Annual Leave Ticket
+Purpose: Define annual leave travel ticket entitlement
+Rule: Eligible employees may receive an annual leave round-trip ticket subject to company limits and HR approval.
+Conditions: Ticket booking requires HR approval.

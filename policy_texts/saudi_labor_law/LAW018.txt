@@ -1,0 +1,7 @@
+Law ID: LAW018
+Category: Working Hours
+Article: 98
+Title: Daily Working Hours
+Rule: Actual working hours generally may not exceed eight hours per day when the daily standard is used.
+Conditions: Applies to employees covered by the normal working-hour rule.
+Exceptions: Certain categories have special working-hour rules.

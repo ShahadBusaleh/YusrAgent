@@ -1,0 +1,7 @@
+Law ID: LAW038
+Category: Annual Leave
+Article: 109
+Title: Annual Leave After Five Years
+Rule: Annual leave increases to at least 30 days when the employee completes five consecutive years of service with the employer.
+Conditions: Five consecutive years of service are required.
+Exceptions: Applicable service rules apply.

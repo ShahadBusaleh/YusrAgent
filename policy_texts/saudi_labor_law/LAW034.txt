@@ -1,0 +1,7 @@
+Law ID: LAW034
+Category: Overtime
+Article: 107
+Title: Weekly Overtime
+Rule: When the weekly standard is used, hours exceeding the adopted weekly working-hour standard are overtime.
+Conditions: Applies when the weekly standard is used.
+Exceptions: Applicable exceptions are governed by the Labor Law.

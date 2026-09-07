@@ -1,0 +1,7 @@
+Law ID: LAW065
+Category: Work Regulation
+Article: 13
+Title: Employer Work Regulation
+Rule: Every employer must prepare workplace regulations for the establishment according to the model prepared by the Ministry, unless an applicable exception applies.
+Conditions: Applies to employers covered by the Labor Law.
+Exceptions: The Minister may provide an exception.

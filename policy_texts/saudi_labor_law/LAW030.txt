@@ -1,0 +1,7 @@
+Law ID: LAW030
+Category: Weekly Rest
+Article: 104
+Title: Weekly Rest Duration
+Rule: The weekly rest period must be paid and must not be less than 24 consecutive hours.
+Conditions: Applies to covered employees.
+Exceptions: Alternative arrangements may apply under statutory exceptions.

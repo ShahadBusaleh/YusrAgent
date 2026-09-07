@@ -1,0 +1,7 @@
+Law ID: LAW062
+Category: Sick Leave
+Article: 117
+Title: Sick Leave Following 30 Days
+Rule: After the first 90 days, the employee may receive unpaid sick leave for the following 30 days within the same statutory year.
+Conditions: Applies to verified illness.
+Exceptions: The statutory one-year period applies.

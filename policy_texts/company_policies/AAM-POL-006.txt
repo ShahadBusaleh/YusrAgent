@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-006
+Section: 02 Terms and Conditions
+Policy Name: Confidential Information
+Purpose: Protect company confidential information
+Rule: Employees must not disclose confidential AAM information during or after employment except when authorized or legally required.
+Conditions: Applies to confidential company and business information.

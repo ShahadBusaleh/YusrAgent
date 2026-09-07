@@ -1,0 +1,7 @@
+Law ID: LAW019
+Category: Working Hours
+Article: 98
+Title: Weekly Working Hours
+Rule: Actual working hours generally may not exceed 48 hours per week when the weekly standard is used.
+Conditions: Applies to employees covered by the normal working-hour rule.
+Exceptions: Certain categories and arrangements have special rules.

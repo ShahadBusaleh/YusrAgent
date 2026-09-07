@@ -1,0 +1,7 @@
+Law ID: LAW047
+Category: Annual Leave
+Article: 111
+Title: Partial-Year Leave
+Rule: An employee is entitled to payment for annual leave accrued proportionally during part of a year of service.
+Conditions: Applies when employment ends or entitlement is otherwise calculated for a partial year.
+Exceptions: The amount is proportional to service.

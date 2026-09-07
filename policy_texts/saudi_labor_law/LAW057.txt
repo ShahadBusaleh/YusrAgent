@@ -1,0 +1,7 @@
+Law ID: LAW057
+Category: Education Leave
+Article: 115
+Title: Exam Leave Request
+Rule: An employee must generally submit an examination leave request at least 15 days before the examination date.
+Conditions: Applies to examination leave requests.
+Exceptions: Supporting documents may be required.

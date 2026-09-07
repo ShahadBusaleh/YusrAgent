@@ -1,0 +1,7 @@
+Law ID: LAW054
+Category: Hajj Leave
+Article: 114
+Title: Hajj Leave Eligibility
+Rule: The employee must have completed at least two consecutive years with the employer to qualify for statutory Hajj leave.
+Conditions: The employee must not have previously performed Hajj under the statutory condition.
+Exceptions: The employer may determine the number of employees receiving Hajj leave annually according to work requirements.

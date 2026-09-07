@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-024
+Section: 05 Benefits
+Policy Name: Medical Insurance
+Purpose: Provide medical coverage information
+Rule: AAM provides medical care for employees according to the HR Department's applicable arrangements and Saudi regulations.
+Conditions: Coverage is subject to the applicable insurance arrangements.

@@ -1,0 +1,7 @@
+Law ID: LAW036
+Category: Working Hours
+Article: 108
+Title: Excluded Categories
+Rule: Certain senior management positions and specified types of preparatory, complementary, intermittent, guarding, and cleaning work may be excluded from some working-hour provisions.
+Conditions: The employee or work must fall within the legally specified categories.
+Exceptions: The Executive Regulations determine applicable details and maximum hours.

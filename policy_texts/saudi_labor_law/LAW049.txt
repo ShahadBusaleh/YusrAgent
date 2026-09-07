@@ -1,0 +1,7 @@
+Law ID: LAW049
+Category: Special Leave
+Article: 113
+Title: Marriage Leave
+Rule: An employee is entitled to five days of paid leave for marriage.
+Conditions: The leave is counted from the date of the event.
+Exceptions: The employer may request supporting documentation.

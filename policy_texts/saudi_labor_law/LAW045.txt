@@ -1,0 +1,7 @@
+Law ID: LAW045
+Category: Annual Leave
+Article: 110
+Title: Employer Postponement
+Rule: An employer may postpone annual leave after the entitlement year for up to 90 days when work circumstances require it.
+Conditions: Business circumstances must justify postponement.
+Exceptions: Further postponement requires written employee consent and cannot extend beyond the end of the following year.

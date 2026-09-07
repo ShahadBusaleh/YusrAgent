@@ -1,0 +1,7 @@
+Law ID: LAW023
+Category: Working Hours
+Article: 100
+Title: Shift Work
+Rule: With Ministry approval, shift-based establishments may increase daily or weekly working hours provided the statutory average is maintained over the specified period.
+Conditions: The nature of the establishment must require shift work and Ministry approval.
+Exceptions: The statutory averaging limit applies.

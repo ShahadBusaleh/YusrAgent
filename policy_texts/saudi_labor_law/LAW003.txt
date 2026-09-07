@@ -1,0 +1,7 @@
+Law ID: LAW003
+Category: Wages
+Article: 90
+Title: Monthly Wage Payment
+Rule: Employees receiving monthly wages must be paid at least once each month.
+Conditions: Applies to monthly-paid employees.
+Exceptions: Contractual arrangements cannot reduce statutory payment rights.

@@ -1,0 +1,7 @@
+Law ID: LAW017
+Category: Wages
+Article: 97
+Title: Detention Related to Work
+Rule: When an employee is detained in a case connected with work or because of work, the employer may be required to continue paying 50 percent of the wage during the statutory period.
+Conditions: The detention must be connected with work or caused by it.
+Exceptions: Payment is subject to the statutory maximum period and final case outcome.

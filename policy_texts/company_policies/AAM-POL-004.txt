@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-004
+Section: 02 Terms and Conditions
+Policy Name: Ramadan Working Hours
+Purpose: Define working hours during Ramadan
+Rule: Working hours are reduced to six hours per day for Muslim employees during Ramadan.
+Conditions: Non-Muslim employees follow the applicable working schedule stated in the policy.

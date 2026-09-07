@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-011
+Section: 03 Disciplinary
+Policy Name: Disciplinary Confidentiality
+Purpose: Protect confidentiality during investigations
+Rule: Investigations should be conducted objectively, confidentially, and with respect for the rights of involved employees.
+Conditions: Applies to disciplinary investigations.

@@ -1,0 +1,7 @@
+Law ID: LAW059
+Category: Unpaid Leave
+Article: 116
+Title: Contract Suspension During Long Unpaid Leave
+Rule: The employment contract is considered suspended during unpaid leave exceeding 20 days unless both parties agree otherwise.
+Conditions: The unpaid leave must exceed 20 days.
+Exceptions: A different arrangement may be agreed between the parties.

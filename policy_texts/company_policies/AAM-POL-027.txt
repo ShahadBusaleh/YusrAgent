@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-027
+Section: 07 Health and Safety
+Policy Name: General Hygiene
+Purpose: Maintain professional workplace hygiene
+Rule: Employees are expected to maintain appropriate personal hygiene, appearance, and workplace standards.
+Conditions: Specific appearance and hygiene requirements apply according to the work location.

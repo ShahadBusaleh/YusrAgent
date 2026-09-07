@@ -1,0 +1,7 @@
+Law ID: LAW044
+Category: Annual Leave
+Article: 110
+Title: Employee Postponement
+Rule: An employee may postpone annual leave or some days of it to the following year with employer approval.
+Conditions: Employer approval is required.
+Exceptions: Further postponement is subject to statutory limits.

@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-014
+Section: 04 Leave
+Policy Name: Public Holidays
+Purpose: Define company treatment of public holidays
+Rule: Employees receive paid leave for public holidays and occasions according to applicable rules.
+Conditions: Applicable public holidays include Eid holidays, Saudi National Day, and Founding Day.

@@ -1,0 +1,7 @@
+Law ID: LAW028
+Category: Rest Periods
+Article: 102
+Title: Employee Freedom During Break
+Rule: The employer may not require the employee to remain at the workplace during the statutory rest period.
+Conditions: Applies to qualifying rest periods.
+Exceptions: Specific operational cases may have regulated arrangements.

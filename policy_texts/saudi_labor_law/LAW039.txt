@@ -1,0 +1,7 @@
+Law ID: LAW039
+Category: Annual Leave
+Article: 109
+Title: Paid Annual Leave
+Rule: Annual leave is paid leave and its wage is paid in advance.
+Conditions: Applies to annual leave entitlement.
+Exceptions: Payment is subject to applicable payroll arrangements.

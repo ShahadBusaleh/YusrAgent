@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-008
+Section: 02 Terms and Conditions
+Policy Name: Usage of Group Property
+Purpose: Protect company property and assets
+Rule: Employees must handle company property responsibly and may face action for loss or damage according to applicable procedures.
+Conditions: Applies to company property assigned to employees.

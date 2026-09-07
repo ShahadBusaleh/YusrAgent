@@ -1,0 +1,7 @@
+Law ID: LAW052
+Category: Special Leave
+Article: 113
+Title: Birth Leave
+Rule: An employee is entitled to three days of paid leave when a child is born.
+Conditions: The leave must be taken within seven days from the date of birth.
+Exceptions: The employer may request supporting documentation.

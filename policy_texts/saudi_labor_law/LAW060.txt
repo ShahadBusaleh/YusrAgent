@@ -1,0 +1,7 @@
+Law ID: LAW060
+Category: Sick Leave
+Article: 117
+Title: Sick Leave First 30 Days
+Rule: An employee with a verified illness is entitled to paid sick leave for the first 30 days within the statutory one-year period.
+Conditions: Illness must be proven according to applicable procedures.
+Exceptions: The one-year period begins with the first sick leave.

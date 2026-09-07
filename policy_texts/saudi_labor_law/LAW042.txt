@@ -1,0 +1,7 @@
+Law ID: LAW042
+Category: Annual Leave
+Article: 109
+Title: Employer Scheduling
+Rule: The employer may determine annual leave dates according to work requirements or rotate leave to maintain business operations.
+Conditions: The employer must comply with statutory notice requirements.
+Exceptions: Employee rights to statutory leave remain applicable.

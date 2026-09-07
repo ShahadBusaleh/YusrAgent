@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-001
+Section: 02 Terms and Conditions
+Policy Name: Internal Regulations
+Purpose: Define the internal rules employees must follow
+Rule: Employees must follow the approved internal regulations of AAM.
+Conditions: Applies to all employees.

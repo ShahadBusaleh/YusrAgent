@@ -1,0 +1,7 @@
+Law ID: LAW053
+Category: Hajj Leave
+Article: 114
+Title: Hajj Leave Duration
+Rule: An employee may receive paid Hajj leave for not less than 10 days and not more than 15 days including Eid Al-Adha leave.
+Conditions: The employee must meet the statutory eligibility conditions.
+Exceptions: Hajj leave is generally available once during service.

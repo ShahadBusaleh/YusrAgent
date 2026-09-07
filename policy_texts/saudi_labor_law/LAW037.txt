@@ -1,0 +1,7 @@
+Law ID: LAW037
+Category: Annual Leave
+Article: 109
+Title: Minimum Annual Leave
+Rule: An employee is entitled to annual leave of at least 21 days for each year of service.
+Conditions: Applies to eligible employees.
+Exceptions: Service and employment status rules apply.

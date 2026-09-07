@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-019
+Section: 04 Leave
+Policy Name: Paid Special Leave
+Purpose: Define paid special leave categories
+Rule: Eligible employees may receive paid leave for qualifying events such as marriage, childbirth, death, and maternity according to the policy.
+Conditions: Supporting documentation may be required.

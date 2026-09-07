@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-018
+Section: 04 Leave
+Policy Name: Examination Leave
+Purpose: Support employees pursuing education
+Rule: Eligible employees may receive examination leave for actual examination days according to the conditions in the policy.
+Conditions: Employees should apply at least 15 calendar days before the examination.

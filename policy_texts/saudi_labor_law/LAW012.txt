@@ -1,0 +1,7 @@
+Law ID: LAW012
+Category: Wages
+Article: 92
+Title: Court Debt Deduction
+Rule: Amounts may be deducted to enforce a court judgment subject to the statutory limits.
+Conditions: A valid court judgment must exist.
+Exceptions: Maintenance and certain priority debts are treated according to the law.

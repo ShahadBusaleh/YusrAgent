@@ -1,0 +1,7 @@
+Law ID: LAW008
+Category: Wages
+Article: 91
+Title: Deduction Limit for Damage
+Rule: A deduction for damage generally may not exceed the equivalent of five days' wage in a month under the stated statutory rule.
+Conditions: Applies to deductions for employee-caused damage.
+Exceptions: The employer may seek additional recovery through the applicable legal process.

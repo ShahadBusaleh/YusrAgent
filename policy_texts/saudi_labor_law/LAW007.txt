@@ -1,0 +1,7 @@
+Law ID: LAW007
+Category: Wages
+Article: 91
+Title: Deduction for Damage
+Rule: An employer may deduct an amount needed to repair damage caused by an employee's fault or violation of instructions, subject to statutory limits.
+Conditions: Damage must result from the employee's fault or violation and not force majeure or another person's fault.
+Exceptions: The employee may challenge the deduction through the competent labor court.

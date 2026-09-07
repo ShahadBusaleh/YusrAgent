@@ -1,0 +1,7 @@
+Law ID: LAW063
+Category: Sick Leave
+Article: 117
+Title: Definition of Sick Leave Year
+Rule: For statutory sick leave, the one-year period begins on the date of the employee's first sick leave.
+Conditions: Applies when calculating the sick leave entitlement period.
+Exceptions: The calculation covers continuous and intermittent sick leave.

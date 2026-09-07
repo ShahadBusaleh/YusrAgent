@@ -1,0 +1,220 @@
+HR Multi-Agent Assistant
+Bring Your Own Idea — Agentic AI Project Report
+
+A policy-grounded HR system using three specialized AI agents: Execution, Policy Analysis, and Validation.
+
+1. Project Overview
+
+Our project proposes an agentic AI system for Human Resources (HR). The system is designed to help HR employees retrieve employee information, check company policies, analyze requests, and validate recommendations before a final response is delivered. Instead of relying on one AI model to complete every step, the solution uses three specialized agents with clearly separated responsibilities.
+
+The main goal is to make HR operations faster and more consistent while reducing the risk of unsupported answers, policy violations, or AI hallucinations.
+
+2. Problem We Are Trying to Solve
+
+HR teams often need to combine information from multiple sources before responding to a request. A single case may require checking an employee record, reading an HR policy, comparing the facts with eligibility rules, and deciding whether the proposed action is allowed. Performing these steps manually can take time and may lead to inconsistent decisions or missed policy requirements.
+
+A standard chatbot may also generate a confident answer without verifying the employee data or the policy source. Our proposed system addresses this problem by separating execution, policy analysis, and final validation into different agents.
+
+3. Target Users
+HR employees who handle routine employee requests and information checks.
+HR specialists and consultants who need policy-based analysis.
+HR managers who supervise decisions and ensure policy compliance.
+Organizations that want to automate repetitive HR tasks while keeping sensitive decisions controlled and auditable.
+4. Proposed Multi-Agent Solution
+
+The system consists of three agents. Each agent has a clear role, uses specific tools, and passes its output to the next agent. This separation creates checks and balances within the AI system.
+
+4.1 HR Agent — Execution Agent
+
+The HR Agent receives the HR employee's request, understands the task, and identifies the information needed to answer it. It acts as the execution layer of the system.
+
+Retrieves employee information from a Mock HR Database.
+Uses Retrieval-Augmented Generation (RAG) to find relevant HR policies or internal documents when needed.
+Organizes the retrieved facts and prepares an initial response or proposed action.
+Passes the result and its supporting sources to the Consultant Agent for review.
+4.2 Consultant Agent — Policy & Analysis Agent
+
+The Consultant Agent reviews the HR Agent's result from an HR policy and business perspective. Its main responsibility is to verify whether the proposed answer or action is consistent with the organization's HR policies.
+
+Retrieves the relevant policies using RAG.
+Compares employee facts with the requirements stated in the policy.
+Identifies policy conflicts, missing conditions, or exceptions.
+Produces a policy-grounded recommendation for the Manager Agent.
+4.3 Manager Agent — Validation & Supervisor Agent
+
+The Manager Agent is the final validation layer. It reviews the work of both the HR Agent and the Consultant Agent before the system returns a result to the HR employee.
+
+It checks whether the data is accurate, the correct tools and sources were used, the recommendation follows policy, the agents stayed within their permissions, and the response is grounded in retrieved evidence rather than unsupported assumptions.
+
+If the result is correct, the Manager Agent returns PASS. If it detects an error, unsupported claim, missing evidence, or policy problem, it returns FAIL and sends the request back to the HR Agent for correction.
+
+5. System Architecture (from architecture diagram)
+
+Overall flow: User → Identity & Access → Policy Engine → Orchestrator Agent → (HR Specialist Agent + RAG Specialist Agent, in parallel) → Governance & Security Layer → Response to User (Pass / Fail / Replan-Escalate). An Audit & Observability layer runs alongside the whole pipeline, logging every step.
+
+User & Access layer
+
+User: Employee or HR Staff.
+Identity & Access: SSO/MFA, identity verification, user context.
+Policy Engine: RBAC/ABAC, permission check, data access policy.
+
+1. Orchestrator Agent — responsibilities: intent classification, task decomposition, agent selection, state management, result synthesis, error handling. It performs five steps:
+
+Understand — understand user request & intent.
+Plan — decompose into sub-tasks.
+Delegate — select the right specialist agent.
+Monitor — monitor progress & handle errors.
+Synthesize — combine results & generate final response.
+
+2. HR Specialist Agent — domain expert for structured HR data and operations. Capabilities: employee info, leave management, payroll information, benefits & claims, HR operations. It handles HR reasoning & calculations, HR workflows & validations, tool/API calling, and transactional tasks. It connects to the HR Tool Layer: Employee API, Leave API, Payroll API, Benefits API, HR Database (SQL).
+
+3. RAG Specialist Agent — expert for retrieving and providing evidence from HR knowledge. Capabilities: policy search, document Q&A, regulations, procedures, guidelines. It handles query understanding & rewrite, hybrid retrieval (vector + keyword), reranking & filtering, and evidence with citations. It connects to the Knowledge Layer: HR Policies, Employee Handbook, Regulations & Laws, Procedures, Benefits Documents, all backed by a Vector Database.
+
+Governance & Security Layer (cross-cutting) — six checks applied to every response:
+
+Authorization: enforce access control, user/data/tool-level permissions, least privilege.
+PII Protection: detect and mask PII, prevent data leakage, data minimization.
+Policy Enforcement: enforce HR policies, business rules, compliance checks.
+Prompt Injection Defense: detect malicious prompts, block injection attempts, sanitize inputs & docs.
+Output Validation: groundedness check, hallucination detection, source verification.
+Rate Limit & Safety: rate limiting, abuse detection, safe interactions.
+Human Approval: required for critical actions, high-risk operations, escalation rules.
+
+Outcomes:
+
+PASS (Approve) — all checks passed; safe & compliant response delivered to user.
+Response to User — clear, accurate, grounded, and policy-compliant answer with sources.
+FAIL (Reject) — one or more checks failed; replan, correct, or escalate to human review.
+Replan / Escalate — orchestrator re-plans, requests clarification, or escalates to a human for review.
+
+Audit & Observability layer (runs alongside the pipeline): logs every action, traces agents & tools, tracks metrics & monitoring, produces compliance reports.
+
+Key benefits called out in the diagram: secure by design, accurate & grounded, policy compliant, auditable & traceable, scalable & extensible, human-in-the-loop.
+
+Worked example shown in the diagram:
+
+User request: "How many annual leave days do I have remaining and can I carry them forward?"
+Orchestrator plan: (1) Get leave balance → HR Specialist. (2) Get carry-over policy → RAG Specialist. (3) Combine results & generate answer.
+Final response: "You have 12 days of annual leave remaining. According to the Annual Leave Policy (Section 4.2), up to 5 days can be carried forward to the next year." Sources: Annual Leave Policy (v3.1); HR System (Leave Balance).
+6. End-to-End Workflow (from workflow table)
+#	Step	Function	Tools Used
+1	User Input	User submits an HR request through the interface.	Streamlit
+2	API Gateway	Receives the request and routes it to the system.	FastAPI
+3	Manager Agent – Intent Extraction	Understands the request and extracts intent, entities, and required_agents as structured JSON.	LLM API, Structured Output, Pydantic
+4	Manager Agent – Routing Logic	Determines which agents are required and controls the execution sequence.	Python
+5a	HR Execution Agent	Retrieves or modifies employee and HR data and performs authorized HR actions.	SQLite, Function/Tool Calling, Pydantic
+5b	Consultant Agent – RAG	Retrieves relevant HR policies and generates an answer based only on policy documents.	sentence-transformers, Qdrant Cloud, qdrant-client, Python Text Splitter, LLM
+6	Security Layer	Evaluates the request and determines whether it can be executed automatically or requires human approval.	Python if/else Rules, SQLite
+6a	Auto-Execute	Executes low-risk approved actions automatically.	Python, execute_action(), SQLite
+6b	Pending Human Approval	Sends higher-risk actions to an approver for approval or rejection.	Streamlit, SQLite (pending_approvals)
+7	Response Synthesis – Manager Agent	Combines the results from the agents and generates the final response using predefined logic.	Python Rules, LLM
+8	Audit Logging	Records requests, decisions, approvals, executions, and results for auditing.	Python Logging, SQLite (audit_log)
+9	Response Output	Displays the final response to the user.	Streamlit
+
+Shared project tools (used across the whole system): FastAPI (unified API layer for the system), Pydantic (input and structured-output validation), python-dotenv (API key and environment variable management), requirements.txt (dependency management and documentation).
+
+7. Example Use Case
+
+An HR employee asks: "Is this employee eligible for a specific benefit?" The HR Agent retrieves the employee's relevant information from the Mock HR Database and retrieves the benefit policy through RAG. It produces an initial answer. The Consultant Agent then compares the employee data with the policy conditions and provides a recommendation. Finally, the Manager Agent verifies that the correct employee record and policy were used and that the recommendation is fully supported. If everything is correct, it returns PASS; otherwise, it returns FAIL and sends the case back for correction.
+
+8. Expected Benefits
+Faster handling of routine HR requests.
+More consistent policy-based recommendations.
+Reduced risk of human error and unsupported AI answers.
+Better grounding because responses are linked to employee data and retrieved policies.
+A built-in validation layer that can reduce hallucinations.
+Improved traceability of which data, policies, and checks were used.
+More time for HR teams to focus on complex and human-centered work.
+9. Open Questions and Feedback Needed
+
+We would like feedback on how much decision-making authority should be given to the AI agents. Low-risk requests may be suitable for automatic recommendations, while sensitive cases such as disciplinary actions, compensation changes, or employment decisions should likely require human approval.
+
+We are also considering whether the three-agent structure is the best balance between reliability and complexity, or whether some responsibilities could be combined without reducing the quality of validation.
+
+10. Conclusion
+
+The HR Multi-Agent Assistant is designed to combine employee data, HR policies, automated analysis, and independent validation in one controlled system. By assigning execution, policy analysis, and supervision to separate agents, the system can support faster HR operations while improving consistency, explainability, and reliability. The project also provides a practical way to demonstrate core agentic AI concepts such as tool use, RAG, multi-agent collaboration, iterative correction, decision-making, and human oversight.
+
+Suggested Tools
+
+Streamlit, FastAPI, LLM API, Pydantic, Python, SQLite, Qdrant Cloud, qdrant-client, Text Splitter, transformers
+
+color pallette : /* CSS HEX */
+
+--dark-coffee: #462e24ff;
+
+--grey-olive: #847860ff;
+
+--pale-oak: #e8d4bbff;
+
+--onyx: #111312ff;
+
+--powder-blue: #a4bcd4ff;
+
+/* CSS HSL */
+
+--dark-coffee: hsla(18, 32%, 21%, 1);
+
+--grey-olive: hsla(40, 16%, 45%, 1);
+
+--pale-oak: hsla(33, 49%, 82%, 1);
+
+--onyx: hsla(150, 6%, 7%, 1);
+
+--powder-blue: hsla(210, 36%, 74%, 1);
+
+/* SCSS HEX */
+
+$dark-coffee: #462e24ff;
+
+$grey-olive: #847860ff;
+
+$pale-oak: #e8d4bbff;
+
+$onyx: #111312ff;
+
+$powder-blue: #a4bcd4ff;
+
+/* SCSS HSL */
+
+$dark-coffee: hsla(18, 32%, 21%, 1);
+
+$grey-olive: hsla(40, 16%, 45%, 1);
+
+$pale-oak: hsla(33, 49%, 82%, 1);
+
+$onyx: hsla(150, 6%, 7%, 1);
+
+$powder-blue: hsla(210, 36%, 74%, 1);
+
+/* SCSS RGB */
+
+$dark-coffee: rgba(70, 46, 36, 1);
+
+$grey-olive: rgba(132, 120, 96, 1);
+
+$pale-oak: rgba(232, 212, 187, 1);
+
+$onyx: rgba(17, 19, 18, 1);
+
+$powder-blue: rgba(164, 188, 212, 1);
+
+/* SCSS Gradient */
+
+$gradient-top: linear-gradient(0deg, #462e24ff, #847860ff, #e8d4bbff, #111312ff, #a4bcd4ff);
+
+$gradient-right: linear-gradient(90deg, #462e24ff, #847860ff, #e8d4bbff, #111312ff, #a4bcd4ff);
+
+$gradient-bottom: linear-gradient(180deg, #462e24ff, #847860ff, #e8d4bbff, #111312ff, #a4bcd4ff);
+
+$gradient-left: linear-gradient(270deg, #462e24ff, #847860ff, #e8d4bbff, #111312ff, #a4bcd4ff);
+
+$gradient-top-right: linear-gradient(45deg, #462e24ff, #847860ff, #e8d4bbff, #111312ff, #a4bcd4ff);
+
+$gradient-bottom-right: linear-gradient(135deg, #462e24ff, #847860ff, #e8d4bbff, #111312ff, #a4bcd4ff);
+
+$gradient-top-left: linear-gradient(225deg, #462e24ff, #847860ff, #e8d4bbff, #111312ff, #a4bcd4ff);
+
+$gradient-bottom-left: linear-gradient(315deg, #462e24ff, #847860ff, #e8d4bbff, #111312ff, #a4bcd4ff);
+
+$gradient-radial: radial-gradient(#462e24ff, #847860ff, #e8d4bbff, #111312ff, #a4bcd4ff);

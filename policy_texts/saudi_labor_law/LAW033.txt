@@ -1,0 +1,7 @@
+Law ID: LAW033
+Category: Overtime
+Article: 107
+Title: Overtime Compensation
+Rule: Overtime is compensated at the hourly wage plus 50 percent of the basic wage.
+Conditions: The hours must qualify as overtime under the Labor Law.
+Exceptions: Alternative paid compensatory leave may be used with employee consent under applicable rules.

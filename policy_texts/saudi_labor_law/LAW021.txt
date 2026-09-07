@@ -1,0 +1,7 @@
+Law ID: LAW021
+Category: Working Hours
+Article: 99
+Title: Special Daily Hours
+Rule: Working hours may be increased to nine hours per day for certain categories or industries where employees do not work continuously.
+Conditions: The category or industry must fall within the cases determined by the competent authority.
+Exceptions: Only designated categories are covered.

@@ -1,0 +1,7 @@
+Law ID: LAW024
+Category: Rest Periods
+Article: 101
+Title: Rest After Continuous Work
+Rule: Work must be organized so that an employee does not work more than five continuous hours without a rest, prayer, and meal period.
+Conditions: A qualifying rest period must be provided.
+Exceptions: Certain continuous-work cases may be regulated differently.

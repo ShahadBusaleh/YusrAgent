@@ -1,0 +1,7 @@
+Law ID: LAW013
+Category: Wages
+Article: 93
+Title: Total Deduction Limit
+Rule: Total deductions from an employee's wage generally may not exceed half of the wage due.
+Conditions: Applies to aggregate deductions.
+Exceptions: A labor court may determine circumstances allowing a higher deduction subject to statutory protection.

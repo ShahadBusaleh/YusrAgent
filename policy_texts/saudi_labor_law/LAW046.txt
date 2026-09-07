@@ -1,0 +1,7 @@
+Law ID: LAW046
+Category: Annual Leave
+Article: 111
+Title: Unused Leave at Termination
+Rule: An employee who leaves employment before using earned annual leave is entitled to payment for the unused period.
+Conditions: Applies when employment ends with unused earned leave.
+Exceptions: The calculation follows the statutory entitlement.

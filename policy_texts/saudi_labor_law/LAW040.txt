@@ -1,0 +1,7 @@
+Law ID: LAW040
+Category: Annual Leave
+Article: 109
+Title: Use of Annual Leave
+Rule: Employees should take annual leave during the year in which it becomes due.
+Conditions: Applies to annual leave entitlement.
+Exceptions: Postponement is permitted under the conditions of Article 110.

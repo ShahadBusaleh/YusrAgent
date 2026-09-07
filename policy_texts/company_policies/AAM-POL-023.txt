@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-023
+Section: 04 Leave
+Policy Name: Late Return From Leave
+Purpose: Define handling of late return from leave
+Rule: Employees who cannot return on the approved date must notify their line manager as soon as possible.
+Conditions: Unapproved additional leave may be treated as a violation.

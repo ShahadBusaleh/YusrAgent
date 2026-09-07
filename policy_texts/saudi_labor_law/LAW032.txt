@@ -1,0 +1,7 @@
+Law ID: LAW032
+Category: Working Hours
+Article: 106
+Title: Exceptional Working Conditions
+Rule: Certain exceptional situations allow temporary non-compliance with normal working-hour and rest provisions.
+Conditions: Examples include annual inventory, emergencies, unusual workload, and specified seasonal occasions.
+Exceptions: Actual working hours may not exceed the statutory emergency limits.

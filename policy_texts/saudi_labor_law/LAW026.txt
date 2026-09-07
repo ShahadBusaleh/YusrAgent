@@ -1,0 +1,7 @@
+Law ID: LAW026
+Category: Rest Periods
+Article: 101
+Title: Maximum Workplace Presence
+Rule: An employee should not remain at the workplace for more than 12 hours in one day under the stated rule.
+Conditions: Applies to covered employees.
+Exceptions: Exceptions may be regulated for specific work situations.

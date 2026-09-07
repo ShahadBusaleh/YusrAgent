@@ -1,0 +1,7 @@
+Law ID: LAW069
+Category: Work Regulation
+Article: 4
+Title: Special Work Regulation Review
+Rule: An establishment preparing a special workplace regulation must follow the Ministry's applicable review and approval process and ensure the regulation does not conflict with labor legislation.
+Conditions: Applies to establishments preparing customized work regulations.
+Exceptions: Eligible establishments may use the unified electronic model instead.

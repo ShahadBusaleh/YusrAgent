@@ -1,0 +1,7 @@
+Law ID: LAW014
+Category: Wages
+Article: 94
+Title: Unlawful Wage Deduction
+Rule: An employee may seek recovery of an unlawful deduction through the competent labor court.
+Conditions: The deduction must lack legal basis or written consent where required.
+Exceptions: The court may impose an additional penalty on the employer in qualifying cases.

@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-012
+Section: 03 Disciplinary
+Policy Name: Employee Appeal and Grievance
+Purpose: Provide employees with a way to challenge decisions
+Rule: Employees may submit a written appeal to a higher level than the person who made the decision within the period specified by the policy.
+Conditions: Appeals should be submitted within seven days of notification.

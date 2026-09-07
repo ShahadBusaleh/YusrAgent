@@ -1,0 +1,7 @@
+Law ID: LAW001
+Category: Wages
+Article: 89
+Title: Minimum Wage
+Rule: The Council of Ministers may establish a minimum wage when appropriate based on a proposal from the Minister.
+Conditions: Applies when a minimum wage is established by the competent authority.
+Exceptions: The applicable minimum may depend on the relevant decision.

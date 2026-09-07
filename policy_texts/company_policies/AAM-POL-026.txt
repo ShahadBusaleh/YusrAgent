@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-026
+Section: 07 Health and Safety
+Policy Name: Smoking Policy
+Purpose: Maintain a smoke-free workplace
+Rule: Smoking is prohibited in workplace areas and is permitted only in designated smoking areas.
+Conditions: Applies to offices and work sites.

@@ -1,0 +1,7 @@
+Law ID: LAW048
+Category: Public Holidays
+Article: 112
+Title: Paid Holidays
+Rule: Employees are entitled to paid leave for official holidays and occasions specified by the applicable regulations.
+Conditions: Applies to covered employees.
+Exceptions: The applicable regulations determine the holidays.

@@ -1,0 +1,7 @@
+Law ID: LAW058
+Category: Unpaid Leave
+Article: 116
+Title: Unpaid Leave Approval
+Rule: An employee may receive unpaid leave with employer approval for a period agreed by both parties.
+Conditions: Employer approval is required.
+Exceptions: The duration is agreed between the parties.

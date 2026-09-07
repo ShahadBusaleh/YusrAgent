@@ -1,0 +1,7 @@
+Law ID: LAW005
+Category: Wages
+Article: 90
+Title: Piecework Payment
+Rule: When piecework takes more than two weeks, the employee must receive weekly payments proportionate to completed work, with the remaining amount paid after delivery.
+Conditions: Applies to qualifying piecework.
+Exceptions: Specific contractual arrangements may apply within legal limits.

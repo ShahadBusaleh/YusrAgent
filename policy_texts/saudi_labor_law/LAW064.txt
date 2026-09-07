@@ -1,0 +1,7 @@
+Law ID: LAW064
+Category: Leave
+Article: 118
+Title: Working for Another Employer During Leave
+Rule: An employee may not work for another employer while using statutory leave covered by the leave chapter.
+Conditions: Applies during the specified statutory leaves.
+Exceptions: If the employer proves a violation, wage for the leave may be withheld or recovered as permitted by law.

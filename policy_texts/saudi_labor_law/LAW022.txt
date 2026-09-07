@@ -1,0 +1,7 @@
+Law ID: LAW022
+Category: Working Hours
+Article: 99
+Title: Hazardous Work Hours
+Rule: Working hours may be reduced to seven hours per day for certain hazardous or harmful work categories.
+Conditions: The work or category must be designated by the competent authority.
+Exceptions: Only designated categories are covered.

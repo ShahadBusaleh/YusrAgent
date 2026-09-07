@@ -1,0 +1,7 @@
+Law ID: LAW010
+Category: Wages
+Article: 92
+Title: Loan Deduction
+Rule: Repayment of an employer loan may be deducted subject to the statutory limit.
+Conditions: Applies to loans granted by the employer.
+Exceptions: The deduction may not exceed the statutory percentage.

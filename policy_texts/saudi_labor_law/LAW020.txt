@@ -1,0 +1,7 @@
+Law ID: LAW020
+Category: Working Hours
+Article: 98
+Title: Ramadan Working Hours
+Rule: During Ramadan, actual working hours for Muslim employees are reduced to no more than six hours per day or 36 hours per week.
+Conditions: Applies to Muslim employees during Ramadan.
+Exceptions: Specific statutory categories may have different treatment.

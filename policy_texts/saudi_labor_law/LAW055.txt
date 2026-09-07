@@ -1,0 +1,7 @@
+Law ID: LAW055
+Category: Education Leave
+Article: 115
+Title: Exam Leave With Pay
+Rule: An employee approved for enrollment in an educational institution may receive paid leave for actual examination days for a non-repeated academic year.
+Conditions: Employer must approve enrollment or allow continued enrollment.
+Exceptions: The employer may request evidence of the examination.

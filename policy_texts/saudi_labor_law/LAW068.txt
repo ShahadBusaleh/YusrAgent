@@ -1,0 +1,7 @@
+Law ID: LAW068
+Category: Work Regulation
+Article: 12
+Title: Unified Work Regulation Model
+Rule: The Ministry establishes one or more unified models for workplace regulations covering work organization, benefits, violations, and disciplinary provisions.
+Conditions: The applicable model is determined by the Ministry.
+Exceptions: Establishments may use a special regulation when permitted.

@@ -1,0 +1,7 @@
+Law ID: LAW006
+Category: Wages
+Article: 90
+Title: Bank Wage Payment
+Rule: Establishments are required to pay wages into employees' bank accounts through approved banks in Saudi Arabia, subject to applicable rules.
+Conditions: Applies to covered establishments.
+Exceptions: The Minister may exempt certain establishments.

@@ -1,0 +1,7 @@
+Law ID: LAW061
+Category: Sick Leave
+Article: 117
+Title: Sick Leave Next 60 Days
+Rule: After the first 30 days, the employee is entitled to three-quarters of the wage for the following 60 days of sick leave within the same statutory year.
+Conditions: Applies to verified illness.
+Exceptions: The statutory sequence applies whether leave is continuous or intermittent.

@@ -1,0 +1,7 @@
+Law ID: LAW035
+Category: Overtime
+Article: 107
+Title: Holiday Overtime
+Rule: All work performed during statutory holidays and official leave days is treated as overtime.
+Conditions: Applies to work performed on qualifying holidays or leave days.
+Exceptions: Specific regulations may determine applicable exceptions.

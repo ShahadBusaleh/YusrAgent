@@ -1,0 +1,6 @@
+Policy ID: AAM-POL-007
+Section: 02 Terms and Conditions
+Policy Name: Telephone and Mobile Use
+Purpose: Control personal use of company communication resources
+Rule: Company telephones are intended for business use and personal calls during working hours should be limited to emergencies.
+Conditions: Personal calls should be brief and must not interfere with work.

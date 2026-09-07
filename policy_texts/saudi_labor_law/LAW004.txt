@@ -1,0 +1,7 @@
+Law ID: LAW004
+Category: Wages
+Article: 90
+Title: Daily Wage Payment
+Rule: Employees paid on a daily basis must receive their wages at least once each week.
+Conditions: Applies to daily-paid employees.
+Exceptions: Subject to applicable payment arrangements.

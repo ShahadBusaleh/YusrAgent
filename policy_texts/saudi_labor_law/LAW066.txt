@@ -1,0 +1,7 @@
+Law ID: LAW066
+Category: Work Regulation
+Article: 13
+Title: Additional Internal Rules
+Rule: An employer may add conditions and provisions to its workplace regulations as long as they do not conflict with the Labor Law, its regulations, or implementing decisions.
+Conditions: Internal rules must remain legally compliant.
+Exceptions: Conflicting provisions are not valid.

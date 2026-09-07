@@ -1,0 +1,7 @@
+Law ID: LAW027
+Category: Rest Periods
+Article: 102
+Title: Rest Excluded from Working Hours
+Rule: Rest, prayer, and meal periods are not counted as actual working hours.
+Conditions: Employee must not be under the employer's authority during the rest period.
+Exceptions: The applicable organization of work may differ in regulated cases.

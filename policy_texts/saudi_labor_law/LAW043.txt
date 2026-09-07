@@ -1,0 +1,7 @@
+Law ID: LAW043
+Category: Annual Leave
+Article: 109
+Title: Leave Notice
+Rule: The employer must notify the employee of the scheduled annual leave sufficiently in advance and the statutory notice is at least 30 days.
+Conditions: Applies when the employer schedules the leave.
+Exceptions: Applicable arrangements must comply with the law.
