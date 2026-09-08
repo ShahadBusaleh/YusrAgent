@@ -1,0 +1,14 @@
+---
+description: RAG ingest/retrieve/generate is finished. Do not replace it.
+globs: app/rag/**
+alwaysApply: false
+---
+
+# RAG is frozen
+
+`app/rag/` is complete (ingest, retrieve, generate).
+
+- Fix a crash only if the human reports a real bug in these files.
+- Do not add a new vector DB, chunker, or second generate path.
+- Consultant Agent lives in `app/agents/consultant_agent.py` and **imports** this package.
+- If the user asks to “build RAG,” tell them it is done; point to `TEAM.md` Member 1.

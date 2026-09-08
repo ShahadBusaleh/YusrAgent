@@ -1,0 +1,14 @@
+---
+description: Consultant Agent — policy RAG caller only.
+globs: app/agents/consultant_agent.py
+alwaysApply: false
+---
+
+# Consultant Agent
+
+Implement `run()` → `{ recommendation, conflicts, sources }`.
+
+- Use `app.rag.generate.answer_with_rag`. Do not edit `app/rag/`.
+- Do not query SQLite. `hr_result` may be `{}`.
+- `conflicts` is always a list.
+- Refuse HR, Manager, Orchestrator, and UI work.

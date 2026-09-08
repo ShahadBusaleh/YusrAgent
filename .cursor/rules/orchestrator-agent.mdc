@@ -1,0 +1,14 @@
+---
+description: Orchestrator wires the three agents; no domain logic.
+globs: app/agents/orchestrator.py
+alwaysApply: false
+---
+
+# Orchestrator
+
+Implement `run()` → `{ status, response, sources }`.
+
+- Call `HRAgent`, then `ConsultantAgent` (pass `hr_result`), then `ManagerAgent`.
+- Do not put SQL, RAG, or governance rules here.
+- Do not rewrite the other agent files if they are still stubs.
+- `/agent/query` already calls this class. Avoid editing the router.

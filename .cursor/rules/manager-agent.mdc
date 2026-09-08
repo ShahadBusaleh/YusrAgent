@@ -1,0 +1,14 @@
+---
+description: Manager Agent — rule-based PASS/FAIL, not a chatbot.
+globs: app/agents/manager_agent.py
+alwaysApply: false
+---
+
+# Manager Agent
+
+Implement `run()` → `{ decision: PASS|FAIL, reasons, response }`.
+
+- Call `app.security.governance` (`validate_output`, injection, auth, etc.).
+- No LLM, no Qdrant, no SQL.
+- Empty sources or ungrounded text → `FAIL` with reasons.
+- Refuse implementing other agents.

@@ -1,0 +1,14 @@
+---
+description: HR Agent — SQLite facts only, no RAG.
+globs: app/agents/hr_agent.py
+alwaysApply: false
+---
+
+# HR Agent
+
+Implement `run()` → `{ facts, proposed_action, sources }`.
+
+- Use `app.db.leave` and `app.db.employees` only. No schema changes.
+- No Qdrant, no LLM. `employee` role: own `employee_id` only.
+- First slice: leave balance. `proposed_action` may be `None`.
+- Refuse Consultant, Manager, Orchestrator, and RAG work.

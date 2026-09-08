@@ -1,0 +1,14 @@
+---
+description: Yusor is a 4-person team. Lock to one role; RAG is already done.
+alwaysApply: true
+---
+
+# Team roles
+
+Read `AGENTS.md` and `TEAM.md` before any code change.
+
+- One role per chat: Consultant, HR, Manager, or Orchestrator. Ask if unspecified.
+- Edit only that role’s files (see `TEAM.md`). Refuse other members’ work.
+- Do not rebuild `app/rag/`. Consultant calls `answer_with_rag`.
+- Keep stub `run()` input/output keys. Do not change DB schema or commit `.env`.
+- Smallest implementation that meets **Done when**, then stop.
