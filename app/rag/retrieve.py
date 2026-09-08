@@ -11,12 +11,14 @@ from app.rag.embeddings import embed_text
 
 def _hit_to_chunk(hit) -> dict:
     payload = hit.payload or {}
+    # query_points returns ScoredPoint (has .score); scroll returns Record (does not).
+    score = getattr(hit, "score", None)
     return {
         "id": payload.get("id"),
         "source_table": payload.get("source_table"),
         "filename": payload.get("filename"),
         "text": payload.get("text"),
-        "score": float(hit.score or 0.0),
+        "score": float(score or 0.0),
     }
 
 
@@ -63,3 +65,15 @@ def retrieve(query: str, top_k: int = 5) -> list[dict]:
 
     ordered = sorted(ranked.values(), key=lambda c: c["score"], reverse=True)
     return ordered[:top_k]
+
+
+if __name__ == "__main__":
+    import sys
+
+    query = " ".join(sys.argv[1:]).strip() or "What is the minimum annual leave per year?"
+    results = retrieve(query, top_k=5)
+    print(f"Query: {query}\n")
+    for rank, chunk in enumerate(results, start=1):
+        print(rank, chunk["id"], round(chunk["score"], 4))
+        print(f"   {chunk['filename']}  ({chunk['source_table']})")
+        print()

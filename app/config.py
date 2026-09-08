@@ -28,6 +28,9 @@ class Settings:
     qdrant_api_key: str
     qdrant_collection: str
     embedding_model: str
+    llm_api_key: str
+    llm_base_url: str
+    llm_model: str
 
 
 def get_settings() -> Settings:
@@ -47,4 +50,7 @@ def get_settings() -> Settings:
         embedding_model=os.getenv(
             "EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
         ),
+        llm_api_key=os.getenv("LLM_API_KEY", ""),
+        llm_base_url=os.getenv("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
+        llm_model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
     )
