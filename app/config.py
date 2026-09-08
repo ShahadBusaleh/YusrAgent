@@ -51,6 +51,8 @@ def get_settings() -> Settings:
             "EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
         ),
         llm_api_key=os.getenv("LLM_API_KEY", ""),
-        llm_base_url=os.getenv("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
+        llm_base_url=os.getenv(
+            "LLM_BASE_URL", "https://api.openai.com/v1"
+        ),
         llm_model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
     )

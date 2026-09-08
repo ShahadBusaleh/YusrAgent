@@ -18,7 +18,7 @@ def _hit_to_chunk(hit) -> dict:
         "source_table": payload.get("source_table"),
         "filename": payload.get("filename"),
         "text": payload.get("text"),
-        "score": float(score or 0.0),
+       "score": float(getattr(hit, "score", 0.0) or 0.0),
     }
 
 
