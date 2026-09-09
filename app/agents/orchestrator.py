@@ -1,34 +1,83 @@
+from app.agents.hr_agent import HRAgent
+from app.agents.consultant_agent import ConsultantAgent
+from app.agents.manager_agent import ManagerAgent
 class OrchestratorAgent:
     def run(self, input: dict) -> dict:
-        """Orchestrator: understand, plan, delegate, monitor, synthesize.
-
-        Expected input:
-            query (str): free-text HR request
-            user (dict): authenticated user_id, employee_id, role
-
-        Expected output:
-            status: PASS | FAIL | REPLAN
-            response (str): user-facing answer
-            sources (list): cited employee/policy identifiers
-        """
-
-        query = input["query"]
+        query = str(input["query"])
         user = input["user"]
 
-        # 1. HR Agent: get employee facts
-        hr_result = HRAgent().run({
-            "query": query,
-            "user": user,
-            "employee_id": user["employee_id"]
-        })
 
-        # 2. Consultant Agent: analyze policy using HR facts
-        consultant_result = ConsultantAgent().run({
-            "query": query,
-            "hr_result": hr_result
-        })
+        # 1. Decide which agents are needed
+        policy_keywords = [
+            "policy",
+            "law",
+            "overtime",
+            "annual leave",
+            "leave policy",
+            "how many days",
+            "notice period",
+            "working hours",
+        ]
 
-        # 3. Manager Agent: validate and make the final decision
+        employee_keywords = [
+            "my",
+            "me",
+            "i have",
+            "my balance",
+            "my leave",
+            "remaining",
+        ]
+
+        query_lower = query.lower()
+
+        is_policy_question = any(
+            keyword in query_lower for keyword in policy_keywords
+        )
+
+        is_employee_question = any(
+            keyword in query_lower for keyword in employee_keywords
+        )
+
+        # 2. Employee-specific request
+        if is_employee_question:
+            hr_result = HRAgent().run({
+                "query": query,
+                "user": user,
+                "employee_id": user["employee_id"]
+            })
+
+            consultant_result = ConsultantAgent().run({
+                "query": query,
+                "hr_result": hr_result
+            })
+
+        # 3. General policy question
+        elif is_policy_question:
+            hr_result = {
+                "facts": {},
+                "proposed_action": None,
+                "sources": []
+            }
+
+            consultant_result = ConsultantAgent().run({
+                "query": query,
+                "hr_result": hr_result
+            })
+
+        # 4. Default: use both HR and Consultant
+        else:
+            hr_result = HRAgent().run({
+                "query": query,
+                "user": user,
+                "employee_id": user["employee_id"]
+            })
+
+            consultant_result = ConsultantAgent().run({
+                "query": query,
+                "hr_result": hr_result
+            })
+
+        # 5. Manager validates the final result
         manager_result = ManagerAgent().run({
             "query": query,
             "user": user,
@@ -36,7 +85,6 @@ class OrchestratorAgent:
             "consultant_result": consultant_result
         })
 
-        # 4. Return the final orchestrator result
         return {
             "status": manager_result["decision"],
             "response": manager_result["response"],
