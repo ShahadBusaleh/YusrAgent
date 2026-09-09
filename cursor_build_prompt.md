@@ -1,5 +1,6 @@
 # Cursor Build Prompt — Yusor (HR Multi-Agent Assistant, Scaffolding Only)
 
+Paste this into Cursor (Composer/Chat) at the root of the project.
 
 ---
 
