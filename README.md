@@ -1,5 +1,7 @@
 # Yusor — HR Multi-Agent Assistant
+Policy-grounded HR assistant: **HR Agent** (SQLite facts) + **Consultant Agent** (RAG over policies) + **Manager Agent** (PASS/FAIL), wired by an **Orchestrator**.
 
+Team work, setup, and **rules for your AI** are in **[TEAM.md](TEAM.md)**. Any AI working in this repo must also follow **[AGENTS.md](AGENTS.md)**.
 
 ## Setup
 
