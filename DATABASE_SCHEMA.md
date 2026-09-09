@@ -1,7 +1,5 @@
 # Yusor — SQLite Database (agentic_hr.db)
 
-Built from your 11 CSV exports, extending the tables already defined in your
-working-draft schema, plus a login/RBAC layer added afterward. 14 tables total.
 
 ## Authentication & RBAC (added)
 
