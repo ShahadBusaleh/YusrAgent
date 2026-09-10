@@ -1,95 +1,94 @@
-from app.agents.hr_agent import HRAgent
+import re
+
 from app.agents.consultant_agent import ConsultantAgent
+from app.agents.hr_agent import HRAgent
 from app.agents.manager_agent import ManagerAgent
+
+_EMPTY_HR = {
+    "facts": {},
+    "proposed_action": None,
+    "sources": [],
+}
+
+# Word boundaries so "me" does not match inside "employment".
+_EMPLOYEE_FACT_PATTERNS = (
+    r"\bmy\b",
+    r"\bme\b",
+    r"\bi have\b",
+    r"\bi've\b",
+    r"\bdo i have\b",
+    r"\bremaining\b",
+    r"\bbalance\b",
+    r"\bsalary\b",
+)
+
+
 class OrchestratorAgent:
     def run(self, input: dict) -> dict:
-        query = str(input["query"])
-        user = input["user"]
+        """Plan and call HR → Consultant → Manager. No SQL, RAG, or governance here.
 
+        Expected input:
+            query (str)
+            user (dict): { user_id, employee_id, username, role }
 
-        # 1. Decide which agents are needed
-        policy_keywords = [
-            "policy",
-            "law",
-            "overtime",
-            "annual leave",
-            "leave policy",
-            "how many days",
-            "notice period",
-            "working hours",
-        ]
+        Expected output:
+            status: PASS | FAIL | REPLAN
+            response (str)
+            sources (list)
+        """
+        query = str(input.get("query") or "")
+        user = input.get("user") or {}
 
-        employee_keywords = [
-            "my",
-            "me",
-            "i have",
-            "my balance",
-            "my leave",
-            "remaining",
-        ]
-
-        query_lower = query.lower()
-
-        is_policy_question = any(
-            keyword in query_lower for keyword in policy_keywords
+        hr_result = (
+            self._run_hr(query, user)
+            if self._needs_hr(query)
+            else dict(_EMPTY_HR)
         )
 
-        is_employee_question = any(
-            keyword in query_lower for keyword in employee_keywords
-        )
-
-        # 2. Employee-specific request
-        if is_employee_question:
-            hr_result = HRAgent().run({
+        consultant_result = ConsultantAgent().run(
+            {
                 "query": query,
-                "user": user,
-                "employee_id": user["employee_id"]
-            })
-
-            consultant_result = ConsultantAgent().run({
-                "query": query,
-                "hr_result": hr_result
-            })
-
-        # 3. General policy question
-        elif is_policy_question:
-            hr_result = {
-                "facts": {},
-                "proposed_action": None,
-                "sources": []
+                "hr_result": hr_result,
             }
+        )
 
-            consultant_result = ConsultantAgent().run({
-                "query": query,
-                "hr_result": hr_result
-            })
-
-        # 4. Default: use both HR and Consultant
-        else:
-            hr_result = HRAgent().run({
+        manager_result = ManagerAgent().run(
+            {
                 "query": query,
                 "user": user,
-                "employee_id": user["employee_id"]
-            })
-
-            consultant_result = ConsultantAgent().run({
-                "query": query,
-                "hr_result": hr_result
-            })
-
-        # 5. Manager validates the final result
-        manager_result = ManagerAgent().run({
-            "query": query,
-            "user": user,
-            "hr_result": hr_result,
-            "consultant_result": consultant_result
-        })
+                "hr_result": hr_result,
+                "consultant_result": consultant_result,
+            }
+        )
 
         return {
-            "status": manager_result["decision"],
-            "response": manager_result["response"],
-            "sources": (
-                hr_result.get("sources", [])
-                + consultant_result.get("sources", [])
-            )
+            "status": manager_result.get("decision"),
+            "response": manager_result.get("response") or "",
+            "sources": list(hr_result.get("sources") or [])
+            + list(consultant_result.get("sources") or []),
         }
+
+    @staticmethod
+    def _needs_hr(query: str) -> bool:
+        query_lower = query.lower()
+        return any(
+            re.search(pattern, query_lower) for pattern in _EMPLOYEE_FACT_PATTERNS
+        )
+
+    @staticmethod
+    def _run_hr(query: str, user: dict) -> dict:
+        try:
+            result = HRAgent().run(
+                {
+                    "query": query,
+                    "user": user,
+                    "employee_id": user.get("employee_id"),
+                }
+            )
+        except NotImplementedError:
+            # HR stub until Member 2 merges. Policy half can still run.
+            return dict(_EMPTY_HR)
+
+        if not isinstance(result, dict):
+            return dict(_EMPTY_HR)
+        return result

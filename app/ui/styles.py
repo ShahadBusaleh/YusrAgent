@@ -265,6 +265,116 @@ div[data-testid="stNumberInput"] label {
   font-size: 1.02rem;
   max-width: 26rem;
 }
+
+.sidebar-hello {
+  color: var(--muted) !important;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  margin: 0.85rem 0 0.35rem;
+}
+
+.queue-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.85rem;
+  margin-bottom: 1.2rem;
+}
+.queue-stat {
+  background: rgba(17, 19, 18, 0.62);
+  border: 1px solid rgba(164, 188, 212, 0.2);
+  border-radius: 16px;
+  padding: 0.95rem 1rem 0.85rem;
+}
+.queue-stat-label {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.68rem;
+  font-weight: 700;
+  font-family: "Outfit", sans-serif;
+}
+.queue-stat-value {
+  font-family: "Outfit", sans-serif;
+  font-size: 1.85rem;
+  font-weight: 800;
+  color: var(--powder-vivid);
+  margin-top: 0.25rem;
+}
+.queue-stat--wait .queue-stat-value { color: #f0d7b8; }
+.queue-stat--back .queue-stat-value { color: #e08a7e; }
+
+.approval-card {
+  background: rgba(12, 16, 18, 0.72);
+  border: 1px solid rgba(126, 180, 224, 0.22);
+  border-radius: 18px;
+  padding: 1rem 1.1rem 0.95rem;
+  margin-bottom: 0.35rem;
+}
+.approval-card-top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.7rem;
+  align-items: center;
+  margin-bottom: 0.55rem;
+}
+.approval-who {
+  font-family: "Outfit", sans-serif;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 0 0 0.25rem;
+}
+.approval-summary {
+  color: var(--muted);
+  margin: 0;
+  font-size: 0.98rem;
+  line-height: 1.45;
+}
+.approval-meta {
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-top: 0.45rem;
+}
+.risk-pill {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 0.18rem 0.7rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-family: "Outfit", sans-serif;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.risk-pill--high { background: #e08a7e; color: var(--onyx); }
+.risk-pill--medium { background: #d7c6a4; color: var(--onyx); }
+.risk-pill--low { background: var(--powder-vivid); color: var(--onyx); }
+.status-pill {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 0.18rem 0.7rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-family: "Outfit", sans-serif;
+  letter-spacing: 0.03em;
+  background: rgba(164, 188, 212, 0.16);
+  color: var(--ink);
+}
+
+.empty-catchup {
+  background: rgba(17, 19, 18, 0.55);
+  border: 1px dashed rgba(164, 188, 212, 0.28);
+  border-radius: 18px;
+  padding: 1.4rem 1.3rem;
+  margin-top: 0.4rem;
+}
+.empty-catchup h3 {
+  margin: 0 0 0.35rem !important;
+  font-size: 1.25rem !important;
+}
+.empty-catchup p {
+  margin: 0;
+  color: var(--muted);
+}
 </style>
 """
 
@@ -297,4 +407,17 @@ def stat_card(label: str, value, variant: str = "blue") -> str:
         f'<div class="stat-value">{value if value is not None else "—"}</div>'
         f'<div class="stat-sub">days remaining</div>'
         f"</div>"
+    )
+
+
+def queue_stats(waiting: int, approved: int, sent_back: int) -> str:
+    return (
+        '<div class="queue-row">'
+        f'<div class="queue-stat queue-stat--wait"><div class="queue-stat-label">Waiting</div>'
+        f'<div class="queue-stat-value">{waiting}</div></div>'
+        f'<div class="queue-stat"><div class="queue-stat-label">Approved</div>'
+        f'<div class="queue-stat-value">{approved}</div></div>'
+        f'<div class="queue-stat queue-stat--back"><div class="queue-stat-label">Sent back</div>'
+        f'<div class="queue-stat-value">{sent_back}</div></div>'
+        "</div>"
     )

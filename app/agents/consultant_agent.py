@@ -877,6 +877,7 @@ def _build_sources(
 
         sources.append({
             "id": source_id,
+            "text": chunk.get("text"),
             "source_table": chunk.get(
                 "source_table"
             ),

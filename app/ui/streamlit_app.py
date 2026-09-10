@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import sys
 from pathlib import Path
 
@@ -17,8 +18,24 @@ styles.inject()
 PAGES_BY_ROLE = {
     "employee": ["Ask Yusor", "My leave"],
     "hr_specialist": ["Ask Yusor", "My leave", "Employees"],
-    "hr_manager": ["Ask Yusor", "My leave", "Employees", "Approvals"],
+    "hr_manager": ["Approvals", "Employees", "Ask Yusor", "My leave"],
     "admin": ["Ask Yusor", "My leave", "Employees", "Approvals", "Users", "Audit log"],
+}
+
+NAV_LABELS = {
+    "hr_manager": {
+        "Approvals": "Waiting on you",
+        "Employees": "People",
+        "Ask Yusor": "Ask Yusor",
+        "My leave": "My leave",
+    }
+}
+
+ROLE_LABELS = {
+    "employee": "Employee",
+    "hr_specialist": "HR specialist",
+    "hr_manager": "HR manager",
+    "admin": "Admin",
 }
 
 
@@ -83,15 +100,32 @@ def _shell() -> None:
     me = st.session_state.me
     role = me["role"]
     pages = PAGES_BY_ROLE.get(role, PAGES_BY_ROLE["employee"])
+    labels = NAV_LABELS.get(role, {})
+    display_name = me.get("full_name") or me["username"]
+    first_name = str(display_name).split()[0]
     with st.sidebar:
         st.markdown('<div class="yusor-brand">YUSOR</div>', unsafe_allow_html=True)
         st.markdown(
-            f'<div class="yusor-brand-sub">{me.get("full_name") or me["username"]}</div>',
+            f'<div class="yusor-brand-sub">{html.escape(str(display_name))}</div>',
             unsafe_allow_html=True,
         )
-        st.markdown(f'<span class="yusor-role">{role.replace("_", " ")}</span>', unsafe_allow_html=True)
+        st.markdown(
+            f'<span class="yusor-role">{html.escape(ROLE_LABELS.get(role, role))}</span>',
+            unsafe_allow_html=True,
+        )
+        if role == "hr_manager":
+            st.markdown(
+                f'<p class="sidebar-hello">Hi {html.escape(first_name)}. '
+                "Start with the people waiting on a decision.</p>",
+                unsafe_allow_html=True,
+            )
         st.write("")
-        page = st.radio("Navigate", pages, label_visibility="collapsed")
+        page = st.radio(
+            "Navigate",
+            pages,
+            format_func=lambda key: labels.get(key, key),
+            label_visibility="collapsed",
+        )
         st.write("")
         if st.button("Sign out", use_container_width=True):
             _logout()

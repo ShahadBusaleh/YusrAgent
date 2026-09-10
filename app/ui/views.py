@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import html
+from datetime import datetime
+
 import streamlit as st
 
 from app.ui import api_client as api
@@ -10,19 +13,85 @@ def page_chat() -> None:
     styles.hero(
         "Ask Yusor",
         "What can I help with?",
-        "Send a free-text HR request. The orchestrator is still a stub, so a 501 "
-        "response is expected until agent logic is written by hand.",
+        "Ask a policy or leave question. Answers are grounded in HR facts and policy sources.",
     )
-    query = st.text_area("Your request", height=150, placeholder="e.g. How many annual leave days do I have remaining?")
-    if st.button("Submit request", type="primary") and query.strip():
-        response = api.request("POST", "/agent/query", json={"query": query.strip()})
-        if response.status_code == 501:
-            st.info(response.json().get("detail", "Manual implementation pending"))
-            return
+    with st.form("ask_form"):
+        query = st.text_area(
+            "Your request",
+            height=150,
+            placeholder="e.g. How many annual leave days do I have remaining?",
+        )
+        submitted = st.form_submit_button("Submit request", type="primary")
+    if not (submitted and query.strip()):
+        return
+
+    api.refresh_session()
+    response = api.request(
+        "POST",
+        "/agent/query",
+        json={"query": query.strip()},
+        timeout=120.0,
+    )
+    if response.status_code == 501:
         try:
-            st.json(api.raise_for_api(response))
-        except RuntimeError as exc:
-            st.error(str(exc))
+            detail = response.json().get("detail", "Manual implementation pending")
+        except Exception:
+            detail = "Manual implementation pending"
+        st.info(detail)
+        return
+
+    if response.status_code == 401:
+        st.error("Your session expired. Sign out, sign in again, then resubmit.")
+        return
+    try:
+        payload = api.raise_for_api(response)
+    except RuntimeError as exc:
+        st.error(str(exc))
+        return
+
+    if not isinstance(payload, dict):
+        st.error("Unexpected agent response.")
+        return
+
+    status = str(payload.get("status") or "").strip() or "UNKNOWN"
+    answer_text = str(payload.get("response") or "").strip()
+    badge_color = {"PASS": "#7eb4e0", "FAIL": "#e08a7e", "REPLAN": "#d7c6a4"}.get(
+        status, "#c5d0d8"
+    )
+    st.markdown(
+        f'<span class="yusor-role" style="background:{badge_color}">{status}</span>',
+        unsafe_allow_html=True,
+    )
+
+    if status == "FAIL" and not answer_text:
+        st.caption("Blocked by governance — see status.")
+    elif answer_text:
+        st.markdown(answer_text)
+
+    source_ids: list[str] = []
+    source_texts: list[tuple[str, str]] = []
+    for item in payload.get("sources") or []:
+        if isinstance(item, str):
+            if item.strip():
+                source_ids.append(item.strip())
+            continue
+        if not isinstance(item, dict):
+            continue
+        sid = item.get("id") or item.get("source_id")
+        sid = str(sid).strip() if sid else ""
+        if sid:
+            source_ids.append(sid)
+        text = item.get("text")
+        if isinstance(text, str) and text.strip():
+            source_texts.append((sid or "source", text.strip()))
+
+    if source_ids:
+        st.markdown("**Sources:** " + " · ".join(f"`{sid}`" for sid in source_ids))
+    if source_texts:
+        with st.expander("Source excerpts"):
+            for sid, text in source_texts:
+                st.caption(sid)
+                st.write(text)
 
 
 def page_leave() -> None:
@@ -83,11 +152,19 @@ def page_leave() -> None:
 
 
 def page_employees() -> None:
-    styles.hero(
-        "HR specialist",
-        "Employee records",
-        "Search the directory, open a profile, and update low-risk contact fields.",
-    )
+    role = (st.session_state.get("me") or {}).get("role")
+    if role == "hr_manager":
+        styles.hero(
+            "Your team",
+            "People",
+            "Look someone up when a case needs context. You can still fix a phone number or email here.",
+        )
+    else:
+        styles.hero(
+            "HR specialist",
+            "Employee records",
+            "Search the directory, open a profile, and update low-risk contact fields.",
+        )
     q = st.text_input("Search by name, id, or email", placeholder="EMP0001 or Sara")
     listing = api.request("GET", "/employees", params={"q": q} if q else {})
     try:
@@ -131,28 +208,104 @@ def page_employees() -> None:
 def page_approvals() -> None:
     styles.hero(
         "HR manager",
-        "Pending approvals",
-        "Review medium- and high-risk actions. Approve or reject with a note.",
+        "Waiting on you",
+        "These are the requests that need a person — not the system — to decide. "
+        "Read the person first, then the risk.",
     )
-    status_filter = st.selectbox("Status", ["pending", "approved", "rejected", "all"])
-    params = {} if status_filter == "all" else {"status": status_filter}
-    resp = api.request("GET", "/approvals", params=params)
     try:
-        rows = api.raise_for_api(resp)
+        rows = api.raise_for_api(api.request("GET", "/approvals")) or []
     except RuntimeError as exc:
         st.error(str(exc))
         return
-    st.dataframe(rows or [], use_container_width=True, hide_index=True)
-    approval_id = st.text_input("Approval ID")
-    note = st.text_input("Decision note")
-    col_a, col_b = st.columns(2)
-    if col_a.button("Approve", type="primary", use_container_width=True) and approval_id:
-        _decide(approval_id, "approve", note)
-    if col_b.button("Reject", use_container_width=True) and approval_id:
-        _decide(approval_id, "reject", note)
+    if not isinstance(rows, list):
+        rows = []
+
+    waiting = [r for r in rows if (r.get("status") or "").lower() == "pending"]
+    approved = [r for r in rows if (r.get("status") or "").lower() == "approved"]
+    sent_back = [r for r in rows if (r.get("status") or "").lower() == "rejected"]
+    st.markdown(
+        styles.queue_stats(len(waiting), len(approved), len(sent_back)),
+        unsafe_allow_html=True,
+    )
+
+    filter_label = st.radio(
+        "Show",
+        ["Waiting", "Approved", "Sent back", "Everything"],
+        horizontal=True,
+    )
+    visible = {
+        "Waiting": waiting,
+        "Approved": approved,
+        "Sent back": sent_back,
+        "Everything": rows,
+    }[filter_label]
+
+    if not visible:
+        empty_copy = {
+            "Waiting": (
+                "You're all caught up",
+                "Nothing is waiting for a decision right now. Enjoy the quiet.",
+            ),
+            "Approved": (
+                "No approvals in this list yet",
+                "When you say yes, those decisions will live here.",
+            ),
+            "Sent back": (
+                "You haven't sent anything back",
+                "If a request isn't ready, it will show up here with your note.",
+            ),
+            "Everything": (
+                "The queue is empty",
+                "When people submit something that needs a manager, it will land here.",
+            ),
+        }[filter_label]
+        title, body = empty_copy
+        st.markdown(
+            f'<div class="empty-catchup"><h3>{title}</h3><p>{body}</p></div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    names = _employee_names([r.get("employee_id") for r in visible])
+    proposals = _proposal_map()
+    st.caption("Open a case to read it, then approve or send it back with a short note.")
+    for index, row in enumerate(visible):
+        approval_id = str(row.get("approval_id") or "")
+        employee_id = str(row.get("employee_id") or "")
+        person = names.get(employee_id) or employee_id or "Someone on the team"
+        status = (row.get("status") or "pending").lower()
+        label = f"{person} · {_action_label(row)}"
+        if status != "pending":
+            label = f"{_status_label(status)} · {label}"
+        with st.expander(label, expanded=status == "pending" and index < 2):
+            st.markdown(_approval_card_html(row, person), unsafe_allow_html=True)
+            extra = _readable_proposal(proposals.get(row.get("proposal_id")))
+            if extra:
+                st.caption("Request details")
+                st.write(extra)
+            if status != "pending":
+                note = row.get("decision_note")
+                if note:
+                    st.caption("Your note")
+                    st.write(note)
+                continue
+            with st.form(f"decide_{approval_id}"):
+                note = st.text_area(
+                    "Note",
+                    placeholder="A sentence of context helps — especially if you send this back.",
+                    label_visibility="collapsed",
+                )
+                st.caption("A note is optional for approve. Please add one if you send it back.")
+                col_a, col_b = st.columns(2)
+                approve = col_a.form_submit_button("Approve", type="primary", use_container_width=True)
+                reject = col_b.form_submit_button("Send back", use_container_width=True)
+            if approve:
+                _decide(approval_id, "approve", note, person)
+            elif reject:
+                _decide(approval_id, "reject", note, person)
 
 
-def _decide(approval_id: str, decision: str, note: str) -> None:
+def _decide(approval_id: str, decision: str, note: str, person: str = "") -> None:
     resp = api.request(
         "POST",
         f"/approvals/{approval_id}/decide",
@@ -160,10 +313,130 @@ def _decide(approval_id: str, decision: str, note: str) -> None:
     )
     try:
         api.raise_for_api(resp)
-        st.success(f"{decision.title()}d {approval_id}")
+        who = person or "this request"
+        if decision == "approve":
+            st.success(f"Approved for {who}. They can move forward.")
+        else:
+            st.success(f"Sent back to {who}. Your note is on the record.")
         st.rerun()
     except RuntimeError as exc:
         st.error(str(exc))
+
+
+def _employee_names(employee_ids: list) -> dict[str, str]:
+    names: dict[str, str] = {}
+    try:
+        listing = api.raise_for_api(api.request("GET", "/employees")) or []
+    except RuntimeError:
+        listing = []
+    if isinstance(listing, list):
+        for row in listing:
+            eid = str(row.get("employee_id") or "")
+            if eid:
+                names[eid] = row.get("full_name") or eid
+    for raw_id in employee_ids:
+        eid = str(raw_id or "")
+        if not eid or eid in names:
+            continue
+        try:
+            detail = api.raise_for_api(api.request("GET", f"/employees/{eid}")) or {}
+            names[eid] = detail.get("full_name") or eid
+        except RuntimeError:
+            names[eid] = eid
+    return names
+
+
+def _action_label(row: dict) -> str:
+    summary = str(row.get("action_summary") or "").strip()
+    if summary:
+        return summary
+    return "Needs a decision"
+
+
+def _status_label(status: str) -> str:
+    return {"pending": "Waiting", "approved": "Approved", "rejected": "Sent back"}.get(
+        status, status.title()
+    )
+
+
+def _risk_label(level: str | None) -> tuple[str, str]:
+    key = (level or "").strip().lower()
+    if key == "high":
+        return "High impact", "high"
+    if key == "medium":
+        return "Needs review", "medium"
+    if key == "low":
+        return "Low risk", "low"
+    return (level or "Risk unknown"), "low"
+
+
+def _friendly_when(raw: str | None) -> str:
+    if not raw:
+        return ""
+    text = str(raw).replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(text)
+        return dt.strftime("%d %b %Y")
+    except ValueError:
+        return str(raw)[:10]
+
+
+def _approval_card_html(row: dict, person: str) -> str:
+    risk_text, risk_class = _risk_label(row.get("risk_level"))
+    when = _friendly_when(row.get("created_at"))
+    employee_id = html.escape(str(row.get("employee_id") or ""))
+    summary = html.escape(_action_label(row))
+    status = _status_label(str(row.get("status") or "pending"))
+    decided = _friendly_when(row.get("decided_at"))
+    meta_bits = [f"Employee {employee_id}" if employee_id else ""]
+    if when:
+        meta_bits.append(f"Raised {when}")
+    if decided:
+        meta_bits.append(f"Decided {decided}")
+    meta = " · ".join(bit for bit in meta_bits if bit)
+    return (
+        '<div class="approval-card">'
+        '<div class="approval-card-top">'
+        f'<span class="risk-pill risk-pill--{risk_class}">{html.escape(risk_text)}</span>'
+        f'<span class="status-pill">{html.escape(status)}</span>'
+        "</div>"
+        f'<div class="approval-who">{html.escape(person)}</div>'
+        f'<p class="approval-summary">{summary}</p>'
+        f'<div class="approval-meta">{html.escape(meta)}</div>'
+        "</div>"
+    )
+
+
+def _proposal_map() -> dict:
+    try:
+        items = api.raise_for_api(api.request("GET", "/proposed-actions")) or []
+    except RuntimeError:
+        return {}
+    if not isinstance(items, list):
+        return {}
+    return {
+        item.get("proposal_id"): item
+        for item in items
+        if isinstance(item, dict) and item.get("proposal_id")
+    }
+
+
+def _readable_proposal(item: dict | None) -> dict | None:
+    if not item:
+        return None
+    payload = item.get("payload_json")
+    readable = {
+        "Type": str(item.get("action_type") or "").replace("_", " ").title() or None,
+        "Risk": item.get("risk_level"),
+        "Related request": item.get("related_request_id"),
+    }
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            readable[str(key).replace("_", " ").title()] = value
+    elif payload:
+        readable["Details"] = payload
+    cleaned = {k: v for k, v in readable.items() if v not in (None, "")}
+    return cleaned or None
 
 
 def page_users() -> None:

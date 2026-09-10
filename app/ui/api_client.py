@@ -18,11 +18,12 @@ def _base() -> str:
     return os.getenv("API_BASE_URL", get_settings().api_base_url).rstrip("/")
 
 
-def _headers() -> dict[str, str]:
+def _headers(extra: dict | None = None) -> dict[str, str]:
+    headers = dict(extra or {})
     token = st.session_state.get("access_token")
-    if not token:
-        return {}
-    return {"Authorization": f"Bearer {token}"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 
 def _refresh() -> bool:
@@ -45,14 +46,19 @@ def _refresh() -> bool:
     return True
 
 
+def refresh_session() -> bool:
+    """Rotate the access token before a long call such as Ask."""
+    return _refresh()
+
+
 def request(method: str, path: str, **kwargs) -> httpx.Response:
     kwargs.setdefault("timeout", 30.0)
-    kwargs.setdefault("headers", {})
-    kwargs["headers"] = {**_headers(), **kwargs["headers"]}
+    caller_headers = dict(kwargs.get("headers") or {})
+    kwargs["headers"] = _headers(caller_headers)
     url = f"{_base()}{path}"
     response = httpx.request(method, url, follow_redirects=True, **kwargs)
     if response.status_code == 401 and _refresh():
-        kwargs["headers"] = {**_headers(), **kwargs.get("headers", {})}
+        kwargs["headers"] = _headers(caller_headers)
         response = httpx.request(method, url, follow_redirects=True, **kwargs)
     return response
 
