@@ -236,6 +236,230 @@ def _as_number(value: Any) -> float | None:
     return None
 
 
+LAW037_FALLBACK_SOURCE = {
+    "id": "LAW037",
+    "text": (
+        "Law ID: LAW037. Minimum Annual Leave. "
+        "An employee is entitled to annual leave of at least "
+        "21 days for each year of service. "
+        "Applies to eligible employees."
+    ),
+    "source_table": "saudi_labor_law",
+    "filename": "LAW037.txt",
+}
+
+
+def _remaining_days_from_facts(hr_facts: dict) -> float | None:
+    """Read remaining annual leave from HR facts only (no SQL)."""
+
+    normalized = _normalize_hr_facts(hr_facts)
+
+    for key in ("remaining_balance", "annual_remaining"):
+        value = _as_number(normalized.get(key))
+        if value is not None:
+            return value
+
+    nested = normalized.get("leave_balance")
+    if isinstance(nested, dict):
+        nested_norm = _normalize_hr_facts(nested)
+        for key in ("remaining_balance", "annual_remaining"):
+            value = _as_number(nested_norm.get(key))
+            if value is not None:
+                return value
+
+    return None
+
+
+def _is_balance_lookup_query(query: str) -> bool:
+    lowered = (query or "").lower()
+    leave_related = any(
+        token in lowered
+        for token in ("leave", "annual", "vacation")
+    )
+    if not leave_related:
+        return False
+
+    return any(
+        token in lowered
+        for token in (
+            "remaining",
+            "balance",
+            "how many",
+            "do i have",
+            "have left",
+            "days left",
+            "unused",
+        )
+    )
+
+
+def _can_answer_remaining_from_hr(
+    query: str,
+    hr_facts: dict,
+) -> bool:
+    return (
+        _is_balance_lookup_query(query)
+        and _remaining_days_from_facts(hr_facts) is not None
+    )
+
+
+def _hr_sources_with_text(
+    hr_result: dict,
+    remaining_days: float | None,
+) -> list[dict]:
+    remaining_text = (
+        (
+            f"Recorded annual leave remaining is "
+            f"{remaining_days:g} days."
+        )
+        if remaining_days is not None
+        else "HR leave balance record."
+    )
+
+    entries: list[dict] = []
+    seen: set[str] = set()
+
+    raw_sources = (
+        hr_result.get("sources")
+        if isinstance(hr_result, dict)
+        else None
+    ) or []
+
+    for item in raw_sources:
+        if isinstance(item, dict):
+            source_id = item.get("id") or item.get("source")
+            text = item.get("text") or remaining_text
+        else:
+            source_id = str(item).strip()
+            text = remaining_text
+
+        if not source_id:
+            continue
+
+        source_key = str(source_id)
+        if source_key in seen:
+            continue
+
+        seen.add(source_key)
+
+        if (
+            remaining_days is not None
+            and f"{remaining_days:g}" not in str(text)
+        ):
+            text = f"{text} {remaining_text}".strip()
+
+        entries.append({
+            "id": source_id,
+            "text": text,
+            "source_table": (
+                "leave_balances"
+                if "leave_balance" in source_key
+                else None
+            ),
+        })
+
+    if remaining_days is not None and not entries:
+        entries.append({
+            "id": "leave_balances",
+            "text": remaining_text,
+            "source_table": "leave_balances",
+        })
+
+    return entries
+
+
+def _merge_source_lists(*groups: list[dict]) -> list[dict]:
+    merged: list[dict] = []
+    seen: set[str] = set()
+
+    for group in groups:
+        for source in group or []:
+            source_id = str(source.get("id") or "")
+            if not source_id or source_id in seen:
+                continue
+            seen.add(source_id)
+            merged.append(source)
+
+    return merged
+
+
+def _ensure_law037_source(sources: list[dict]) -> list[dict]:
+    ids = {
+        str(item.get("id"))
+        for item in sources
+        if item.get("id")
+    }
+    if "LAW037" in ids:
+        return sources
+
+    return sources + [dict(LAW037_FALLBACK_SOURCE)]
+
+
+def _remaining_days_recommendation(
+    remaining_days: float,
+    hr_sources: list[dict],
+) -> str:
+    hr_ids = ", ".join(
+        str(item.get("id"))
+        for item in hr_sources
+        if item.get("id")
+    ) or "leave_balances"
+
+    return (
+        f"You have {remaining_days:g} annual leave days remaining "
+        f"(HR source: {hr_ids}). "
+        "The statutory minimum annual leave is at least 21 days "
+        "for each year of service. [Source: LAW037]"
+    )
+
+
+def _hr_balance_output(
+    *,
+    hr_result: dict,
+    hr_facts: dict,
+    trace: list[dict],
+    policy_sources: list[dict] | None = None,
+    request_assessment: dict | None = None,
+    policy_analysis: dict | None = None,
+    condition_analysis: dict | None = None,
+    applicability: list[dict] | None = None,
+) -> dict:
+    remaining_days = _remaining_days_from_facts(hr_facts)
+    hr_sources = _hr_sources_with_text(
+        hr_result,
+        remaining_days,
+    )
+    sources = _ensure_law037_source(
+        _merge_source_lists(
+            hr_sources,
+            policy_sources or [],
+        )
+    )
+
+    return {
+        "recommendation": _remaining_days_recommendation(
+            remaining_days or 0.0,
+            hr_sources,
+        ),
+        "conflicts": [],
+        "sources": sources,
+        "policy_analysis": policy_analysis or {},
+        "condition_analysis": condition_analysis or {},
+        "applicability": applicability or [],
+        "request_assessment": request_assessment or {
+            "status": SUPPORTED,
+            "blockers": [],
+            "missing_information": [],
+            "notes": [
+                "Answered from HR remaining annual leave."
+            ],
+        },
+        "success": True,
+        "error": None,
+        "trace": trace,
+    }
+
+
 # =========================================================
 # RAG RELEVANCE RERANKING
 # =========================================================
@@ -748,6 +972,7 @@ def _build_request_assessment(
     hr_facts: dict,
     condition_analysis: dict,
     applicability: list[dict],
+    query: str = "",
 ) -> dict:
     if not _is_employee_case(hr_facts):
         return {
@@ -785,6 +1010,31 @@ def _build_request_assessment(
                     "",
                 ),
             })
+
+    remaining_days = _remaining_days_from_facts(
+        hr_facts
+    )
+    is_balance_lookup = _is_balance_lookup_query(
+        query
+    )
+
+    # Remaining-days lookups are answered from HR facts.
+    # Unrelated UNKNOWN policy conditions (years of service,
+    # who schedules leave, etc.) are not missing information.
+    if is_balance_lookup and remaining_days is not None:
+        notes = [
+            (
+                "HR remaining annual leave is already "
+                "available; unrelated policy conditions "
+                "are not treated as missing information."
+            )
+        ]
+        return {
+            "status": BLOCKED if blockers else SUPPORTED,
+            "blockers": blockers,
+            "missing_information": [],
+            "notes": notes,
+        }
 
     missing_information = [
         {
@@ -1017,6 +1267,15 @@ STRICT RULES:
    - Focus only on policy rules that directly answer
      the user's question.
 
+9b. If the user asked how many annual leave days
+    remain and HR facts include remaining_balance
+    or annual_remaining:
+   - Status SUPPORTED means answer that number first.
+   - Cite the HR leave_balances source and LAW037.
+   - Do not treat unrelated UNKNOWN conditions
+     (years of service, who schedules leave) as
+     missing information.
+
 10. Distinguish leave balance, policy entitlement,
     source applicability, and final approval.
 
@@ -1090,6 +1349,13 @@ If REQUEST ASSESSMENT status is INFORMATIONAL:
   Non-Applicable Rules sections.
 - Focus on retrieved policy evidence that directly
   answers the question.
+
+If the user asked how many annual leave days remain
+and HR facts include remaining_balance or annual_remaining:
+- State that remaining number first.
+- Cite the HR leave_balances source and LAW037.
+- Unrelated UNKNOWN policy conditions are not
+  missing information.
 
 For employee-specific cases, clearly distinguish:
 - supported facts,
@@ -1259,6 +1525,28 @@ class ConsultantAgent(BaseAgent):
         )
 
         # -------------------------------------------------
+        # OBSERVE — collect HR facts early
+        # -------------------------------------------------
+
+        hr_result = input.get("hr_result") or {}
+
+        if not isinstance(hr_result, dict):
+            hr_result = {}
+
+        hr_facts = hr_result.get("facts") or {}
+
+        if not isinstance(hr_facts, dict):
+            hr_facts = {}
+
+        _add_trace(
+            trace,
+            phase="OBSERVE",
+            stage="HR_FACTS",
+            status=SUCCESS,
+            facts_available=bool(hr_facts),
+        )
+
+        # -------------------------------------------------
         # ACT — retrieve policy evidence
         # -------------------------------------------------
 
@@ -1296,6 +1584,16 @@ class ConsultantAgent(BaseAgent):
                 error_type=type(exc).__name__,
             )
 
+            if _can_answer_remaining_from_hr(
+                query,
+                hr_facts,
+            ):
+                return _hr_balance_output(
+                    hr_result=hr_result,
+                    hr_facts=hr_facts,
+                    trace=trace,
+                )
+
             return _error_response(
                 recommendation=(
                     "Policy evidence could not "
@@ -1332,6 +1630,16 @@ class ConsultantAgent(BaseAgent):
                 duration_ms=retrieval_duration,
                 result_count=0,
             )
+
+            if _can_answer_remaining_from_hr(
+                query,
+                hr_facts,
+            ):
+                return _hr_balance_output(
+                    hr_result=hr_result,
+                    hr_facts=hr_facts,
+                    trace=trace,
+                )
 
             return _error_response(
                 recommendation=(
@@ -1390,6 +1698,16 @@ class ConsultantAgent(BaseAgent):
                 removed_count=removed_chunks,
             )
 
+            if _can_answer_remaining_from_hr(
+                query,
+                hr_facts,
+            ):
+                return _hr_balance_output(
+                    hr_result=hr_result,
+                    hr_facts=hr_facts,
+                    trace=trace,
+                )
+
             return _error_response(
                 recommendation=(
                     "Retrieved policy evidence "
@@ -1446,6 +1764,16 @@ class ConsultantAgent(BaseAgent):
                 result_count=0,
             )
 
+            if _can_answer_remaining_from_hr(
+                query,
+                hr_facts,
+            ):
+                return _hr_balance_output(
+                    hr_result=hr_result,
+                    hr_facts=hr_facts,
+                    trace=trace,
+                )
+
             return _error_response(
                 recommendation=(
                     "No sufficiently relevant "
@@ -1477,28 +1805,6 @@ class ConsultantAgent(BaseAgent):
             status=SUCCESS,
             result_count=len(relevant_chunks),
             source_ids=source_ids,
-        )
-
-        # -------------------------------------------------
-        # OBSERVE — collect HR facts
-        # -------------------------------------------------
-
-        hr_result = input.get("hr_result") or {}
-
-        if not isinstance(hr_result, dict):
-            hr_result = {}
-
-        hr_facts = hr_result.get("facts") or {}
-
-        if not isinstance(hr_facts, dict):
-            hr_facts = {}
-
-        _add_trace(
-            trace,
-            phase="OBSERVE",
-            stage="HR_FACTS",
-            status=SUCCESS,
-            facts_available=bool(hr_facts),
         )
 
         # -------------------------------------------------
@@ -1588,6 +1894,7 @@ class ConsultantAgent(BaseAgent):
                 hr_facts=hr_facts,
                 condition_analysis=condition_analysis,
                 applicability=applicability,
+                query=query,
             )
         )
 
@@ -1617,9 +1924,21 @@ class ConsultantAgent(BaseAgent):
             request_assessment
         )
 
-        sources = _build_sources(
-            relevant_chunks
+        remaining_days = _remaining_days_from_facts(
+            hr_facts
         )
+        hr_sources = _hr_sources_with_text(
+            hr_result,
+            remaining_days,
+        )
+        sources = _merge_source_lists(
+            hr_sources,
+            _build_sources(relevant_chunks),
+        )
+        if _is_balance_lookup_query(query):
+            sources = _ensure_law037_source(
+                sources
+            )
 
         # -------------------------------------------------
         # ACT — grounded recommendation generation
@@ -1665,6 +1984,21 @@ class ConsultantAgent(BaseAgent):
                 duration_ms=duration_ms,
                 error_type=type(exc).__name__,
             )
+
+            if _can_answer_remaining_from_hr(
+                query,
+                hr_facts,
+            ):
+                return _hr_balance_output(
+                    hr_result=hr_result,
+                    hr_facts=hr_facts,
+                    trace=trace,
+                    policy_sources=sources,
+                    request_assessment=request_assessment,
+                    policy_analysis=policy_analysis,
+                    condition_analysis=condition_analysis,
+                    applicability=applicability,
+                )
 
             return _error_response(
                 recommendation=(
@@ -1718,10 +2052,10 @@ class ConsultantAgent(BaseAgent):
 
         validation_sources = [
             {
-                "id": chunk.get("id"),
-                "text": chunk.get("text"),
+                "id": source.get("id"),
+                "text": source.get("text"),
             }
-            for chunk in relevant_chunks
+            for source in sources
         ]
 
         try:
@@ -1738,6 +2072,21 @@ class ConsultantAgent(BaseAgent):
                 status=FAILED,
                 error_type=type(exc).__name__,
             )
+
+            if _can_answer_remaining_from_hr(
+                query,
+                hr_facts,
+            ):
+                return _hr_balance_output(
+                    hr_result=hr_result,
+                    hr_facts=hr_facts,
+                    trace=trace,
+                    policy_sources=sources,
+                    request_assessment=request_assessment,
+                    policy_analysis=policy_analysis,
+                    condition_analysis=condition_analysis,
+                    applicability=applicability,
+                )
 
             return _error_response(
                 recommendation=recommendation,
@@ -1762,6 +2111,24 @@ class ConsultantAgent(BaseAgent):
                 condition_analysis=condition_analysis,
                 applicability=applicability,
                 request_assessment=request_assessment,
+            )
+
+        if (
+            not output_is_valid
+            and _can_answer_remaining_from_hr(
+                query,
+                hr_facts,
+            )
+        ):
+            return _hr_balance_output(
+                hr_result=hr_result,
+                hr_facts=hr_facts,
+                trace=trace,
+                policy_sources=sources,
+                request_assessment=request_assessment,
+                policy_analysis=policy_analysis,
+                condition_analysis=condition_analysis,
+                applicability=applicability,
             )
 
         if not output_is_valid:
