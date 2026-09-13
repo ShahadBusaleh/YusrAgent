@@ -1,6 +1,6 @@
-"""Vector (+ keyword) retrieval. Returns chunks with source ids for citations."""
-
 from __future__ import annotations
+
+import time
 
 from qdrant_client.http import models as qmodels
 
@@ -11,22 +11,35 @@ from app.rag.embeddings import embed_text
 
 def _hit_to_chunk(hit) -> dict:
     payload = hit.payload or {}
-    # query_points returns ScoredPoint (has .score); scroll returns Record (does not).
-    score = getattr(hit, "score", None)
+
     return {
         "id": payload.get("id"),
         "source_table": payload.get("source_table"),
         "filename": payload.get("filename"),
         "text": payload.get("text"),
-       "score": float(getattr(hit, "score", 0.0) or 0.0),
+        "score": float(getattr(hit, "score", 0.0) or 0.0),
     }
 
 
 def retrieve(query: str, top_k: int = 5) -> list[dict]:
-    """Hybrid-ish search: dense vectors plus a payload text match, fused by RRF."""
+    """Hybrid-ish search: dense vectors plus keyword search."""
+
+    total_start = time.perf_counter()
+
     settings = get_settings()
+
+    # 1. Qdrant client
+    start = time.perf_counter()
     client = get_qdrant_client()
+    print(f"[RAG] get_qdrant_client: {(time.perf_counter() - start) * 1000:.2f} ms")
+
+    # 2. Embedding
+    start = time.perf_counter()
     vector = embed_text(query)
+    print(f"[RAG] embed_text: {(time.perf_counter() - start) * 1000:.2f} ms")
+
+    # 3. Dense search
+    start = time.perf_counter()
 
     dense = client.query_points(
         collection_name=settings.qdrant_collection,
@@ -34,7 +47,16 @@ def retrieve(query: str, top_k: int = 5) -> list[dict]:
         limit=top_k,
         with_payload=True,
     )
-    try:
+
+    print(
+        f"[RAG] dense query: "
+        f"{(time.perf_counter() - start) * 1000:.2f} ms"
+    )
+
+    # 4. Keyword search
+    start = time.perf_counter()
+
+    """    try:
         keyword = client.scroll(
             collection_name=settings.qdrant_collection,
             scroll_filter=qmodels.Filter(
@@ -49,31 +71,55 @@ def retrieve(query: str, top_k: int = 5) -> list[dict]:
             with_payload=True,
             with_vectors=False,
         )[0]
-    except Exception:
-        keyword = []
+    except Exception as e:
+        print(f"[RAG] keyword search failed: {e}")"""
+    keyword = []
+
+    print(
+        f"[RAG] keyword search: "
+        f"{(time.perf_counter() - start) * 1000:.2f} ms"
+    )
+
+    # 5. RRF
+    start = time.perf_counter()
 
     ranked: dict[str, dict] = {}
     k = 60
+
     for rank, hit in enumerate(dense.points, start=1):
         chunk = _hit_to_chunk(hit)
         key = f"{chunk.get('source_table')}:{chunk.get('id')}"
-        ranked[key] = {**chunk, "score": ranked.get(key, {}).get("score", 0.0) + 1.0 / (k + rank)}
+
+        ranked[key] = {
+            **chunk,
+            "score": ranked.get(key, {}).get("score", 0.0)
+            + 1.0 / (k + rank),
+        }
+
     for rank, hit in enumerate(keyword, start=1):
         chunk = _hit_to_chunk(hit)
         key = f"{chunk.get('source_table')}:{chunk.get('id')}"
-        ranked[key] = {**chunk, "score": ranked.get(key, {}).get("score", 0.0) + 1.0 / (k + rank)}
 
-    ordered = sorted(ranked.values(), key=lambda c: c["score"], reverse=True)
+        ranked[key] = {
+            **chunk,
+            "score": ranked.get(key, {}).get("score", 0.0)
+            + 1.0 / (k + rank),
+        }
+
+    ordered = sorted(
+        ranked.values(),
+        key=lambda c: c["score"],
+        reverse=True,
+    )
+
+    print(
+        f"[RAG] RRF: "
+        f"{(time.perf_counter() - start) * 1000:.2f} ms"
+    )
+
+    print(
+        f"[RAG] TOTAL: "
+        f"{(time.perf_counter() - total_start) * 1000:.2f} ms"
+    )
+
     return ordered[:top_k]
-
-
-if __name__ == "__main__":
-    import sys
-
-    query = " ".join(sys.argv[1:]).strip() or "What is the minimum annual leave per year?"
-    results = retrieve(query, top_k=5)
-    print(f"Query: {query}\n")
-    for rank, chunk in enumerate(results, start=1):
-        print(rank, chunk["id"], round(chunk["score"], 4))
-        print(f"   {chunk['filename']}  ({chunk['source_table']})")
-        print()
