@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import re
@@ -21,43 +22,55 @@ from app.security.governance import (
 # CONSTANTS
 # =========================================================
 
-SATISFIED = "SATISFIED"
-NOT_SATISFIED = "NOT_SATISFIED"
-UNKNOWN = "UNKNOWN"
-
-APPLICABLE = "APPLICABLE"
-NOT_APPLICABLE = "NOT_APPLICABLE"
-POSSIBLY_APPLICABLE = "POSSIBLY_APPLICABLE"
-GENERAL_EVIDENCE = "GENERAL_EVIDENCE"
-
-SUPPORTED = "SUPPORTED"
-BLOCKED = "BLOCKED"
-NEEDS_INFORMATION = "NEEDS_INFORMATION"
-INFORMATIONAL = "INFORMATIONAL"
-
-REQUEST_BLOCKER = "REQUEST_BLOCKER"
-SOURCE_APPLICABILITY = "SOURCE_APPLICABILITY"
-
 SUCCESS = "SUCCESS"
 FAILED = "FAILED"
 PASSED = "PASSED"
+INFORMATIONAL = "INFORMATIONAL"
 
 
 STOP_WORDS = {
-    "the", "a", "an", "is", "are", "was", "were",
-    "how", "what", "when", "where", "why", "who",
-    "can", "could", "should", "would",
-    "do", "does", "did",
-    "of", "to", "for", "in", "on", "at", "by",
-    "with", "and", "or", "from",
-    "this", "that", "these", "those",
-    "employee", "employees",
-    "paid", "payment",
+    "the",
+    "a",
+    "an",
+    "is",
+    "are",
+    "was",
+    "were",
+    "how",
+    "what",
+    "when",
+    "where",
+    "why",
+    "who",
+    "can",
+    "could",
+    "should",
+    "would",
+    "do",
+    "does",
+    "did",
+    "of",
+    "to",
+    "for",
+    "in",
+    "on",
+    "at",
+    "by",
+    "with",
+    "and",
+    "or",
+    "from",
+    "this",
+    "that",
+    "these",
+    "those",
+    "employee",
+    "employees",
 }
 
 
 # =========================================================
-# OBSERVABILITY
+# TRACE / OBSERVABILITY
 # =========================================================
 
 def _add_trace(
@@ -70,7 +83,7 @@ def _add_trace(
     """
     Add a safe observability event.
 
-    Records workflow state and execution results only.
+    This stores execution metadata only.
     It does not store hidden reasoning or chain-of-thought.
     """
 
@@ -87,13 +100,19 @@ def _add_trace(
     trace.append(event)
 
 
+# =========================================================
+# ERROR HELPERS
+# =========================================================
+
 def _build_error(
     error_type: str,
     stage: str,
     message: str,
     retryable: bool = False,
 ) -> dict:
-    """Return a standardized Consultant error."""
+    """
+    Build a standardized Consultant error.
+    """
 
     return {
         "type": error_type,
@@ -111,25 +130,31 @@ def _error_response(
     conflicts: list[str] | None = None,
     sources: list[dict] | None = None,
     policy_analysis: dict | None = None,
-    condition_analysis: dict | None = None,
-    applicability: list[dict] | None = None,
-    request_assessment: dict | None = None,
 ) -> dict:
-    """Return one consistent output structure for failures."""
+    """
+    Return a consistent Consultant response structure.
+    """
 
     return {
         "recommendation": recommendation,
         "conflicts": conflicts or [],
         "sources": sources or [],
         "policy_analysis": policy_analysis or {},
-        "condition_analysis": condition_analysis or {},
-        "applicability": applicability or [],
-        "request_assessment": request_assessment or {
-            "status": NEEDS_INFORMATION,
+
+        # Kept for compatibility with the existing project.
+        #
+        # IMPORTANT:
+        # Consultant no longer performs employee-specific
+        # condition analysis or request assessment.
+        "condition_analysis": {},
+        "applicability": [],
+        "request_assessment": {
+            "status": INFORMATIONAL,
             "blockers": [],
             "missing_information": [],
             "notes": [],
         },
+
         "success": False,
         "error": error,
         "trace": trace,
@@ -137,20 +162,14 @@ def _error_response(
 
 
 # =========================================================
-# BASIC HELPERS
+# TEXT HELPERS
 # =========================================================
 
-def _unique_strings(values: list[str]) -> list[str]:
-    return list(
-        dict.fromkeys(
-            value
-            for value in values
-            if value
-        )
-    )
-
-
 def _safe_text(value: Any) -> str:
+    """
+    Convert a value to safe text and mask PII.
+    """
+
     if value is None:
         return ""
 
@@ -159,10 +178,7 @@ def _safe_text(value: Any) -> str:
 
 def _extract_tokens(text: str) -> set[str]:
     """
-    Tokenization used only for retrieval reranking.
-
-    Token overlap is never treated as proof that
-    a policy condition is satisfied.
+    Tokenization used only for lexical relevance reranking.
     """
 
     return {
@@ -176,9 +192,22 @@ def _extract_tokens(text: str) -> set[str]:
 
 
 def _parse_chunk_fields(text: str) -> dict[str, str]:
+    """
+    Parse simple key:value fields from retrieved
+    policy chunks.
+
+    Example:
+
+        Rule: Employees are entitled to annual leave.
+        Conditions: Five years of service.
+        Exceptions: Employer may postpone leave.
+
+    """
+
     fields: dict[str, str] = {}
 
     for line in (text or "").splitlines():
+
         if ":" not in line:
             continue
 
@@ -193,303 +222,70 @@ def _parse_chunk_fields(text: str) -> dict[str, str]:
     return fields
 
 
-def _normalize_hr_facts(hr_facts: dict) -> dict[str, Any]:
-    """
-    Normalize facts received from HR Agent.
-
-    Consultant does not access the employee database directly.
-    """
-
-    if not isinstance(hr_facts, dict):
-        return {}
-
-    normalized: dict[str, Any] = {}
-
-    for key, value in hr_facts.items():
-        if value is None:
-            continue
-
-        normalized[str(key).strip().lower()] = value
-
-    return normalized
-
-
-def _as_number(value: Any) -> float | None:
-    if isinstance(value, bool):
-        return None
-
-    if isinstance(value, (int, float)):
-        return float(value)
-
-    if isinstance(value, str):
-        match = re.search(
-            r"-?\d+(?:\.\d+)?",
-            value.replace(",", ""),
-        )
-
-        if match:
-            try:
-                return float(match.group())
-            except ValueError:
-                return None
-
-    return None
-
-
-LAW037_FALLBACK_SOURCE = {
-    "id": "LAW037",
-    "text": (
-        "Law ID: LAW037. Minimum Annual Leave. "
-        "An employee is entitled to annual leave of at least "
-        "21 days for each year of service. "
-        "Applies to eligible employees."
-    ),
-    "source_table": "saudi_labor_law",
-    "filename": "LAW037.txt",
-}
-
-
-def _remaining_days_from_facts(hr_facts: dict) -> float | None:
-    """Read remaining annual leave from HR facts only (no SQL)."""
-
-    normalized = _normalize_hr_facts(hr_facts)
-
-    for key in ("remaining_balance", "annual_remaining"):
-        value = _as_number(normalized.get(key))
-        if value is not None:
-            return value
-
-    nested = normalized.get("leave_balance")
-    if isinstance(nested, dict):
-        nested_norm = _normalize_hr_facts(nested)
-        for key in ("remaining_balance", "annual_remaining"):
-            value = _as_number(nested_norm.get(key))
-            if value is not None:
-                return value
-
-    return None
-
-
-def _is_balance_lookup_query(query: str) -> bool:
-    lowered = (query or "").lower()
-    leave_related = any(
-        token in lowered
-        for token in ("leave", "annual", "vacation")
-    )
-    if not leave_related:
-        return False
-
-    return any(
-        token in lowered
-        for token in (
-            "remaining",
-            "balance",
-            "how many",
-            "do i have",
-            "have left",
-            "days left",
-            "unused",
-        )
-    )
-
-
-def _can_answer_remaining_from_hr(
-    query: str,
-    hr_facts: dict,
-) -> bool:
-    return (
-        _is_balance_lookup_query(query)
-        and _remaining_days_from_facts(hr_facts) is not None
-    )
-
-
-def _hr_sources_with_text(
-    hr_result: dict,
-    remaining_days: float | None,
-) -> list[dict]:
-    remaining_text = (
-        (
-            f"Recorded annual leave remaining is "
-            f"{remaining_days:g} days."
-        )
-        if remaining_days is not None
-        else "HR leave balance record."
-    )
-
-    entries: list[dict] = []
-    seen: set[str] = set()
-
-    raw_sources = (
-        hr_result.get("sources")
-        if isinstance(hr_result, dict)
-        else None
-    ) or []
-
-    for item in raw_sources:
-        if isinstance(item, dict):
-            source_id = item.get("id") or item.get("source")
-            text = item.get("text") or remaining_text
-        else:
-            source_id = str(item).strip()
-            text = remaining_text
-
-        if not source_id:
-            continue
-
-        source_key = str(source_id)
-        if source_key in seen:
-            continue
-
-        seen.add(source_key)
-
-        if (
-            remaining_days is not None
-            and f"{remaining_days:g}" not in str(text)
-        ):
-            text = f"{text} {remaining_text}".strip()
-
-        entries.append({
-            "id": source_id,
-            "text": text,
-            "source_table": (
-                "leave_balances"
-                if "leave_balance" in source_key
-                else None
-            ),
-        })
-
-    if remaining_days is not None and not entries:
-        entries.append({
-            "id": "leave_balances",
-            "text": remaining_text,
-            "source_table": "leave_balances",
-        })
-
-    return entries
-
-
-def _merge_source_lists(*groups: list[dict]) -> list[dict]:
-    merged: list[dict] = []
-    seen: set[str] = set()
-
-    for group in groups:
-        for source in group or []:
-            source_id = str(source.get("id") or "")
-            if not source_id or source_id in seen:
-                continue
-            seen.add(source_id)
-            merged.append(source)
-
-    return merged
-
-
-def _ensure_law037_source(sources: list[dict]) -> list[dict]:
-    ids = {
-        str(item.get("id"))
-        for item in sources
-        if item.get("id")
-    }
-    if "LAW037" in ids:
-        return sources
-
-    return sources + [dict(LAW037_FALLBACK_SOURCE)]
-
-
-def _remaining_days_recommendation(
-    remaining_days: float,
-    hr_sources: list[dict],
-) -> str:
-    hr_ids = ", ".join(
-        str(item.get("id"))
-        for item in hr_sources
-        if item.get("id")
-    ) or "leave_balances"
-
-    return (
-        f"You have {remaining_days:g} annual leave days remaining "
-        f"(HR source: {hr_ids}). "
-        "The statutory minimum annual leave is at least 21 days "
-        "for each year of service. [Source: LAW037]"
-    )
-
-
-def _hr_balance_output(
-    *,
-    hr_result: dict,
-    hr_facts: dict,
-    trace: list[dict],
-    policy_sources: list[dict] | None = None,
-    request_assessment: dict | None = None,
-    policy_analysis: dict | None = None,
-    condition_analysis: dict | None = None,
-    applicability: list[dict] | None = None,
-) -> dict:
-    remaining_days = _remaining_days_from_facts(hr_facts)
-    hr_sources = _hr_sources_with_text(
-        hr_result,
-        remaining_days,
-    )
-    sources = _ensure_law037_source(
-        _merge_source_lists(
-            hr_sources,
-            policy_sources or [],
-        )
-    )
-
-    return {
-        "recommendation": _remaining_days_recommendation(
-            remaining_days or 0.0,
-            hr_sources,
-        ),
-        "conflicts": [],
-        "sources": sources,
-        "policy_analysis": policy_analysis or {},
-        "condition_analysis": condition_analysis or {},
-        "applicability": applicability or [],
-        "request_assessment": request_assessment or {
-            "status": SUPPORTED,
-            "blockers": [],
-            "missing_information": [],
-            "notes": [
-                "Answered from HR remaining annual leave."
-            ],
-        },
-        "success": True,
-        "error": None,
-        "trace": trace,
-    }
-
-
 # =========================================================
-# RAG RELEVANCE RERANKING
+# RERANKING
 # =========================================================
 
 def _calculate_relevance_score(
     query: str,
     chunk: dict,
 ) -> float:
+    """
+    Calculate a lexical relevance score.
+
+    This function only ranks policy evidence.
+
+    It does NOT:
+    - evaluate employees
+    - calculate leave
+    - determine eligibility
+    - make decisions
+    """
+
     query_tokens = _extract_tokens(query)
 
     if not query_tokens:
         return 1.0
 
     chunk_text = chunk.get("text", "") or ""
+
     fields = _parse_chunk_fields(chunk_text)
 
     text_tokens = _extract_tokens(chunk_text)
-    rule_tokens = _extract_tokens(fields.get("rule", ""))
+
+    rule_tokens = _extract_tokens(
+        fields.get("rule", "")
+    )
+
     condition_tokens = _extract_tokens(
         fields.get("conditions", "")
     )
 
-    text_overlap = len(query_tokens & text_tokens)
-    rule_overlap = len(query_tokens & rule_tokens)
-    condition_overlap = len(query_tokens & condition_tokens)
+    exception_tokens = _extract_tokens(
+        fields.get("exceptions", "")
+    )
+
+    text_overlap = len(
+        query_tokens & text_tokens
+    )
+
+    rule_overlap = len(
+        query_tokens & rule_tokens
+    )
+
+    condition_overlap = len(
+        query_tokens & condition_tokens
+    )
+
+    exception_overlap = len(
+        query_tokens & exception_tokens
+    )
 
     return (
         text_overlap * 1.0
         + rule_overlap * 2.0
         + condition_overlap * 1.0
+        + exception_overlap * 1.0
     )
 
 
@@ -497,20 +293,26 @@ def _filter_relevant_chunks(
     query: str,
     chunks: list[dict],
     min_score: float = 2.0,
-    max_chunks: int = 4,
+    max_chunks: int = 3,
 ) -> list[dict]:
+    """
+    Rank retrieved policy chunks and keep the strongest ones.
+    """
+
     if not chunks:
         return []
 
     ranked_chunks: list[dict] = []
 
     for chunk in chunks:
+
         relevance_score = _calculate_relevance_score(
             query=query,
             chunk=chunk,
         )
 
         enriched_chunk = dict(chunk)
+
         enriched_chunk[
             "consultant_relevance_score"
         ] = relevance_score
@@ -532,8 +334,7 @@ def _filter_relevant_chunks(
         ] >= min_score
     ]
 
-    # Preserve the strongest semantic result if the
-    # lexical reranker removes everything.
+    # Keep at least the strongest retrieved document.
     if not relevant_chunks:
         return ranked_chunks[:1]
 
@@ -541,15 +342,20 @@ def _filter_relevant_chunks(
 
 
 # =========================================================
-# RETRIEVED CONTENT SECURITY
+# RETRIEVED EVIDENCE SECURITY
 # =========================================================
 
 def _filter_safe_chunks(
     chunks: list[dict],
 ) -> list[dict]:
+    """
+    Remove retrieved chunks containing prompt injection.
+    """
+
     safe_chunks: list[dict] = []
 
     for chunk in chunks:
+
         text = chunk.get("text", "") or ""
 
         if detect_prompt_injection(text):
@@ -567,38 +373,62 @@ def _filter_safe_chunks(
 def _analyze_policy_chunks(
     chunks: list[dict],
 ) -> dict:
+    """
+    Extract policy information from retrieved documents.
+
+    IMPORTANT:
+
+    This function describes the policy itself.
+
+    It does NOT determine whether a particular employee
+    satisfies the policy.
+    """
+
     rules: list[dict] = []
     conditions: list[dict] = []
     exceptions: list[dict] = []
 
     for chunk in chunks:
+
         source_id = chunk.get("id")
 
-        fields = _parse_chunk_fields(
-            chunk.get("text", "")
+        text = chunk.get(
+            "text",
+            "",
         )
+
+        fields = _parse_chunk_fields(text)
 
         rule = fields.get("rule")
         condition = fields.get("conditions")
         exception = fields.get("exceptions")
 
         if rule:
-            rules.append({
-                "source_id": source_id,
-                "text": _safe_text(rule),
-            })
+
+            rules.append(
+                {
+                    "source_id": source_id,
+                    "text": _safe_text(rule),
+                }
+            )
 
         if condition:
-            conditions.append({
-                "source_id": source_id,
-                "text": _safe_text(condition),
-            })
+
+            conditions.append(
+                {
+                    "source_id": source_id,
+                    "text": _safe_text(condition),
+                }
+            )
 
         if exception:
-            exceptions.append({
-                "source_id": source_id,
-                "text": _safe_text(exception),
-            })
+
+            exceptions.append(
+                {
+                    "source_id": source_id,
+                    "text": _safe_text(exception),
+                }
+            )
 
     return {
         "rules": rules,
@@ -608,511 +438,26 @@ def _analyze_policy_chunks(
 
 
 # =========================================================
-# CONDITION EVALUATORS
-# =========================================================
-
-def _extract_required_years(
-    condition: str,
-) -> float | None:
-    lowered = condition.lower()
-
-    digit_match = re.search(
-        r"(\d+(?:\.\d+)?)\s+"
-        r"(?:consecutive\s+)?years?",
-        lowered,
-    )
-
-    if digit_match:
-        return float(digit_match.group(1))
-
-    word_numbers = {
-        "one": 1,
-        "two": 2,
-        "three": 3,
-        "four": 4,
-        "five": 5,
-        "six": 6,
-        "seven": 7,
-        "eight": 8,
-        "nine": 9,
-        "ten": 10,
-    }
-
-    for word, number in word_numbers.items():
-        pattern = (
-            rf"\b{word}\b\s+"
-            rf"(?:consecutive\s+)?years?"
-        )
-
-        if re.search(pattern, lowered):
-            return float(number)
-
-    return None
-
-
-def _evaluate_years_of_service_condition(
-    condition: str,
-    hr_facts: dict,
-) -> dict | None:
-    lowered = condition.lower()
-
-    if (
-        "year" not in lowered
-        or "service" not in lowered
-    ):
-        return None
-
-    required_years = _extract_required_years(condition)
-
-    if required_years is None:
-        return {
-            "status": UNKNOWN,
-            "effect": SOURCE_APPLICABILITY,
-            "reason": (
-                "The condition references years of "
-                "service, but the required threshold "
-                "could not be determined safely."
-            ),
-        }
-
-    employee_years = _as_number(
-        hr_facts.get("years_of_service")
-    )
-
-    if employee_years is None:
-        return {
-            "status": UNKNOWN,
-            "effect": SOURCE_APPLICABILITY,
-            "reason": (
-                "Employee years of service were not "
-                "provided by the HR Agent."
-            ),
-        }
-
-    if employee_years >= required_years:
-        return {
-            "status": SATISFIED,
-            "effect": SOURCE_APPLICABILITY,
-            "reason": (
-                f"Employee has {employee_years:g} "
-                f"years of service; the condition "
-                f"requires {required_years:g} years."
-            ),
-        }
-
-    return {
-        "status": NOT_SATISFIED,
-        "effect": SOURCE_APPLICABILITY,
-        "reason": (
-            f"Employee has {employee_years:g} "
-            f"years of service; the condition "
-            f"requires {required_years:g} years."
-        ),
-    }
-
-
-def _evaluate_condition(
-    condition: dict,
-    hr_facts: dict,
-) -> dict:
-    source_id = condition.get("source_id")
-    condition_text = (
-        condition.get("text", "") or ""
-    )
-
-    evaluators = (
-        _evaluate_years_of_service_condition,
-    )
-
-    for evaluator in evaluators:
-        result = evaluator(
-            condition_text,
-            hr_facts,
-        )
-
-        if result is not None:
-            return {
-                "source_id": source_id,
-                "condition": condition_text,
-                "status": result["status"],
-                "effect": result["effect"],
-                "reason": result["reason"],
-            }
-
-    # Conservative fallback.
-    return {
-        "source_id": source_id,
-        "condition": condition_text,
-        "status": UNKNOWN,
-        "effect": SOURCE_APPLICABILITY,
-        "reason": (
-            "The available HR facts do not provide "
-            "a deterministic basis to verify "
-            "this condition."
-        ),
-    }
-
-
-# =========================================================
-# REQUEST FACT CHECKS
-# =========================================================
-
-def _evaluate_leave_balance(
-    query: str,
-    hr_facts: dict,
-) -> dict | None:
-    requested_days = _as_number(
-        hr_facts.get("requested_days")
-    )
-
-    remaining_balance = _as_number(
-        hr_facts.get("remaining_balance")
-    )
-
-    if (
-        requested_days is None
-        or remaining_balance is None
-    ):
-        return None
-
-    query_tokens = _extract_tokens(query)
-
-    leave_related = bool(
-        {
-            "leave",
-            "annual",
-            "vacation",
-        }
-        & query_tokens
-    )
-
-    if not leave_related:
-        return None
-
-    if requested_days <= remaining_balance:
-        return {
-            "check": "leave_balance",
-            "status": SATISFIED,
-            "effect": REQUEST_BLOCKER,
-            "reason": (
-                f"Requested leave is "
-                f"{requested_days:g} days and "
-                f"the recorded remaining balance "
-                f"is {remaining_balance:g} days."
-            ),
-        }
-
-    return {
-        "check": "leave_balance",
-        "status": NOT_SATISFIED,
-        "effect": REQUEST_BLOCKER,
-        "reason": (
-            f"Requested leave is "
-            f"{requested_days:g} days but "
-            f"the recorded remaining balance "
-            f"is only {remaining_balance:g} days."
-        ),
-    }
-
-
-# =========================================================
-# CONDITION ANALYSIS
-# =========================================================
-
-def _analyze_conditions(
-    policy_analysis: dict,
-    hr_facts: dict,
-    query: str,
-) -> dict:
-    normalized_facts = _normalize_hr_facts(
-        hr_facts
-    )
-
-    assessments = [
-        _evaluate_condition(
-            condition=condition,
-            hr_facts=normalized_facts,
-        )
-        for condition in policy_analysis.get(
-            "conditions",
-            [],
-        )
-    ]
-
-    fact_checks: list[dict] = []
-
-    balance_check = _evaluate_leave_balance(
-        query=query,
-        hr_facts=normalized_facts,
-    )
-
-    if balance_check:
-        fact_checks.append(balance_check)
-
-    return {
-        "satisfied": [
-            item
-            for item in assessments
-            if item["status"] == SATISFIED
-        ],
-        "not_satisfied": [
-            item
-            for item in assessments
-            if item["status"] == NOT_SATISFIED
-        ],
-        "unknown": [
-            item
-            for item in assessments
-            if item["status"] == UNKNOWN
-        ],
-        "fact_checks": fact_checks,
-    }
-
-
-# =========================================================
-# SOURCE APPLICABILITY
-# =========================================================
-
-def _analyze_source_applicability(
-    chunks: list[dict],
-    condition_analysis: dict,
-) -> list[dict]:
-    source_ids = _unique_strings(
-        [
-            str(chunk.get("id"))
-            for chunk in chunks
-            if chunk.get("id")
-        ]
-    )
-
-    assessments = (
-        condition_analysis.get(
-            "satisfied",
-            [],
-        )
-        + condition_analysis.get(
-            "not_satisfied",
-            [],
-        )
-        + condition_analysis.get(
-            "unknown",
-            [],
-        )
-    )
-
-    results: list[dict] = []
-
-    for source_id in source_ids:
-        source_conditions = [
-            item
-            for item in assessments
-            if str(
-                item.get("source_id")
-            ) == source_id
-        ]
-
-        if not source_conditions:
-            status = GENERAL_EVIDENCE
-            reason = (
-                "No structured policy condition "
-                "was available for this source."
-            )
-
-        elif any(
-            item.get("status") == NOT_SATISFIED
-            for item in source_conditions
-        ):
-            status = NOT_APPLICABLE
-            reason = (
-                "At least one explicit condition "
-                "for this source is not satisfied."
-            )
-
-        elif all(
-            item.get("status") == SATISFIED
-            for item in source_conditions
-        ):
-            status = APPLICABLE
-            reason = (
-                "All evaluated conditions for "
-                "this source are satisfied."
-            )
-
-        else:
-            status = POSSIBLY_APPLICABLE
-            reason = (
-                "No condition is disproven, "
-                "but one or more conditions "
-                "remain unverified."
-            )
-
-        results.append({
-            "source_id": source_id,
-            "status": status,
-            "affects_request": False,
-            "reason": reason,
-        })
-
-    return results
-
-
-# =========================================================
-# REQUEST ASSESSMENT
-# =========================================================
-
-def _is_employee_case(
-    hr_facts: dict,
-) -> bool:
-    return bool(
-        _normalize_hr_facts(hr_facts)
-    )
-
-
-def _build_request_assessment(
-    hr_facts: dict,
-    condition_analysis: dict,
-    applicability: list[dict],
-    query: str = "",
-) -> dict:
-    if not _is_employee_case(hr_facts):
-        return {
-            "status": INFORMATIONAL,
-            "blockers": [],
-            "missing_information": [],
-            "notes": [
-                (
-                    "No employee-specific HR facts "
-                    "were supplied; this is treated "
-                    "as an informational policy query."
-                )
-            ],
-        }
-
-    blockers: list[dict] = []
-
-    for fact_check in condition_analysis.get(
-        "fact_checks",
-        [],
-    ):
-        if (
-            fact_check.get("effect")
-            == REQUEST_BLOCKER
-            and fact_check.get("status")
-            == NOT_SATISFIED
-        ):
-            blockers.append({
-                "type": fact_check.get(
-                    "check",
-                    "request_check",
-                ),
-                "reason": fact_check.get(
-                    "reason",
-                    "",
-                ),
-            })
-
-    remaining_days = _remaining_days_from_facts(
-        hr_facts
-    )
-    is_balance_lookup = _is_balance_lookup_query(
-        query
-    )
-
-    # Remaining-days lookups are answered from HR facts.
-    # Unrelated UNKNOWN policy conditions (years of service,
-    # who schedules leave, etc.) are not missing information.
-    if is_balance_lookup and remaining_days is not None:
-        notes = [
-            (
-                "HR remaining annual leave is already "
-                "available; unrelated policy conditions "
-                "are not treated as missing information."
-            )
-        ]
-        return {
-            "status": BLOCKED if blockers else SUPPORTED,
-            "blockers": blockers,
-            "missing_information": [],
-            "notes": notes,
-        }
-
-    missing_information = [
-        {
-            "source_id": item.get("source_id"),
-            "condition": item.get("condition"),
-            "reason": item.get("reason"),
-        }
-        for item in condition_analysis.get(
-            "unknown",
-            [],
-        )
-    ]
-
-    not_applicable_sources = [
-        item.get("source_id")
-        for item in applicability
-        if item.get("status") == NOT_APPLICABLE
-    ]
-
-    notes: list[str] = []
-
-    if not_applicable_sources:
-        notes.append(
-            (
-                "Some retrieved rules do not apply "
-                "to this employee case, but that "
-                "alone does not block the request."
-            )
-        )
-
-    if blockers:
-        status = BLOCKED
-    elif missing_information:
-        status = NEEDS_INFORMATION
-    else:
-        status = SUPPORTED
-
-    return {
-        "status": status,
-        "blockers": blockers,
-        "missing_information": missing_information,
-        "notes": notes,
-    }
-
-
-# =========================================================
-# CONFLICTS
-# =========================================================
-
-def _build_conflicts(
-    request_assessment: dict,
-) -> list[str]:
-    conflicts: list[str] = []
-
-    # Only real request blockers become conflicts.
-    for blocker in request_assessment.get(
-        "blockers",
-        [],
-    ):
-        reason = blocker.get("reason")
-
-        if reason:
-            conflicts.append(reason)
-
-    return _unique_strings(conflicts)
-
-
-# =========================================================
-# SOURCE METADATA
+# SOURCES
 # =========================================================
 
 def _build_sources(
     chunks: list[dict],
 ) -> list[dict]:
+    """
+    Build source metadata.
+
+    Source text is intentionally included so the Manager
+    can validate that the Consultant response is grounded
+    in retrieved evidence.
+    """
+
     sources: list[dict] = []
+
     seen: set[str] = set()
 
     for chunk in chunks:
+
         source_id = chunk.get("id")
 
         if not source_id:
@@ -1125,20 +470,33 @@ def _build_sources(
 
         seen.add(source_key)
 
-        sources.append({
-            "id": source_id,
-            "text": chunk.get("text"),
-            "source_table": chunk.get(
-                "source_table"
-            ),
-            "filename": chunk.get(
-                "filename"
-            ),
-            "score": chunk.get("score"),
-            "relevance_score": chunk.get(
-                "consultant_relevance_score"
-            ),
-        })
+        sources.append(
+            {
+                "id": source_id,
+
+                # Important for Manager validation.
+                "text": chunk.get(
+                    "text",
+                    "",
+                ),
+
+                "source_table": chunk.get(
+                    "source_table"
+                ),
+
+                "filename": chunk.get(
+                    "filename"
+                ),
+
+                "score": chunk.get(
+                    "score"
+                ),
+
+                "relevance_score": chunk.get(
+                    "consultant_relevance_score"
+                ),
+            }
+        )
 
     return sources
 
@@ -1146,9 +504,14 @@ def _build_sources(
 def _format_context(
     chunks: list[dict],
 ) -> str:
+    """
+    Format retrieved policy evidence for the LLM.
+    """
+
     parts: list[str] = []
 
     for chunk in chunks:
+
         source_id = (
             chunk.get("id")
             or "UNKNOWN"
@@ -1160,7 +523,10 @@ def _format_context(
         )
 
         text = _safe_text(
-            chunk.get("text", "")
+            chunk.get(
+                "text",
+                "",
+            )
         )
 
         parts.append(
@@ -1173,21 +539,23 @@ def _format_context(
 
 
 # =========================================================
-# CONSULTANT LLM
+# LLM GENERATION
 # =========================================================
 
 def _generate_consultant_recommendation(
     query: str,
     chunks: list[dict],
-    hr_facts: dict,
-    policy_analysis: dict,
-    condition_analysis: dict,
-    applicability: list[dict],
-    request_assessment: dict,
 ) -> str:
+    """
+    Generate a policy-only Consultant response.
+
+    HR data is intentionally NOT passed to this function.
+    """
+
     settings = get_settings()
 
     if not settings.llm_api_key:
+
         raise RuntimeError(
             "LLM_API_KEY is not configured "
             "in the local .env file."
@@ -1198,170 +566,129 @@ def _generate_consultant_recommendation(
         base_url=settings.llm_base_url,
     )
 
-    normalized_facts = _normalize_hr_facts(
-        hr_facts
+    context = _format_context(
+        chunks
     )
 
-    safe_hr_facts = {
-        key: _safe_text(value)
-        for key, value
-        in normalized_facts.items()
-    }
-
-    context = _format_context(chunks)
+    # -----------------------------------------------------
+    # SYSTEM PROMPT
+    # -----------------------------------------------------
 
     system_prompt = """
 You are the Consultant Agent in the Yusr Agentic HR System.
 
-Your role is HR policy and compliance advisory only.
-
-A deterministic Python layer has already analyzed:
-- employee facts,
-- policy conditions,
-- source applicability,
-- request blockers,
-- missing information,
-- request assessment status.
-
-You MUST follow those deterministic results.
+Your role is HR policy retrieval and policy interpretation only.
 
 STRICT RULES:
 
-1. Use only the evidence and facts supplied.
+1. Answer only from the retrieved policy evidence.
 
-2. Never invent employee facts, policy rules,
-   legal rules, eligibility, conditions,
-   exceptions, or citations.
+2. Explain the policy rules that directly answer
+   the user's question.
 
-3. REQUEST ASSESSMENT is authoritative.
-   Do not change its status.
+3. Clearly identify policy:
+   - Rules
+   - Conditions
+   - Requirements
+   - Exceptions
 
-4. If the status is BLOCKED, explain only the
-   blockers listed in request_assessment.blockers.
+4. Do NOT access employee-specific data.
 
-5. A NOT_APPLICABLE source is not automatically
-   a reason to reject the employee request.
+5. Do NOT access the HR database.
 
-6. If a rule provides enhanced benefits after a
-   service threshold and that threshold is not met,
-   explain that the enhanced rule does not apply.
-   Do not treat that alone as a request blocker.
+6. Do NOT evaluate whether a specific employee
+   satisfies a policy condition.
 
-7. If status is NEEDS_INFORMATION, explain only
-   the information listed in
-   request_assessment.missing_information.
+7. Do NOT calculate employee leave balances.
 
-8. If status is SUPPORTED, explain what supplied
-   evidence supports the request. Do not claim
-   final approval.
+8. Do NOT determine employee eligibility.
 
-9. If status is INFORMATIONAL:
-   - Answer the general policy question directly
-     using retrieved evidence only.
-   - Do not invent employee-specific missing information.
-   - Do not discuss employee eligibility, request
-     blockers, or missing HR facts unless the user
-     explicitly asked about a specific employee case.
-   - If request_assessment.missing_information is empty,
-     do not create a Missing Information section.
-   - Focus only on policy rules that directly answer
-     the user's question.
+9. Do NOT assess an employee's request.
 
-9b. If the user asked how many annual leave days
-    remain and HR facts include remaining_balance
-    or annual_remaining:
-   - Status SUPPORTED means answer that number first.
-   - Cite the HR leave_balances source and LAW037.
-   - Do not treat unrelated UNKNOWN conditions
-     (years of service, who schedules leave) as
-     missing information.
+10. Do NOT create employee-specific blockers.
 
-10. Distinguish leave balance, policy entitlement,
-    source applicability, and final approval.
+11. Do NOT request employee information.
 
-11. Never convert UNKNOWN into SATISFIED.
+12. Do NOT approve or reject employee actions.
 
-12. Never convert NOT_APPLICABLE source evidence
-    into REQUEST_BLOCKER unless it is explicitly
-    listed as a blocker.
+13. Do NOT make authorization decisions.
 
-13. Cite policy/legal claims as:
+14. Never invent policies, legal rules, conditions,
+    exceptions, or citations.
+
+15. If the retrieved evidence is insufficient,
+    clearly say that the available policy evidence
+    is insufficient.
+
+16. Cite relevant evidence using:
+
     [Source: SOURCE_ID]
 
-14. Do not expose unnecessary personal information.
+17. Keep the response concise and professional.
 
-15. Never access or modify the HR database,
-    submit transactions, approve requests,
-    make RBAC decisions, or override the
-    Security Layer or Manager Agent.
+18. The Manager Agent is responsible for governance
+    and final system-level decisions.
 
-16. The response structure must agree with the
-    deterministic data:
-    - If blockers is empty, do not invent blockers.
-    - If missing_information is empty, do not invent
-      missing information.
-    - If there are no relevant non-applicable rules,
-      do not create a Non-Applicable Rules section.
+19. The Consultant is advisory only.
 
-17. Keep the recommendation concise and professional.
+20. The Consultant must remain independent from
+    the HR Agent.
 
-18. The output is advisory. The Manager Agent
-    makes the system-level decision.
+21. When the retrieved evidence contains a Law ID or Article number,
+    explicitly mention it in the answer.
+
+22. Prefer this format when applicable:
+    "According to Article X (Law ID: LAWXXX), ..."
+
+23. Connect each policy rule to its corresponding Article or Law ID.
+
+24. Do not invent an Article number or Law ID.
+    Only mention identifiers explicitly present in the retrieved evidence.
 """.strip()
 
-    # IMPORTANT:
-    # This prompt must exist before the OpenAI call.
-    # Its accidental removal caused the previous NameError.
+    # -----------------------------------------------------
+    # USER PROMPT
+    # -----------------------------------------------------
+
     user_prompt = f"""
-EMPLOYEE REQUEST:
+POLICY QUESTION:
+
 {query}
 
-HR FACTS PROVIDED BY HR AGENT:
-{safe_hr_facts if safe_hr_facts else "No employee-specific facts provided."}
+RETRIEVED POLICY EVIDENCE:
 
-POLICY ANALYSIS:
-{policy_analysis}
-
-CONDITION ANALYSIS:
-{condition_analysis}
-
-SOURCE APPLICABILITY:
-{applicability}
-
-REQUEST ASSESSMENT:
-{request_assessment}
-
-RETRIEVED EVIDENCE:
 {context}
 
-Write the Consultant recommendation.
+Answer the question using ONLY the retrieved
+policy evidence.
 
-Follow REQUEST ASSESSMENT exactly as provided.
+Explain the relevant:
 
-If REQUEST ASSESSMENT status is INFORMATIONAL:
-- Answer the general policy question directly.
-- Do not invent employee-specific missing information.
-- Do not discuss missing HR facts unless the user
-  asked about a specific employee case.
-- If missing_information is empty, do not create
-  a Missing Information section.
-- Do not create empty Blockers or
-  Non-Applicable Rules sections.
-- Focus on retrieved policy evidence that directly
-  answers the question.
+- Policy rules
+- Conditions
+- Requirements
+- Exceptions
 
-If the user asked how many annual leave days remain
-and HR facts include remaining_balance or annual_remaining:
-- State that remaining number first.
-- Cite the HR leave_balances source and LAW037.
-- Unrelated UNKNOWN policy conditions are not
-  missing information.
+For each relevant policy rule, include the corresponding
+Article number and Law ID when they are available in the evidence.
 
-For employee-specific cases, clearly distinguish:
-- supported facts,
-- actual blockers,
-- missing information,
-- non-applicable rules.
+Use the format:
+
+According to Article X (Law ID: LAWXXX), ...
+
+Do not invent or infer legal identifiers.
+
+Do NOT evaluate any specific employee.
+
+Do NOT use employee-specific information.
+
+Do NOT calculate leave balances.
+
+Do NOT determine eligibility.
+
+Cite relevant sources using:
+
+[Source: SOURCE_ID]
 """.strip()
 
     response = client.chat.completions.create(
@@ -1386,12 +713,15 @@ For employee-specific cases, clearly distinguish:
     ).strip()
 
     if not recommendation:
+
         raise RuntimeError(
             "The Consultant LLM returned "
             "an empty response."
         )
 
-    return _safe_text(recommendation)
+    return _safe_text(
+        recommendation
+    )
 
 
 # =========================================================
@@ -1404,11 +734,12 @@ class ConsultantAgent(BaseAgent):
         self,
         input: dict,
     ) -> dict:
+
         trace: list[dict] = []
 
-        # -------------------------------------------------
-        # REASON — determine whether input is processable
-        # -------------------------------------------------
+        # =================================================
+        # 1. INPUT VALIDATION
+        # =================================================
 
         _add_trace(
             trace,
@@ -1418,6 +749,7 @@ class ConsultantAgent(BaseAgent):
         )
 
         if not isinstance(input, dict):
+
             _add_trace(
                 trace,
                 phase="OBSERVE",
@@ -1427,7 +759,9 @@ class ConsultantAgent(BaseAgent):
             )
 
             return _error_response(
-                recommendation="Invalid Consultant input.",
+                recommendation=(
+                    "Invalid Consultant input."
+                ),
                 error=_build_error(
                     error_type="invalid_input",
                     stage="INPUT_VALIDATION",
@@ -1435,17 +769,22 @@ class ConsultantAgent(BaseAgent):
                         "Consultant input must "
                         "be a dictionary."
                     ),
-                    retryable=False,
                 ),
                 trace=trace,
-                conflicts=["invalid_input"],
+                conflicts=[
+                    "invalid_input"
+                ],
             )
 
         query = sanitize_input(
-            input.get("query", "")
+            input.get(
+                "query",
+                "",
+            )
         )
 
         if not query:
+
             _add_trace(
                 trace,
                 phase="OBSERVE",
@@ -1464,10 +803,11 @@ class ConsultantAgent(BaseAgent):
                     message=(
                         "A Consultant query is required."
                     ),
-                    retryable=False,
                 ),
                 trace=trace,
-                conflicts=["missing_query"],
+                conflicts=[
+                    "missing_query"
+                ],
             )
 
         _add_trace(
@@ -1477,9 +817,21 @@ class ConsultantAgent(BaseAgent):
             status=PASSED,
         )
 
-        # -------------------------------------------------
-        # ACT — input security
-        # -------------------------------------------------
+        # =================================================
+        # IMPORTANT ARCHITECTURE NOTE
+        # =================================================
+        #
+        # We intentionally do NOT read:
+        #
+        # input["hr_result"]
+        #
+        # The Consultant is independent from HR.
+        #
+        # =================================================
+
+        # =================================================
+        # 2. INPUT SECURITY
+        # =================================================
 
         _add_trace(
             trace,
@@ -1489,12 +841,15 @@ class ConsultantAgent(BaseAgent):
         )
 
         if detect_prompt_injection(query):
+
             _add_trace(
                 trace,
                 phase="OBSERVE",
                 stage="INPUT_SECURITY",
                 status=FAILED,
-                error_type="prompt_injection_detected",
+                error_type=(
+                    "prompt_injection_detected"
+                ),
             )
 
             return _error_response(
@@ -1503,13 +858,14 @@ class ConsultantAgent(BaseAgent):
                     "for security reasons."
                 ),
                 error=_build_error(
-                    error_type="prompt_injection_detected",
+                    error_type=(
+                        "prompt_injection_detected"
+                    ),
                     stage="INPUT_SECURITY",
                     message=(
                         "Potential prompt injection "
                         "was detected."
                     ),
-                    retryable=False,
                 ),
                 trace=trace,
                 conflicts=[
@@ -1524,31 +880,9 @@ class ConsultantAgent(BaseAgent):
             status=PASSED,
         )
 
-        # -------------------------------------------------
-        # OBSERVE — collect HR facts early
-        # -------------------------------------------------
-
-        hr_result = input.get("hr_result") or {}
-
-        if not isinstance(hr_result, dict):
-            hr_result = {}
-
-        hr_facts = hr_result.get("facts") or {}
-
-        if not isinstance(hr_facts, dict):
-            hr_facts = {}
-
-        _add_trace(
-            trace,
-            phase="OBSERVE",
-            stage="HR_FACTS",
-            status=SUCCESS,
-            facts_available=bool(hr_facts),
-        )
-
-        # -------------------------------------------------
-        # ACT — retrieve policy evidence
-        # -------------------------------------------------
+        # =================================================
+        # 3. RAG RETRIEVAL
+        # =================================================
 
         _add_trace(
             trace,
@@ -1557,15 +891,19 @@ class ConsultantAgent(BaseAgent):
             status="STARTED",
         )
 
-        retrieval_start = time.perf_counter()
+        retrieval_start = (
+            time.perf_counter()
+        )
 
         try:
+
             retrieved_chunks = retrieve(
                 query=query,
-                top_k=8,
+                top_k=3,
             )
 
         except Exception as exc:
+
             duration_ms = round(
                 (
                     time.perf_counter()
@@ -1584,16 +922,6 @@ class ConsultantAgent(BaseAgent):
                 error_type=type(exc).__name__,
             )
 
-            if _can_answer_remaining_from_hr(
-                query,
-                hr_facts,
-            ):
-                return _hr_balance_output(
-                    hr_result=hr_result,
-                    hr_facts=hr_facts,
-                    trace=trace,
-                )
-
             return _error_response(
                 recommendation=(
                     "Policy evidence could not "
@@ -1609,7 +937,9 @@ class ConsultantAgent(BaseAgent):
                     retryable=True,
                 ),
                 trace=trace,
-                conflicts=["retrieval_error"],
+                conflicts=[
+                    "retrieval_error"
+                ],
             )
 
         retrieval_duration = round(
@@ -1622,6 +952,7 @@ class ConsultantAgent(BaseAgent):
         )
 
         if not retrieved_chunks:
+
             _add_trace(
                 trace,
                 phase="OBSERVE",
@@ -1631,20 +962,9 @@ class ConsultantAgent(BaseAgent):
                 result_count=0,
             )
 
-            if _can_answer_remaining_from_hr(
-                query,
-                hr_facts,
-            ):
-                return _hr_balance_output(
-                    hr_result=hr_result,
-                    hr_facts=hr_facts,
-                    trace=trace,
-                )
-
             return _error_response(
                 recommendation=(
-                    "No matching company policy "
-                    "or Saudi labor-law evidence "
+                    "No matching policy evidence "
                     "was found."
                 ),
                 error=_build_error(
@@ -1654,10 +974,11 @@ class ConsultantAgent(BaseAgent):
                         "Retrieval completed but "
                         "returned no evidence."
                     ),
-                    retryable=False,
                 ),
                 trace=trace,
-                conflicts=["no_matching_policy"],
+                conflicts=[
+                    "no_matching_policy"
+                ],
             )
 
         _add_trace(
@@ -1666,12 +987,14 @@ class ConsultantAgent(BaseAgent):
             stage="RETRIEVAL",
             status=SUCCESS,
             duration_ms=retrieval_duration,
-            result_count=len(retrieved_chunks),
+            result_count=len(
+                retrieved_chunks
+            ),
         )
 
-        # -------------------------------------------------
-        # ACT — secure retrieved content
-        # -------------------------------------------------
+        # =================================================
+        # 4. RETRIEVED EVIDENCE SECURITY
+        # =================================================
 
         _add_trace(
             trace,
@@ -1690,6 +1013,7 @@ class ConsultantAgent(BaseAgent):
         )
 
         if not safe_chunks:
+
             _add_trace(
                 trace,
                 phase="OBSERVE",
@@ -1698,29 +1022,20 @@ class ConsultantAgent(BaseAgent):
                 removed_count=removed_chunks,
             )
 
-            if _can_answer_remaining_from_hr(
-                query,
-                hr_facts,
-            ):
-                return _hr_balance_output(
-                    hr_result=hr_result,
-                    hr_facts=hr_facts,
-                    trace=trace,
-                )
-
             return _error_response(
                 recommendation=(
                     "Retrieved policy evidence "
                     "could not be processed safely."
                 ),
                 error=_build_error(
-                    error_type="unsafe_retrieved_content",
+                    error_type=(
+                        "unsafe_retrieved_content"
+                    ),
                     stage="EVIDENCE_SECURITY",
                     message=(
                         "All retrieved evidence "
                         "failed security checks."
                     ),
-                    retryable=False,
                 ),
                 trace=trace,
                 conflicts=[
@@ -1733,13 +1048,15 @@ class ConsultantAgent(BaseAgent):
             phase="OBSERVE",
             stage="EVIDENCE_SECURITY",
             status=PASSED,
-            safe_count=len(safe_chunks),
+            safe_count=len(
+                safe_chunks
+            ),
             removed_count=removed_chunks,
         )
 
-        # -------------------------------------------------
-        # ACT — rerank relevant evidence
-        # -------------------------------------------------
+        # =================================================
+        # 5. RERANKING
+        # =================================================
 
         _add_trace(
             trace,
@@ -1748,14 +1065,17 @@ class ConsultantAgent(BaseAgent):
             status="STARTED",
         )
 
-        relevant_chunks = _filter_relevant_chunks(
-            query=query,
-            chunks=safe_chunks,
-            min_score=2.0,
-            max_chunks=4,
+        relevant_chunks = (
+            _filter_relevant_chunks(
+                query=query,
+                chunks=safe_chunks,
+                min_score=2.0,
+                max_chunks=3,
+            )
         )
 
         if not relevant_chunks:
+
             _add_trace(
                 trace,
                 phase="OBSERVE",
@@ -1763,16 +1083,6 @@ class ConsultantAgent(BaseAgent):
                 status=FAILED,
                 result_count=0,
             )
-
-            if _can_answer_remaining_from_hr(
-                query,
-                hr_facts,
-            ):
-                return _hr_balance_output(
-                    hr_result=hr_result,
-                    hr_facts=hr_facts,
-                    trace=trace,
-                )
 
             return _error_response(
                 recommendation=(
@@ -1786,10 +1096,11 @@ class ConsultantAgent(BaseAgent):
                         "Retrieved evidence did "
                         "not pass relevance filtering."
                     ),
-                    retryable=False,
                 ),
                 trace=trace,
-                conflicts=["no_relevant_policy"],
+                conflicts=[
+                    "no_relevant_policy"
+                ],
             )
 
         source_ids = [
@@ -1803,16 +1114,20 @@ class ConsultantAgent(BaseAgent):
             phase="OBSERVE",
             stage="RERANKING",
             status=SUCCESS,
-            result_count=len(relevant_chunks),
+            result_count=len(
+                relevant_chunks
+            ),
             source_ids=source_ids,
         )
 
-        # -------------------------------------------------
-        # REASON — policy analysis
-        # -------------------------------------------------
+        # =================================================
+        # 6. POLICY ANALYSIS
+        # =================================================
 
-        policy_analysis = _analyze_policy_chunks(
-            relevant_chunks
+        policy_analysis = (
+            _analyze_policy_chunks(
+                relevant_chunks
+            )
         )
 
         _add_trace(
@@ -1821,7 +1136,10 @@ class ConsultantAgent(BaseAgent):
             stage="POLICY_ANALYSIS",
             status=SUCCESS,
             rule_count=len(
-                policy_analysis.get("rules", [])
+                policy_analysis.get(
+                    "rules",
+                    [],
+                )
             ),
             condition_count=len(
                 policy_analysis.get(
@@ -1829,120 +1147,29 @@ class ConsultantAgent(BaseAgent):
                     [],
                 )
             ),
-        )
-
-        # -------------------------------------------------
-        # ACT — deterministic condition checks
-        # -------------------------------------------------
-
-        condition_analysis = _analyze_conditions(
-            policy_analysis=policy_analysis,
-            hr_facts=hr_facts,
-            query=query,
-        )
-
-        _add_trace(
-            trace,
-            phase="OBSERVE",
-            stage="CONDITION_ANALYSIS",
-            status=SUCCESS,
-            satisfied_count=len(
-                condition_analysis.get(
-                    "satisfied",
-                    [],
-                )
-            ),
-            not_satisfied_count=len(
-                condition_analysis.get(
-                    "not_satisfied",
-                    [],
-                )
-            ),
-            unknown_count=len(
-                condition_analysis.get(
-                    "unknown",
+            exception_count=len(
+                policy_analysis.get(
+                    "exceptions",
                     [],
                 )
             ),
         )
 
-        # -------------------------------------------------
-        # REASON — source applicability
-        # -------------------------------------------------
+        # =================================================
+        # 7. SOURCES
+        # =================================================
 
-        applicability = (
-            _analyze_source_applicability(
-                chunks=relevant_chunks,
-                condition_analysis=condition_analysis,
-            )
+        sources = _build_sources(
+            relevant_chunks
         )
 
-        _add_trace(
-            trace,
-            phase="OBSERVE",
-            stage="SOURCE_APPLICABILITY",
-            status=SUCCESS,
-            evaluated_sources=len(applicability),
-        )
+        # Consultant does not create employee-specific
+        # conflicts.
+        conflicts: list[str] = []
 
-        # -------------------------------------------------
-        # ACT — deterministic request assessment
-        # -------------------------------------------------
-
-        request_assessment = (
-            _build_request_assessment(
-                hr_facts=hr_facts,
-                condition_analysis=condition_analysis,
-                applicability=applicability,
-                query=query,
-            )
-        )
-
-        _add_trace(
-            trace,
-            phase="OBSERVE",
-            stage="REQUEST_ASSESSMENT",
-            status=SUCCESS,
-            assessment=request_assessment.get(
-                "status"
-            ),
-            blocker_count=len(
-                request_assessment.get(
-                    "blockers",
-                    [],
-                )
-            ),
-            missing_information_count=len(
-                request_assessment.get(
-                    "missing_information",
-                    [],
-                )
-            ),
-        )
-
-        conflicts = _build_conflicts(
-            request_assessment
-        )
-
-        remaining_days = _remaining_days_from_facts(
-            hr_facts
-        )
-        hr_sources = _hr_sources_with_text(
-            hr_result,
-            remaining_days,
-        )
-        sources = _merge_source_lists(
-            hr_sources,
-            _build_sources(relevant_chunks),
-        )
-        if _is_balance_lookup_query(query):
-            sources = _ensure_law037_source(
-                sources
-            )
-
-        # -------------------------------------------------
-        # ACT — grounded recommendation generation
-        # -------------------------------------------------
+        # =================================================
+        # 8. LLM GENERATION
+        # =================================================
 
         _add_trace(
             trace,
@@ -1951,22 +1178,21 @@ class ConsultantAgent(BaseAgent):
             status="STARTED",
         )
 
-        generation_start = time.perf_counter()
+        generation_start = (
+            time.perf_counter()
+        )
 
         try:
+
             recommendation = (
                 _generate_consultant_recommendation(
                     query=query,
                     chunks=relevant_chunks,
-                    hr_facts=hr_facts,
-                    policy_analysis=policy_analysis,
-                    condition_analysis=condition_analysis,
-                    applicability=applicability,
-                    request_assessment=request_assessment,
                 )
             )
 
         except Exception as exc:
+
             duration_ms = round(
                 (
                     time.perf_counter()
@@ -1985,28 +1211,12 @@ class ConsultantAgent(BaseAgent):
                 error_type=type(exc).__name__,
             )
 
-            if _can_answer_remaining_from_hr(
-                query,
-                hr_facts,
-            ):
-                return _hr_balance_output(
-                    hr_result=hr_result,
-                    hr_facts=hr_facts,
-                    trace=trace,
-                    policy_sources=sources,
-                    request_assessment=request_assessment,
-                    policy_analysis=policy_analysis,
-                    condition_analysis=condition_analysis,
-                    applicability=applicability,
-                )
-
             return _error_response(
                 recommendation=(
                     "Relevant policy evidence "
-                    "was retrieved and analyzed, "
-                    "but the Consultant "
-                    "recommendation could not "
-                    "be generated."
+                    "was retrieved, but the "
+                    "Consultant response "
+                    "could not be generated."
                 ),
                 error=_build_error(
                     error_type="generation_error",
@@ -2018,15 +1228,11 @@ class ConsultantAgent(BaseAgent):
                     retryable=True,
                 ),
                 trace=trace,
-                conflicts=_unique_strings(
-                    conflicts
-                    + ["generation_error"]
-                ),
+                conflicts=[
+                    "generation_error"
+                ],
                 sources=sources,
                 policy_analysis=policy_analysis,
-                condition_analysis=condition_analysis,
-                applicability=applicability,
-                request_assessment=request_assessment,
             )
 
         generation_duration = round(
@@ -2046,25 +1252,32 @@ class ConsultantAgent(BaseAgent):
             duration_ms=generation_duration,
         )
 
-        # -------------------------------------------------
-        # OBSERVE — validate recommendation
-        # -------------------------------------------------
+        # =================================================
+        # 9. OUTPUT VALIDATION
+        # =================================================
 
         validation_sources = [
             {
-                "id": source.get("id"),
-                "text": source.get("text"),
+                "id": chunk.get("id"),
+                "text": chunk.get(
+                    "text",
+                    "",
+                ),
             }
-            for source in sources
+            for chunk in relevant_chunks
         ]
 
         try:
-            output_is_valid = validate_output(
-                recommendation,
-                validation_sources,
+
+            output_is_valid = (
+                validate_output(
+                    recommendation,
+                    validation_sources,
+                )
             )
 
         except Exception as exc:
+
             _add_trace(
                 trace,
                 phase="OBSERVE",
@@ -2072,21 +1285,6 @@ class ConsultantAgent(BaseAgent):
                 status=FAILED,
                 error_type=type(exc).__name__,
             )
-
-            if _can_answer_remaining_from_hr(
-                query,
-                hr_facts,
-            ):
-                return _hr_balance_output(
-                    hr_result=hr_result,
-                    hr_facts=hr_facts,
-                    trace=trace,
-                    policy_sources=sources,
-                    request_assessment=request_assessment,
-                    policy_analysis=policy_analysis,
-                    condition_analysis=condition_analysis,
-                    applicability=applicability,
-                )
 
             return _error_response(
                 recommendation=recommendation,
@@ -2097,41 +1295,17 @@ class ConsultantAgent(BaseAgent):
                         "The generated Consultant "
                         "output could not be validated."
                     ),
-                    retryable=False,
                 ),
                 trace=trace,
-                conflicts=_unique_strings(
-                    conflicts
-                    + [
-                        "consultant_output_validation_failed"
-                    ]
-                ),
+                conflicts=[
+                    "consultant_output_validation_failed"
+                ],
                 sources=sources,
                 policy_analysis=policy_analysis,
-                condition_analysis=condition_analysis,
-                applicability=applicability,
-                request_assessment=request_assessment,
-            )
-
-        if (
-            not output_is_valid
-            and _can_answer_remaining_from_hr(
-                query,
-                hr_facts,
-            )
-        ):
-            return _hr_balance_output(
-                hr_result=hr_result,
-                hr_facts=hr_facts,
-                trace=trace,
-                policy_sources=sources,
-                request_assessment=request_assessment,
-                policy_analysis=policy_analysis,
-                condition_analysis=condition_analysis,
-                applicability=applicability,
             )
 
         if not output_is_valid:
+
             conflicts.append(
                 "consultant_output_validation_failed"
             )
@@ -2144,6 +1318,7 @@ class ConsultantAgent(BaseAgent):
             )
 
         else:
+
             _add_trace(
                 trace,
                 phase="OBSERVE",
@@ -2151,31 +1326,53 @@ class ConsultantAgent(BaseAgent):
                 status=PASSED,
             )
 
-        # -------------------------------------------------
-        # OBSERVE — workflow completed
-        # -------------------------------------------------
+        # =================================================
+        # 10. FINAL RESPONSE
+        # =================================================
 
         _add_trace(
             trace,
             phase="OBSERVE",
             stage="WORKFLOW",
             status=SUCCESS,
-            final_assessment=(
-                request_assessment.get("status")
-            ),
+            final_assessment=INFORMATIONAL,
         )
 
         return {
             "recommendation": recommendation,
-            "conflicts": _unique_strings(
-                conflicts
+
+            # Consultant does not generate
+            # employee-specific conflicts.
+            "conflicts": list(
+                dict.fromkeys(
+                    conflicts
+                )
             ),
+
             "sources": sources,
+
+            # Policy-level information only.
             "policy_analysis": policy_analysis,
-            "condition_analysis": condition_analysis,
-            "applicability": applicability,
-            "request_assessment": request_assessment,
+
+            # Compatibility fields.
+            #
+            # These are intentionally empty because
+            # Consultant does not analyze employee facts.
+            "condition_analysis": {},
+
+            "applicability": [],
+
+            "request_assessment": {
+                "status": INFORMATIONAL,
+                "blockers": [],
+                "missing_information": [],
+                "notes": [],
+            },
+
             "success": True,
+
             "error": None,
+
             "trace": trace,
         }
+
