@@ -16,6 +16,10 @@ from app.api.routers import (
 )
 
 app = FastAPI(title="Yusor API", version="0.1.0")
+from app.rag.embeddings import get_embedder
+
+get_embedder()
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
