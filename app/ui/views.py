@@ -1,12 +1,36 @@
 from __future__ import annotations
 
 import html
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 import streamlit as st
 
 from app.ui import api_client as api
 from app.ui import styles
+
+
+def _leave_query_examples() -> list[tuple[str, str]]:
+    today = date.today()
+    annual_start = today + timedelta(days=21)
+    annual_end = annual_start + timedelta(days=2)
+    sick_start = today + timedelta(days=3)
+    sick_end = sick_start + timedelta(days=1)
+    return [
+        (
+            "Request annual leave",
+            f"I want to take annual leave from {annual_start.isoformat()} to "
+            f"{annual_end.isoformat()}, can you find someone to cover for me?",
+        ),
+        (
+            "Request sick leave",
+            f"I need to take sick leave from {sick_start.isoformat()} to "
+            f"{sick_end.isoformat()}.",
+        ),
+        (
+            "Check my balance",
+            "How many annual leave days do I have remaining?",
+        ),
+    ]
 
 
 def page_chat() -> None:
@@ -15,10 +39,21 @@ def page_chat() -> None:
         "What can I help with?",
         "Ask a policy or leave question. Answers are grounded in HR facts and policy sources.",
     )
+    st.caption(
+        "To request leave, include the **leave type** and **exact start and end "
+        "dates** (YYYY-MM-DD) — Yusor will check your balance, suggest someone "
+        "to cover for you, and send it for approval automatically."
+    )
+    example_cols = st.columns(3)
+    for col, (label, text) in zip(example_cols, _leave_query_examples()):
+        if col.button(label, use_container_width=True):
+            st.session_state["chat_query"] = text
+
     with st.form("ask_form"):
         query = st.text_area(
             "Your request",
             height=150,
+            key="chat_query",
             placeholder="e.g. How many annual leave days do I have remaining?",
         )
         submitted = st.form_submit_button("Submit request", type="primary")
@@ -121,12 +156,70 @@ def page_leave() -> None:
         styles.stat_card("Emergency", balance.get("emergency_remaining"), "coffee"),
         unsafe_allow_html=True,
     )
-    with st.expander("Full balance snapshot"):
-        st.json(balance)
+
+    as_of = _friendly_when(balance.get("as_of_date"))
+    with st.expander("Balance breakdown" + (f" · as of {as_of}" if as_of else "")):
+        st.dataframe(
+            [
+                {
+                    "Type": kind,
+                    "Entitlement": balance.get(f"{key}_entitlement"),
+                    "Used": balance.get(f"{key}_used"),
+                    "Remaining": balance.get(f"{key}_remaining"),
+                }
+                for kind, key in (
+                    ("Annual", "annual"),
+                    ("Sick", "sick"),
+                    ("Emergency", "emergency"),
+                )
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
 
     st.subheader("My requests")
-    reqs = api.raise_for_api(api.request("GET", "/leave/requests"))
-    st.dataframe(reqs or [], use_container_width=True, hide_index=True)
+    reqs = api.raise_for_api(api.request("GET", "/leave/requests")) or []
+    if not reqs:
+        st.caption("No leave requests yet.")
+    else:
+        rows = [
+            {
+                "leave_type": str(r.get("leave_type") or "").title(),
+                "start_date": r.get("start_date"),
+                "end_date": r.get("end_date"),
+                "days": r.get("days"),
+                "reason": r.get("reason") or "—",
+                "status": _status_label(str(r.get("status") or "")),
+                "submitted_at": _friendly_when(r.get("submitted_at")),
+                "decided_at": _friendly_when(r.get("decided_at")),
+            }
+            for r in reqs
+        ]
+        st.dataframe(
+            rows,
+            use_container_width=True,
+            hide_index=True,
+            column_order=[
+                "leave_type",
+                "start_date",
+                "end_date",
+                "days",
+                "reason",
+                "status",
+                "submitted_at",
+                "decided_at",
+            ],
+            column_config={
+                "leave_type": st.column_config.TextColumn("Type"),
+                "start_date": st.column_config.TextColumn("Start"),
+                "end_date": st.column_config.TextColumn("End"),
+                "days": st.column_config.NumberColumn("Days", format="%.1f"),
+                "reason": st.column_config.TextColumn("Reason"),
+                "status": st.column_config.TextColumn("Status"),
+                "submitted_at": st.column_config.TextColumn("Submitted"),
+                "decided_at": st.column_config.TextColumn("Decided"),
+            },
+        )
     st.caption("Need to submit a new request? Ask Yusor in the chat.")
 
 
@@ -147,11 +240,47 @@ def page_employees() -> None:
     q = st.text_input("Search by name, id, or email", placeholder="EMP0001 or Sara")
     listing = api.request("GET", "/employees", params={"q": q} if q else {})
     try:
-        rows = api.raise_for_api(listing)
+        rows = api.raise_for_api(listing) or []
     except RuntimeError as exc:
         st.error(str(exc))
         return
-    st.dataframe(rows or [], use_container_width=True, hide_index=True)
+    if not rows:
+        st.caption("No matching employees.")
+    else:
+        st.dataframe(
+            [
+                {
+                    "employee_id": r.get("employee_id"),
+                    "full_name": r.get("full_name"),
+                    "job_title": r.get("job_title"),
+                    "department_name": r.get("department_name"),
+                    "employment_status": str(r.get("employment_status") or "").title(),
+                    "email": r.get("email"),
+                    "mobile": r.get("mobile"),
+                }
+                for r in rows
+            ],
+            use_container_width=True,
+            hide_index=True,
+            column_order=[
+                "employee_id",
+                "full_name",
+                "job_title",
+                "department_name",
+                "employment_status",
+                "email",
+                "mobile",
+            ],
+            column_config={
+                "employee_id": st.column_config.TextColumn("ID"),
+                "full_name": st.column_config.TextColumn("Name"),
+                "job_title": st.column_config.TextColumn("Title"),
+                "department_name": st.column_config.TextColumn("Department"),
+                "employment_status": st.column_config.TextColumn("Status"),
+                "email": st.column_config.TextColumn("Email"),
+                "mobile": st.column_config.TextColumn("Mobile"),
+            },
+        )
 
     employee_id = st.text_input("Employee ID to view / update")
     if not employee_id:
@@ -162,7 +291,7 @@ def page_employees() -> None:
     except RuntimeError as exc:
         st.error(str(exc))
         return
-    st.json(detail)
+    _render_employee_profile(detail)
     with st.form("profile_update"):
         c1, c2 = st.columns(2)
         mobile = c1.text_input("Mobile", value=detail.get("mobile") or "")
@@ -182,6 +311,72 @@ def page_employees() -> None:
             st.rerun()
         except RuntimeError as exc:
             st.error(str(exc))
+
+
+def _kv_table(pairs: list[tuple[str, object]]) -> None:
+    rows = [
+        {"Field": label, "Value": value if value not in (None, "") else "—"}
+        for label, value in pairs
+    ]
+    st.dataframe(
+        rows,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Field": st.column_config.TextColumn("Field", width="small"),
+            "Value": st.column_config.TextColumn("Value"),
+        },
+    )
+
+
+def _render_employee_profile(detail: dict) -> None:
+    st.markdown(f"#### {detail.get('full_name') or detail.get('employee_id')}")
+    st.caption(
+        " · ".join(
+            part
+            for part in (
+                detail.get("job_title"),
+                detail.get("department_name"),
+                str(detail.get("employment_status") or "").title() or None,
+            )
+            if part
+        )
+    )
+
+    with st.expander("Profile details", expanded=True):
+        st.caption("Contact")
+        _kv_table(
+            [
+                ("Email", detail.get("email")),
+                ("Mobile", detail.get("mobile")),
+                ("City", detail.get("city")),
+                ("Address", detail.get("address")),
+            ]
+        )
+        st.caption("Employment")
+        _kv_table(
+            [
+                ("Employee ID", detail.get("employee_id")),
+                ("Hire date", _friendly_when(detail.get("hire_date")) or detail.get("hire_date")),
+                ("Manager", detail.get("manager_id")),
+                ("Nationality", detail.get("nationality")),
+                (
+                    "HR approver",
+                    "Yes" if detail.get("is_hr_approver") else "No",
+                ),
+            ]
+        )
+        if detail.get("bank_name") or detail.get("iban") or detail.get("basic_salary"):
+            st.caption("Compensation & banking")
+            _kv_table(
+                [
+                    ("Basic salary", detail.get("basic_salary")),
+                    ("Housing allowance", detail.get("housing_allowance")),
+                    ("Bank", detail.get("bank_name")),
+                    ("Bank code", detail.get("bank_code")),
+                    ("IBAN", detail.get("iban")),
+                ]
+            )
 
 
 def page_approvals() -> None:
@@ -258,10 +453,7 @@ def page_approvals() -> None:
             label = f"{_status_label(status)} · {label}"
         with st.expander(label, expanded=status == "pending" and index < 2):
             st.markdown(_approval_card_html(row, person), unsafe_allow_html=True)
-            extra = _readable_proposal(proposals.get(row.get("proposal_id")))
-            if extra:
-                st.caption("Request details")
-                st.write(extra)
+            _render_proposal_details(proposals.get(row.get("proposal_id")))
             if status != "pending":
                 note = row.get("decision_note")
                 if note:
@@ -400,22 +592,63 @@ def _proposal_map() -> dict:
     }
 
 
-def _readable_proposal(item: dict | None) -> dict | None:
+def _render_proposal_details(item: dict | None) -> None:
     if not item:
-        return None
+        return
     payload = item.get("payload_json")
-    readable = {
-        "Type": str(item.get("action_type") or "").replace("_", " ").title() or None,
-        "Risk": item.get("risk_level"),
-        "Related request": item.get("related_request_id"),
-    }
-    if isinstance(payload, dict):
-        for key, value in payload.items():
-            readable[str(key).replace("_", " ").title()] = value
-    elif payload:
-        readable["Details"] = payload
-    cleaned = {k: v for k, v in readable.items() if v not in (None, "")}
-    return cleaned or None
+    payload = payload if isinstance(payload, dict) else {}
+    action_type = str(item.get("action_type") or "")
+
+    st.caption("Request details")
+    if action_type == "leave_request":
+        _render_leave_proposal_details(payload)
+    else:
+        _render_generic_proposal_details(payload)
+
+    related = item.get("related_request_id")
+    if related:
+        st.caption(f"Linked leave request: {related}")
+
+
+def _render_leave_proposal_details(payload: dict) -> None:
+    _kv_table(
+        [
+            ("Leave type", str(payload.get("leave_type") or "").title()),
+            ("Start date", payload.get("start_date")),
+            ("End date", payload.get("end_date")),
+            ("Days", payload.get("days")),
+            ("Reason", payload.get("reason")),
+            ("Suggested cover", payload.get("suggested_cover_employee_name")),
+        ]
+    )
+    candidates = payload.get("cover_candidates")
+    if isinstance(candidates, list):
+        suggested_id = payload.get("suggested_cover_employee_id")
+        others = [
+            c
+            for c in candidates
+            if isinstance(c, dict) and c.get("employee_id") != suggested_id
+        ]
+        if others:
+            with st.popover(f"Other cover options ({len(others)})"):
+                st.dataframe(
+                    [
+                        {"Name": c.get("full_name"), "Role": c.get("job_title")}
+                        for c in others
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+
+def _render_generic_proposal_details(payload: dict) -> None:
+    pairs = [
+        (str(key).replace("_", " ").title(), value)
+        for key, value in payload.items()
+        if value not in (None, "")
+    ]
+    if pairs:
+        _kv_table(pairs)
 
 
 def page_users() -> None:
