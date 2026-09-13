@@ -5,10 +5,9 @@ import sqlite3
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.deps import CurrentUser, get_current_user, require_role, roles_at_least
-from app.api.schemas import LeaveBalanceOut, LeaveRequestCreate, LeaveRequestOut
+from app.api.schemas import LeaveBalanceOut, LeaveRequestOut
 from app.db.connection import get_db
 from app.db import leave as leave_db
-from app.db.audit import write_audit
 
 router = APIRouter(prefix="/leave", tags=["leave"])
 
@@ -53,26 +52,7 @@ def employee_requests(
     return leave_db.list_leave_requests(conn, employee_id)
 
 
-@router.post("/requests", response_model=LeaveRequestOut, status_code=status.HTTP_201_CREATED)
-def create_request(
-    body: LeaveRequestCreate,
-    user: CurrentUser = Depends(get_current_user),
-    conn: sqlite3.Connection = Depends(get_db),
-) -> dict:
-    created = leave_db.create_leave_request(
-        conn,
-        employee_id=user.employee_id,
-        leave_type=body.leave_type,
-        start_date=body.start_date,
-        end_date=body.end_date,
-        days=body.days,
-        reason=body.reason,
-    )
-    write_audit(
-        conn,
-        actor=user.username,
-        event_type="leave_request_submit",
-        employee_id=user.employee_id,
-        details=created["request_id"],
-    )
-    return created
+# Leave requests are created only through the chat agent (Ask Yusor ->
+# HRAgent's proposed_action -> ManagerAgent's approval submission), which
+# routes through governance and attaches a suggested cover employee.
+# There is deliberately no direct-write endpoint here.

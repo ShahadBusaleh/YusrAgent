@@ -49,6 +49,51 @@ def list_employees(
     return rows_to_dicts(conn.execute(sql, params).fetchall())
 
 
+def find_cover_candidates(
+    conn: sqlite3.Connection,
+    employee_id: str,
+    start_date: str,
+    end_date: str,
+    limit: int = 3,
+) -> list[dict]:
+    """Active colleagues free of overlapping leave during [start_date, end_date].
+
+    Prefers the requester's own department; falls back to same-manager
+    colleagues if the department has no free match.
+    """
+    requester = get_employee(conn, employee_id)
+    if not requester:
+        return []
+
+    overlap_clause = """
+        e.employee_id NOT IN (
+            SELECT lr.employee_id FROM leave_requests lr
+            WHERE lr.status IN ('pending', 'approved')
+              AND lr.start_date <= ? AND lr.end_date >= ?
+        )
+    """
+
+    def _query(scope_column: str, scope_value: str | None) -> list[dict]:
+        if not scope_value:
+            return []
+        sql = f"""
+            SELECT e.employee_id, e.full_name, e.job_title
+            FROM employees e
+            WHERE e.{scope_column} = ? AND e.employee_id != ? AND e.employment_status = 'active'
+              AND {overlap_clause}
+            ORDER BY e.full_name LIMIT ?
+        """
+        rows = conn.execute(
+            sql, (scope_value, employee_id, end_date, start_date, limit)
+        ).fetchall()
+        return rows_to_dicts(rows)
+
+    candidates = _query("department_id", requester.get("department_id"))
+    if candidates:
+        return candidates
+    return _query("manager_id", requester.get("manager_id"))
+
+
 def update_employee_profile(
     conn: sqlite3.Connection, employee_id: str, fields: dict
 ) -> dict | None:

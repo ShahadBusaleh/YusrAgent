@@ -1,7 +1,8 @@
 from app.agents.base import BaseAgent
+from app.agents.leave_intent import detects_leave_submission_intent, extract_leave_fields
 
 from app.db.connection import get_connection
-from app.db.employees import get_employee
+from app.db.employees import find_cover_candidates, get_employee
 from app.db.leave import get_leave_balance, list_leave_requests
 
 
@@ -57,6 +58,7 @@ class HRAgent(BaseAgent):
         """
 
         user = input.get("user") or {}
+        query = str(input.get("query") or "")
 
         employee_id = str(
             input.get("employee_id")
@@ -74,6 +76,7 @@ class HRAgent(BaseAgent):
             return empty
 
         conn = get_connection()
+        proposed_action = None
 
         try:
             facts: dict = {
@@ -129,11 +132,69 @@ class HRAgent(BaseAgent):
                     f"leave_requests:{employee_id}"
                 )
 
+            # Leave submission (chat-initiated): extract fields, find a
+            # cover, and propose the action. Never fabricates a request
+            # from incomplete input.
+            if detects_leave_submission_intent(query):
+                extracted = extract_leave_fields(query)
+
+                missing = [
+                    field
+                    for field in ("leave_type", "start_date", "end_date")
+                    if not extracted.get(field)
+                ]
+
+                if missing:
+                    facts["request_assessment"] = {
+                        "status": "NEEDS_INFORMATION",
+                        "missing_information": missing,
+                        "notes": [
+                            "Provide the missing leave details "
+                            "(type, start date, end date) to submit the request."
+                        ],
+                    }
+                else:
+                    leave_type = extracted["leave_type"]
+                    start_date = extracted["start_date"]
+                    end_date = extracted["end_date"]
+                    days = extracted.get("days")
+
+                    facts["requested_days"] = days
+
+                    if balance:
+                        type_remaining = balance.get(f"{leave_type}_remaining")
+                        if type_remaining is not None:
+                            facts["remaining_balance"] = type_remaining
+
+                    candidates = find_cover_candidates(
+                        conn, employee_id, start_date, end_date
+                    )
+                    top_cover = candidates[0] if candidates else None
+
+                    proposed_action = {
+                        "action_type": "leave_request",
+                        "payload": {
+                            "employee_id": employee_id,
+                            "leave_type": leave_type,
+                            "start_date": start_date,
+                            "end_date": end_date,
+                            "days": days,
+                            "reason": extracted.get("reason"),
+                            "suggested_cover_employee_id": (
+                                top_cover.get("employee_id") if top_cover else None
+                            ),
+                            "suggested_cover_employee_name": (
+                                top_cover.get("full_name") if top_cover else None
+                            ),
+                            "cover_candidates": candidates,
+                        },
+                    }
+
         finally:
             conn.close()
 
         return {
             "facts": facts,
-            "proposed_action": None,
+            "proposed_action": proposed_action,
             "sources": sources,
         }

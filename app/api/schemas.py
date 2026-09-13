@@ -135,14 +135,6 @@ class LeaveRequestOut(BaseModel):
     decided_by: str | None = None
 
 
-class LeaveRequestCreate(BaseModel):
-    leave_type: str
-    start_date: str
-    end_date: str
-    days: float
-    reason: str | None = None
-
-
 class ProposedActionOut(BaseModel):
     proposal_id: str
     employee_id: str | None = None

@@ -2,6 +2,7 @@ import re
 
 from app.agents.consultant_agent import ConsultantAgent
 from app.agents.hr_agent import HRAgent
+from app.agents.leave_intent import detects_leave_submission_intent
 from app.agents.manager_agent import ManagerAgent
 
 _EMPTY_HR = {
@@ -71,8 +72,11 @@ class OrchestratorAgent:
     @staticmethod
     def _needs_hr(query: str) -> bool:
         query_lower = query.lower()
-        return any(
-            re.search(pattern, query_lower) for pattern in _EMPLOYEE_FACT_PATTERNS
+        return (
+            any(
+                re.search(pattern, query_lower) for pattern in _EMPLOYEE_FACT_PATTERNS
+            )
+            or detects_leave_submission_intent(query)
         )
 
     @staticmethod

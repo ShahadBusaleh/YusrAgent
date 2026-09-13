@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
+from datetime import datetime, timezone
 
-from app.db.connection import row_to_dict, rows_to_dicts
+from app.db.connection import next_id, row_to_dict, rows_to_dicts
 
 
 def list_proposed_actions(
@@ -32,3 +34,34 @@ def get_proposed_action(conn: sqlite3.Connection, proposal_id: str) -> dict | No
         (proposal_id,),
     ).fetchone()
     return row_to_dict(row)
+
+
+def create_proposed_action(
+    conn: sqlite3.Connection,
+    *,
+    employee_id: str,
+    action_type: str,
+    payload: dict,
+    risk_level: str,
+    related_request_id: str | None = None,
+) -> dict:
+    proposal_id = next_id(conn, "proposed_actions", "proposal_id", "PA")
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """
+        INSERT INTO proposed_actions (
+            proposal_id, employee_id, action_type, payload_json,
+            risk_level, status, created_at, related_request_id
+        ) VALUES (?, ?, ?, ?, ?, 'pending_approval', ?, ?)
+        """,
+        (
+            proposal_id,
+            employee_id,
+            action_type,
+            json.dumps(payload),
+            risk_level,
+            now,
+            related_request_id,
+        ),
+    )
+    return get_proposed_action(conn, proposal_id)

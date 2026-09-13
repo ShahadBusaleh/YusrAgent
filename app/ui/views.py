@@ -98,7 +98,9 @@ def page_leave() -> None:
     styles.hero(
         "Self-service",
         "My leave",
-        "Your current balance and request history, plus a form to submit a new request.",
+        "Your current balance and request history. To submit a new request, "
+        "ask Yusor in the chat — it will suggest someone to cover for you "
+        "and send it for approval.",
     )
     balance_resp = api.request("GET", "/leave/balance")
     try:
@@ -125,30 +127,7 @@ def page_leave() -> None:
     st.subheader("My requests")
     reqs = api.raise_for_api(api.request("GET", "/leave/requests"))
     st.dataframe(reqs or [], use_container_width=True, hide_index=True)
-
-    st.subheader("Submit a leave request")
-    with st.form("leave_form"):
-        c1, c2, c3 = st.columns(3)
-        leave_type = c1.selectbox("Type", ["annual", "sick", "emergency"])
-        start = c2.date_input("Start")
-        end = c3.date_input("End")
-        days = st.number_input("Days", min_value=0.5, step=0.5, value=1.0)
-        reason = st.text_input("Reason")
-        submitted = st.form_submit_button("Submit request", type="primary")
-    if submitted:
-        payload = {
-            "leave_type": leave_type,
-            "start_date": start.isoformat(),
-            "end_date": end.isoformat(),
-            "days": days,
-            "reason": reason or None,
-        }
-        created = api.request("POST", "/leave/requests", json=payload)
-        try:
-            st.success(f"Submitted {api.raise_for_api(created)['request_id']}")
-            st.rerun()
-        except RuntimeError as exc:
-            st.error(str(exc))
+    st.caption("Need to submit a new request? Ask Yusor in the chat.")
 
 
 def page_employees() -> None:
