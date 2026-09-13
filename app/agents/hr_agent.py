@@ -1,5 +1,8 @@
 from app.agents.base import BaseAgent
-from app.agents.leave_intent import detects_leave_submission_intent, extract_leave_fields
+from app.agents.leave_intent import (
+    detects_leave_submission_intent,
+    extract_leave_fields,
+)
 
 from app.db.connection import get_connection
 from app.db.employees import find_cover_candidates, get_employee
@@ -76,7 +79,10 @@ class HRAgent(BaseAgent):
             return empty
 
         conn = get_connection()
+
+        # Initialize these before any conditional branches.
         proposed_action = None
+        leave_balance = None
 
         try:
             facts: dict = {
@@ -85,16 +91,19 @@ class HRAgent(BaseAgent):
 
             sources: list[str] = []
 
+            # -------------------------------------------------
             # Leave balance
-            balance = get_leave_balance(
+            # -------------------------------------------------
+
+            leave_balance = get_leave_balance(
                 conn,
                 employee_id
             )
 
-            if balance:
-                facts["leave_balance"] = balance
+            if leave_balance:
+                facts["leave_balance"] = leave_balance
 
-                annual_remaining = balance.get(
+                annual_remaining = leave_balance.get(
                     "annual_remaining"
                 )
 
@@ -106,7 +115,10 @@ class HRAgent(BaseAgent):
                     f"leave_balances:{employee_id}"
                 )
 
+            # -------------------------------------------------
             # Employee profile
+            # -------------------------------------------------
+
             employee = get_employee(
                 conn,
                 employee_id
@@ -119,7 +131,10 @@ class HRAgent(BaseAgent):
                     f"employees:{employee_id}"
                 )
 
+            # -------------------------------------------------
             # Previous leave requests
+            # -------------------------------------------------
+
             requests = list_leave_requests(
                 conn,
                 employee_id
@@ -132,15 +147,21 @@ class HRAgent(BaseAgent):
                     f"leave_requests:{employee_id}"
                 )
 
-            # Leave submission (chat-initiated): extract fields, find a
-            # cover, and propose the action. Never fabricates a request
-            # from incomplete input.
+            # -------------------------------------------------
+            # Leave submission
+            # -------------------------------------------------
+
             if detects_leave_submission_intent(query):
+
                 extracted = extract_leave_fields(query)
 
                 missing = [
                     field
-                    for field in ("leave_type", "start_date", "end_date")
+                    for field in (
+                        "leave_type",
+                        "start_date",
+                        "end_date",
+                    )
                     if not extracted.get(field)
                 ]
 
@@ -150,9 +171,11 @@ class HRAgent(BaseAgent):
                         "missing_information": missing,
                         "notes": [
                             "Provide the missing leave details "
-                            "(type, start date, end date) to submit the request."
+                            "(type, start date, end date) "
+                            "to submit the request."
                         ],
                     }
+
                 else:
                     leave_type = extracted["leave_type"]
                     start_date = extracted["start_date"]
@@ -161,15 +184,29 @@ class HRAgent(BaseAgent):
 
                     facts["requested_days"] = days
 
-                    if balance:
-                        type_remaining = balance.get(f"{leave_type}_remaining")
+                    # Use the already-defined leave_balance.
+                    if leave_balance:
+                        type_remaining = leave_balance.get(
+                            f"{leave_type}_remaining"
+                        )
+
                         if type_remaining is not None:
-                            facts["remaining_balance"] = type_remaining
+                            facts["remaining_balance"] = (
+                                type_remaining
+                            )
 
                     candidates = find_cover_candidates(
-                        conn, employee_id, start_date, end_date
+                        conn,
+                        employee_id,
+                        start_date,
+                        end_date,
                     )
-                    top_cover = candidates[0] if candidates else None
+
+                    top_cover = (
+                        candidates[0]
+                        if candidates
+                        else None
+                    )
 
                     proposed_action = {
                         "action_type": "leave_request",
@@ -181,10 +218,14 @@ class HRAgent(BaseAgent):
                             "days": days,
                             "reason": extracted.get("reason"),
                             "suggested_cover_employee_id": (
-                                top_cover.get("employee_id") if top_cover else None
+                                top_cover.get("employee_id")
+                                if top_cover
+                                else None
                             ),
                             "suggested_cover_employee_name": (
-                                top_cover.get("full_name") if top_cover else None
+                                top_cover.get("full_name")
+                                if top_cover
+                                else None
                             ),
                             "cover_candidates": candidates,
                         },
