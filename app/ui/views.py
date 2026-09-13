@@ -453,14 +453,26 @@ def page_approvals() -> None:
             label = f"{_status_label(status)} · {label}"
         with st.expander(label, expanded=status == "pending" and index < 2):
             st.markdown(_approval_card_html(row, person), unsafe_allow_html=True)
-            _render_proposal_details(proposals.get(row.get("proposal_id")))
+            proposal = proposals.get(row.get("proposal_id"))
+            _render_proposal_details(proposal)
             if status != "pending":
                 note = row.get("decision_note")
                 if note:
                     st.caption("Your note")
                     st.write(note)
                 continue
+
+            cover_options = _cover_candidate_options(proposal)
             with st.form(f"decide_{approval_id}"):
+                cover_employee_id = None
+                if cover_options:
+                    ids, labels, default_index = cover_options
+                    cover_employee_id = st.selectbox(
+                        "Cover employee",
+                        ids,
+                        index=default_index,
+                        format_func=lambda eid: labels.get(eid, eid),
+                    )
                 note = st.text_area(
                     "Note",
                     placeholder="A sentence of context helps — especially if you send this back.",
@@ -471,16 +483,50 @@ def page_approvals() -> None:
                 approve = col_a.form_submit_button("Approve", type="primary", use_container_width=True)
                 reject = col_b.form_submit_button("Send back", use_container_width=True)
             if approve:
-                _decide(approval_id, "approve", note, person)
+                _decide(approval_id, "approve", note, person, cover_employee_id)
             elif reject:
-                _decide(approval_id, "reject", note, person)
+                _decide(approval_id, "reject", note, person, cover_employee_id)
 
 
-def _decide(approval_id: str, decision: str, note: str, person: str = "") -> None:
+def _cover_candidate_options(proposal: dict | None) -> tuple[list, dict, int] | None:
+    if not proposal or str(proposal.get("action_type")) != "leave_request":
+        return None
+    payload = proposal.get("payload_json")
+    payload = payload if isinstance(payload, dict) else {}
+    candidates = payload.get("cover_candidates")
+    if not isinstance(candidates, list) or not candidates:
+        return None
+
+    ids = [c.get("employee_id") for c in candidates if isinstance(c, dict) and c.get("employee_id")]
+    if not ids:
+        return None
+    labels = {
+        c.get("employee_id"): (
+            f"{c.get('full_name')} — {c.get('job_title')}" if c.get("job_title") else str(c.get("full_name"))
+        )
+        for c in candidates
+        if isinstance(c, dict) and c.get("employee_id")
+    }
+    suggested_id = payload.get("suggested_cover_employee_id")
+    default_index = ids.index(suggested_id) if suggested_id in ids else 0
+    return ids, labels, default_index
+
+
+def _decide(
+    approval_id: str,
+    decision: str,
+    note: str,
+    person: str = "",
+    cover_employee_id: str | None = None,
+) -> None:
     resp = api.request(
         "POST",
         f"/approvals/{approval_id}/decide",
-        json={"decision": decision, "decision_note": note or None},
+        json={
+            "decision": decision,
+            "decision_note": note or None,
+            "cover_employee_id": cover_employee_id if decision == "approve" else None,
+        },
     )
     try:
         api.raise_for_api(resp)
@@ -611,16 +657,17 @@ def _render_proposal_details(item: dict | None) -> None:
 
 
 def _render_leave_proposal_details(payload: dict) -> None:
-    _kv_table(
-        [
-            ("Leave type", str(payload.get("leave_type") or "").title()),
-            ("Start date", payload.get("start_date")),
-            ("End date", payload.get("end_date")),
-            ("Days", payload.get("days")),
-            ("Reason", payload.get("reason")),
-            ("Suggested cover", payload.get("suggested_cover_employee_name")),
-        ]
-    )
+    rows = [
+        ("Leave type", str(payload.get("leave_type") or "").title()),
+        ("Start date", payload.get("start_date")),
+        ("End date", payload.get("end_date")),
+        ("Days", payload.get("days")),
+        ("Reason", payload.get("reason")),
+        ("Suggested cover", payload.get("suggested_cover_employee_name")),
+    ]
+    if payload.get("assigned_cover_employee_name"):
+        rows.append(("Assigned cover", payload.get("assigned_cover_employee_name")))
+    _kv_table(rows)
     candidates = payload.get("cover_candidates")
     if isinstance(candidates, list):
         suggested_id = payload.get("suggested_cover_employee_id")

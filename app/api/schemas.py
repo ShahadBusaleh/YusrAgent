@@ -172,6 +172,7 @@ class ApprovalOut(BaseModel):
 class ApprovalDecision(BaseModel):
     decision: Literal["approve", "reject"]
     decision_note: str | None = None
+    cover_employee_id: str | None = None
 
 
 class AuditLogOut(BaseModel):

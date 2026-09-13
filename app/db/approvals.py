@@ -7,6 +7,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from app.db.connection import next_id, row_to_dict, rows_to_dicts
+from app.db.employees import get_employee
 from app.db.leave import create_leave_request
 from app.db.proposed_actions import get_proposed_action
 
@@ -69,6 +70,7 @@ def decide_approval(
     decision: str,
     decided_by: str,
     decision_note: str | None,
+    cover_employee_id: str | None = None,
 ) -> dict | None:
     current = get_approval(conn, approval_id)
     if current is None:
@@ -89,8 +91,45 @@ def decide_approval(
             "UPDATE proposed_actions SET status = ? WHERE proposal_id = ?",
             (status, proposal_id),
         )
-        _sync_leave_request(conn, proposal_id, status=status, decided_at=now, decided_by=decided_by)
+        _sync_leave_request(
+            conn,
+            proposal_id,
+            status=status,
+            decided_at=now,
+            decided_by=decided_by,
+            cover_employee_id=cover_employee_id,
+        )
     return get_approval(conn, approval_id)
+
+
+def _assign_cover_employee(
+    conn: sqlite3.Connection,
+    proposal_id: str,
+    payload: dict,
+    cover_employee_id: str | None,
+) -> dict:
+    """Record the HR manager's chosen cover employee on the proposal.
+
+    Falls back to the system-suggested cover when the manager didn't
+    override it, so an approved leave request always has a definitive
+    assigned cover once decided. The chosen id/name is written back
+    into proposed_actions.payload_json (no schema change needed).
+    """
+    chosen_id = cover_employee_id or payload.get("suggested_cover_employee_id")
+    chosen_name = payload.get("suggested_cover_employee_name")
+    if cover_employee_id:
+        chosen = get_employee(conn, cover_employee_id)
+        chosen_name = (chosen or {}).get("full_name") or cover_employee_id
+
+    payload = dict(payload)
+    payload["assigned_cover_employee_id"] = chosen_id
+    payload["assigned_cover_employee_name"] = chosen_name
+
+    conn.execute(
+        "UPDATE proposed_actions SET payload_json = ? WHERE proposal_id = ?",
+        (json.dumps(payload), proposal_id),
+    )
+    return payload
 
 
 def _sync_leave_request(
@@ -100,6 +139,7 @@ def _sync_leave_request(
     status: str,
     decided_at: str,
     decided_by: str,
+    cover_employee_id: str | None = None,
 ) -> None:
     """If the decided proposal is a leave_request, materialize it into leave_requests."""
     proposal = get_proposed_action(conn, proposal_id)
@@ -110,6 +150,9 @@ def _sync_leave_request(
         payload = json.loads(proposal.get("payload_json") or "{}")
     except (TypeError, ValueError):
         return
+
+    if status == "approved":
+        payload = _assign_cover_employee(conn, proposal_id, payload, cover_employee_id)
 
     created = create_leave_request(
         conn,

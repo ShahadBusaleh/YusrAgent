@@ -35,6 +35,7 @@ def decide(
         decision=body.decision,
         decided_by=user.employee_id,
         decision_note=body.decision_note,
+        cover_employee_id=body.cover_employee_id,
     )
     if updated is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
