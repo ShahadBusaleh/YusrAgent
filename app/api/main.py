@@ -10,6 +10,7 @@ from app.api.routers import (
     audit,
     auth,
     employees,
+    experience_gap,
     leave,
     proposed_actions,
     users,
@@ -47,6 +48,7 @@ app.include_router(employees.router)
 app.include_router(leave.router)
 app.include_router(proposed_actions.router)
 app.include_router(approvals.router)
+app.include_router(experience_gap.router)
 app.include_router(audit.router)
 app.include_router(users.router)
 app.include_router(agent.router)

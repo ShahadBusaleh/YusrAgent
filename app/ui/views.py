@@ -378,6 +378,139 @@ def _render_employee_profile(detail: dict) -> None:
                 ]
             )
 
+def page_team_insights() -> None:
+    """Manager/Admin view for synthetic Experience Gap insights."""
+
+    role = (st.session_state.get("me") or {}).get("role")
+
+    if role not in {"hr_manager", "admin"}:
+        st.error("Team Insights is available to HR managers and admins only.")
+        return
+
+    styles.hero(
+        "HR manager",
+        "Team Insights",
+        "See which skills are missing or under-covered across your teams.",
+    )
+
+    department_id = st.text_input(
+        "Department ID",
+        value="DEP-06",
+        placeholder="e.g. DEP-06",
+    ).strip()
+
+    if not department_id:
+        st.info("Enter a department ID to view skill coverage.")
+        return
+
+    st.caption(
+        "Synthetic placeholder skill assessments are used for this demo."
+    )
+
+    # This endpoint should be connected to the HR Agent Experience Gap
+    # query once the backend route is exposed.
+    response = api.request(
+        "GET",
+        f"/experience-gap/{department_id}",
+    )
+
+    try:
+        data = api.raise_for_api(response)
+    except RuntimeError as exc:
+        st.error(str(exc))
+        return
+
+    if not isinstance(data, dict):
+        st.error("Unexpected Experience Gap response.")
+        return
+
+    skills = data.get("skills") or []
+
+    if not skills:
+        st.info("No skill requirements found for this department.")
+        return
+
+    missing = [
+        item for item in skills
+        if str(item.get("status") or "").upper() == "MISSING"
+    ]
+
+    low = [
+        item for item in skills
+        if str(item.get("status") or "").upper() == "LOW"
+    ]
+
+    ok = [
+        item for item in skills
+        if str(item.get("status") or "").upper() == "OK"
+    ]
+
+    c1, c2, c3 = st.columns(3)
+
+    c1.metric("Missing", len(missing))
+    c2.metric("Low coverage", len(low))
+    c3.metric("Covered", len(ok))
+
+    if missing:
+        st.subheader("🔴 Missing skills")
+
+        st.dataframe(
+            [
+                {
+                    "Skill": item.get("skill_name"),
+                    "Required": item.get("required_headcount"),
+                    "Current": item.get("current_headcount"),
+                    "Critical": (
+                        "Yes"
+                        if item.get("is_critical")
+                        else "No"
+                    ),
+                }
+                for item in missing
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    if low:
+        st.subheader("🟡 Low coverage")
+
+        st.dataframe(
+            [
+                {
+                    "Skill": item.get("skill_name"),
+                    "Required": item.get("required_headcount"),
+                    "Current": item.get("current_headcount"),
+                    "Gap": (
+                        int(item.get("required_headcount") or 0)
+                        - int(item.get("current_headcount") or 0)
+                    ),
+                    "Critical": (
+                        "Yes"
+                        if item.get("is_critical")
+                        else "No"
+                    ),
+                }
+                for item in low
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    if ok:
+        with st.expander(f"Covered skills ({len(ok)})"):
+            st.dataframe(
+                [
+                    {
+                        "Skill": item.get("skill_name"),
+                        "Required": item.get("required_headcount"),
+                        "Current": item.get("current_headcount"),
+                    }
+                    for item in ok
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
 
 def page_approvals() -> None:
     styles.hero(
