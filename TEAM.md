@@ -397,13 +397,24 @@ only; not exposed to `employee` role.
 tables or their rows):**
 
 ```text
-skills            (skill_id, skill_name, category)
-job_requirements  (job_title, skill_id FK, required_level 1-5, is_critical)
-employee_skills   (employee_id FK, skill_id FK, current_level 1-5,
-                    assessed_by, assessed_date)
+skills                   (skill_id, skill_name, category)
+department_requirements  (department_id FK, skill_id FK,
+                           minimum_headcount, is_critical)
+employee_skills          (employee_id FK, skill_id FK, current_level 1-5,
+                           assessed_by, assessed_date)
 ```
 
-Gap = `required_level - current_level`, aggregated per department/skill.
+Requirements are tied to the **department**, not to an existing `job_title`
+— this is what lets the query catch a skill nobody was ever hired for (e.g.
+IT has a Manager, Data Analyst, Software Developer, and IT Support, but
+zero Cyber Security coverage). `job_title`-scoped requirements can't
+surface that: if no one holds the title, there's nothing to check.
+
+Gap = for each `department_requirements` row, count employees in that
+department whose `employee_skills` entry for that skill meets a minimum
+proficiency. `current_headcount == 0` against a required skill is the
+headline case — flag it as `MISSING`, not just "low," since that's the
+Cyber-Security-style gap that matters most for a demo.
 
 **May edit:** `app/agents/hr_agent.py`, new `app/db/skills.py`, a seed
 script for the three new tables, and a new "Team Insights" tab in
@@ -412,34 +423,40 @@ script for the three new tables, and a new "Team Insights" tab in
 **Must not edit:** existing tables/rows, other agents, `app/rag/**`
 
 **Data population:** synthetic seed data, not a real assessment —
-`job_requirements` hand-curated (~5-8 skills per department),
-`employee_skills` generated per job_title/department. Label it clearly as
-seed/placeholder data in `DATABASE_SCHEMA.md`, same convention as the
-`ChangeMe123!` password note there.
+`department_requirements` hand-curated (~5-8 skills per department,
+including at least one deliberately uncovered skill per department so the
+MISSING case is demoable — e.g. Cyber Security required but zero IT staff
+have it), `employee_skills` generated per employee's actual job_title.
+Label it clearly as seed/placeholder data in `DATABASE_SCHEMA.md`, same
+convention as the `ChangeMe123!` password note there.
 
 **New scope:**
 
-1. Seed script that populates `skills`, `job_requirements`,
+1. Seed script that populates `skills`, `department_requirements`,
    `employee_skills`.
 2. New HR Agent query `department_experience_gap` — same role-gating
-   pattern as `_own_record_only` (manager/admin only), returns the gap per
-   department/skill, sorted by size and `is_critical`.
-3. "Team Insights" tab in the UI showing the top skill gaps per
-   department.
+   pattern as `_own_record_only` (manager/admin only). For a department,
+   returns each required skill's `current_headcount` vs
+   `required_headcount`, with `status: "MISSING"` when headcount is 0 and
+   `status: "LOW"` when it's short but nonzero, sorted `is_critical` and
+   `MISSING` first.
+3. "Team Insights" tab in the UI showing the top gaps per department,
+   MISSING skills called out distinctly from LOW ones.
 
 No Consultant, no Manager governance, no Orchestrator wiring — this is
 read-only analytics, not an action that needs approval.
 
-**Done when:** `department_experience_gap` returns real, non-zero gap
-numbers per department for a manager-role user (verified against the seed
-data), and the "Team Insights" tab renders them.
+**Done when:** `department_experience_gap("IT")` returns Cyber Security (or
+whichever skill was seeded as uncovered) with `status: "MISSING"` and
+`current_headcount: 0`, and the "Team Insights" tab renders it distinctly
+from the LOW-coverage gaps.
 
 ### Prompt for your AI (Experience Gap — paste this)
 
 ```text
 You are working on Yusor, phase 2, Experience Gap Insight (see TEAM.md "New task plan"). Read AGENTS.md, TEAM.md, and README.md. This extends the HR Agent — it is not a new agent.
 
-Add three new tables only (skills, job_requirements, employee_skills) — do not touch or migrate any existing table or row. Write a seed script with synthetic placeholder data, labeled clearly as such. Add app/db/skills.py and a department_experience_gap query in app/agents/hr_agent.py, manager/admin-role only. Add a "Team Insights" tab in app/ui/views.py that shows it.
+Add three new tables only (skills, department_requirements, employee_skills) — do not touch or migrate any existing table or row. department_requirements is tied to department_id, not job_title, so the query can catch a skill nobody was ever hired for (e.g. IT has no Cyber Security coverage at all). Write a seed script with synthetic placeholder data, labeled clearly as such, including at least one deliberately uncovered skill per department. Add app/db/skills.py and a department_experience_gap query in app/agents/hr_agent.py (manager/admin-role only) that returns current_headcount vs required_headcount per skill, with status MISSING when headcount is 0. Add a "Team Insights" tab in app/ui/views.py that shows it, calling out MISSING distinctly from LOW.
 Do not call RAG, an LLM, or touch Consultant/Manager/Orchestrator files.
 If I ask you to build a real skills-assessment workflow (employee self-rating, manager review flow), stop and flag it as separate scope — this task is read-only insight from seed data only.
 ```
