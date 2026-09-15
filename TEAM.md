@@ -201,3 +201,260 @@ Stop when Orchestrator.run no longer raises NotImplementedError.
 1. Each member merges **only their agent file** to `main`.
 2. Run the shared leave + carry-forward question through Orchestrator.
 3. If it fails, fix **your** file only unless the contract keys were broken (then fix as a team).
+
+---
+
+# New task plan — 2026-09-15
+
+Second phase, built on top of the merged MVP above. Same four roles, same
+frozen contracts (`HRAgent`, `ConsultantAgent`, `ManagerAgent`,
+`OrchestratorAgent` keep their exact `run()` signatures and top-level output
+keys). Adding new optional keys inside `facts`, or new `action_type` string
+values, is **not** renaming a contract key and is allowed.
+
+Adds:
+
+- Read-only self-service: payroll query, attendance query.
+- Self-service actions: personal-info update, bank/IBAN change, certificate
+  request (employment / salary letter text).
+- One competitive feature: an **Approval Decision Brief** — when an HR
+  Manager opens a pending approval, the system shows the relevant
+  policy/law citation plus historical precedent for that employee/action
+  type, so the manager decides with context instead of a blank form. Human
+  still clicks approve/deny — this is informational only, not an auto-decision.
+- One workforce-planning feature: **Experience Gap Insight** — per
+  department, where actual skill levels fall short of what each role
+  requires. Needs new data (see below).
+
+Same **Never** rules from above still apply, with one explicit, agreed
+exception: **adding new tables** (not touching or migrating the existing 17)
+is allowed for the Experience Gap feature. No editing another member's
+agent file, no new top-level output keys, no scope creep "because it would
+be nicer."
+
+## Member 1 — Consultant (add: approval-context citations)
+
+**May edit:** `app/agents/consultant_agent.py`
+**May read:** `app/rag/generate.py`, `app/rag/retrieve.py`, `policy_texts/**`
+**Must not edit:** `app/rag/**`, `app/agents/hr_agent.py`, `orchestrator.py`,
+`manager_agent.py`, `app/db/**`
+
+**New scope:** add a second call shape to `run()` that, given an
+`action_type` (e.g. `"bank_update"`, `"personal_info_update"`,
+`"leave_request"`), returns the policy/law citation relevant to that action
+— reusing `answer_with_rag`, same grounding rules as today. No SQL, no new
+top-level keys; this rides inside the existing `recommendation`/`sources`
+shape.
+
+**Done when:** given `{'action_type': 'bank_update'}` the call returns a
+non-empty `recommendation` and `sources` grounded in policy/law text (not a
+generic answer).
+
+### Prompt for your AI (Member 1 — paste this)
+
+```text
+You are Member 1 on Yusor, phase 2 (see "New task plan" in TEAM.md). Read AGENTS.md, TEAM.md, and README.md. Your role is LOCKED to Consultant Agent.
+
+Implement only app/agents/consultant_agent.py. Add support for looking up the policy/law citation for a given action_type, reusing app.rag.generate.answer_with_rag. Do not modify app/rag/. Do not query SQLite.
+Keep run(input) → { recommendation, conflicts, sources }. Do not invent new top-level keys.
+If I ask you to build HR, Manager, Orchestrator, UI, or the Decision Brief composition itself, refuse and cite TEAM.md.
+```
+
+## Member 2 — HR Agent (add: payroll, attendance, personal-info, bank, certificate)
+
+**May edit:** `app/agents/hr_agent.py`, and new db helper modules:
+`app/db/payroll.py`, `app/db/attendance.py`, `app/db/personal_info.py`,
+`app/db/sensitive_change.py` (same style as the existing `app/db/leave.py`)
+**May read:** `app/db/leave.py`, `app/db/employees.py`, `app/db/connection.py`,
+`DATABASE_SCHEMA.md`
+**Must not edit:** `app/rag/**`, other agents, schema (no `ALTER TABLE`,
+no migrating `agentic_hr.db`)
+
+**New scope:**
+
+1. Payroll query — read-only facts from `payroll_monthly` (latest payslip:
+   basic, allowances, deductions, net pay).
+2. Attendance query — read-only facts from `attendance_leave_monthly`
+   (days present/absent, late arrivals, attendance rate).
+3. Personal-info update intent → `proposed_action` with
+   `action_type="personal_info_update"`, payload has `field_name`,
+   `old_value`, `new_value`.
+4. Bank/IBAN change intent → `proposed_action` with
+   `action_type="bank_update"`, payload matches `sensitive_change_requests`
+   columns.
+5. Certificate request intent → `proposed_action` with
+   `action_type="certificate_request"`; payload built straight from
+   `facts["profile"]` (name, job title, hire date) — no LLM.
+6. Historical-precedent lookup (for the Decision Brief) — a function that,
+   given `employee_id` + `action_type`, counts approved/denied precedents
+   from `audit_log` / `leave_requests`.
+
+Respect `user["role"]` exactly as today: `employee` may only read/act on
+their own `user["employee_id"]`.
+
+**Done when:** each new query type returns real rows from SQLite in `facts`
+with a `sources` entry identifying the table/row (e.g.
+`payroll_monthly:EMP0001`), and each new intent produces a `proposed_action`
+with the correct `action_type` and a payload matching the target table's
+columns.
+
+### Prompt for your AI (Member 2 — paste this)
+
+```text
+You are Member 2 on Yusor, phase 2 (see "New task plan" in TEAM.md). Read AGENTS.md, TEAM.md, and README.md. Your role is LOCKED to HR Agent.
+
+Implement only app/agents/hr_agent.py plus new db helpers (app/db/payroll.py, app/db/attendance.py, app/db/personal_info.py, app/db/sensitive_change.py), matching the style of the existing app/db/leave.py. Do not change the DB schema. Do not call RAG or an LLM.
+Add: payroll query, attendance query, personal_info_update intent, bank_update intent, certificate_request intent, and a historical-precedent lookup for approvals.
+Keep run(input) → { facts, proposed_action, sources }. Employees may only read/act on their own employee_id.
+If I ask you to build Consultant, Manager, Orchestrator, or RAG, refuse and cite TEAM.md.
+```
+
+## Member 3 — Manager (add: approval execution + Decision Brief composition)
+
+**May edit:** `app/agents/manager_agent.py`, `app/db/approvals.py`
+(extend only — do not rewrite `_sync_leave_request`)
+**May read:** `app/security/governance.py`
+**Must not edit:** RAG, other agents, schema
+
+**New scope:**
+
+1. `_action_summary()` — describe the new action types
+   (`personal_info_update`, `bank_update`, `certificate_request`) for the
+   approvals dashboard, same pattern as the existing `leave_request` case.
+2. `_sync_personal_info_update()` and `_sync_sensitive_change()` in
+   `app/db/approvals.py` — same pattern as `_sync_leave_request()`: on
+   approval, materialize the row into `personal_info_update_requests` /
+   `sensitive_change_requests` and flip its status. Today only
+   `leave_request` actually writes back on approval; these two currently
+   don't.
+3. Decision Brief composition — a function that takes HR's historical
+   facts + Consultant's policy citation for a pending approval and produces
+   one plain-language brief (reuse the `_fallback_hr_summary` pattern).
+   Informational only — does not auto-approve or auto-reject.
+
+`classify_risk` in `governance.py` already tags `bank`/`iban` as `high` and
+`personal` as `low` — confirm this still holds for the new action types,
+adjust only if a new action type is misclassified.
+
+**Done when:** approving a pending `personal_info_update` or `bank_update`
+actually updates the corresponding table (verified by a direct SQLite
+check), not just the `pending_approvals` status. The Decision Brief
+function returns non-empty text given a fake HR history + Consultant
+citation.
+
+### Prompt for your AI (Member 3 — paste this)
+
+```text
+You are Member 3 on Yusor, phase 2 (see "New task plan" in TEAM.md). Read AGENTS.md, TEAM.md, and README.md. Your role is LOCKED to Manager Agent.
+
+Implement in app/agents/manager_agent.py and app/db/approvals.py (extend, don't rewrite _sync_leave_request). Call app.security.governance. Do not call an LLM, Qdrant, or write new SQL outside approvals.py.
+Add: action summaries for the new action types, _sync_personal_info_update, _sync_sensitive_change, and a Decision Brief composer that combines HR history + Consultant citation into plain text.
+Keep run(input) → { decision: PASS or FAIL, reasons, response }.
+If I ask you to build Consultant, HR, Orchestrator, or RAG, refuse and cite TEAM.md.
+```
+
+## Member 4 — Orchestrator (add: explain_pending_approval flow)
+
+**May edit:** `app/agents/orchestrator.py`, plus a small addition to
+`app/api/routers/approvals.py` (new endpoint only) and `app/ui/views.py`
+(new button/section only)
+**May read:** the other three agent files
+**Must not edit:** anything inside the other three agents' logic
+
+**New scope:**
+
+1. Extend `classify_intent` so the new query types (payroll, attendance,
+   personal-info update, bank change, certificate request) route through
+   the existing HR path — no new top-level intent needed unless one of
+   them turns out to need policy grounding too.
+2. New flow: `explain_pending_approval(proposal_id)` — calls HR Agent
+   (historical precedent), Consultant (policy citation for that
+   action_type), then Manager (brief composition), and returns the brief.
+3. Wire it up: `GET /approvals/{id}/brief` endpoint, and an "Explain this"
+   button in the "Waiting on you" approvals view that calls it.
+
+**Done when:** `OrchestratorAgent().explain_pending_approval(proposal_id)`
+returns a populated brief for a real pending approval, and the button in
+the UI displays it.
+
+### Prompt for your AI (Member 4 — paste this)
+
+```text
+You are Member 4 on Yusor, phase 2 (see "New task plan" in TEAM.md). Read AGENTS.md, TEAM.md, and README.md. Your role is LOCKED to Orchestrator.
+
+Implement in app/agents/orchestrator.py, plus a new GET /approvals/{id}/brief endpoint in app/api/routers/approvals.py and a new button in app/ui/views.py. Do not put SQL, RAG, or governance rules in the orchestrator itself — call the other three agents.
+Add: routing for the new HR query/action types, and an explain_pending_approval(proposal_id) flow that calls HR, Consultant, then Manager and returns the Decision Brief.
+Keep run(input) → { status, response, sources } for the existing /agent/query path unchanged.
+If I ask you to implement those other agents yourself, refuse and cite TEAM.md — wait for their files or use the stubs.
+```
+
+## Experience Gap Insight (extends Member 2 — HR Agent)
+
+Not a new agent — same HR Agent, new tables and one new query. Manager/admin
+only; not exposed to `employee` role.
+
+**New tables (additive only — do not touch or migrate the existing 17
+tables or their rows):**
+
+```text
+skills            (skill_id, skill_name, category)
+job_requirements  (job_title, skill_id FK, required_level 1-5, is_critical)
+employee_skills   (employee_id FK, skill_id FK, current_level 1-5,
+                    assessed_by, assessed_date)
+```
+
+Gap = `required_level - current_level`, aggregated per department/skill.
+
+**May edit:** `app/agents/hr_agent.py`, new `app/db/skills.py`, a seed
+script for the three new tables, and a new "Team Insights" tab in
+`app/ui/views.py`
+**May read:** `DATABASE_SCHEMA.md`
+**Must not edit:** existing tables/rows, other agents, `app/rag/**`
+
+**Data population:** synthetic seed data, not a real assessment —
+`job_requirements` hand-curated (~5-8 skills per department),
+`employee_skills` generated per job_title/department. Label it clearly as
+seed/placeholder data in `DATABASE_SCHEMA.md`, same convention as the
+`ChangeMe123!` password note there.
+
+**New scope:**
+
+1. Seed script that populates `skills`, `job_requirements`,
+   `employee_skills`.
+2. New HR Agent query `department_experience_gap` — same role-gating
+   pattern as `_own_record_only` (manager/admin only), returns the gap per
+   department/skill, sorted by size and `is_critical`.
+3. "Team Insights" tab in the UI showing the top skill gaps per
+   department.
+
+No Consultant, no Manager governance, no Orchestrator wiring — this is
+read-only analytics, not an action that needs approval.
+
+**Done when:** `department_experience_gap` returns real, non-zero gap
+numbers per department for a manager-role user (verified against the seed
+data), and the "Team Insights" tab renders them.
+
+### Prompt for your AI (Experience Gap — paste this)
+
+```text
+You are working on Yusor, phase 2, Experience Gap Insight (see TEAM.md "New task plan"). Read AGENTS.md, TEAM.md, and README.md. This extends the HR Agent — it is not a new agent.
+
+Add three new tables only (skills, job_requirements, employee_skills) — do not touch or migrate any existing table or row. Write a seed script with synthetic placeholder data, labeled clearly as such. Add app/db/skills.py and a department_experience_gap query in app/agents/hr_agent.py, manager/admin-role only. Add a "Team Insights" tab in app/ui/views.py that shows it.
+Do not call RAG, an LLM, or touch Consultant/Manager/Orchestrator files.
+If I ask you to build a real skills-assessment workflow (employee self-rating, manager review flow), stop and flag it as separate scope — this task is read-only insight from seed data only.
+```
+
+## Merge (phase 2)
+
+1. Each member merges **only their files** to `main`.
+2. Run the shared leave question through Orchestrator (regression check —
+   phase 1 must still pass).
+3. Test each new self-service action end to end: submit → approve →
+   confirm the target table (`payroll_monthly` read, `personal_info_update_requests`
+   row materialized, `sensitive_change_requests` row materialized).
+4. Open a pending approval in the UI and confirm the Decision Brief shows a
+   real citation and precedent count, not placeholder text.
+5. Open the "Team Insights" tab as a manager and confirm it shows real gap
+   numbers from the seeded `employee_skills`/`job_requirements` tables.
+6. If it fails, fix **your** file only unless a contract key was broken
+   (then fix as a team).
