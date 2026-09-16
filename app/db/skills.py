@@ -51,6 +51,83 @@ def ensure_experience_gap_tables(
     conn.commit()
 
 
+def _candidate_job_titles(
+    conn: sqlite3.Connection,
+    department_id: str,
+    skill_id: str,
+    limit: int = 2,
+) -> list[str]:
+    """
+    Job titles already present in the department that do not yet
+    cover the given skill, ranked by how many employees hold that
+    title (a bigger existing pool is a more realistic upskilling
+    target). Used only to build a suggestion, not to change status.
+    """
+
+    rows = conn.execute(
+        """
+        SELECT e.job_title, COUNT(*) AS headcount
+        FROM employees e
+        WHERE e.department_id = ?
+          AND e.job_title NOT IN (
+              SELECT job_title FROM skill_job_titles WHERE skill_id = ?
+          )
+        GROUP BY e.job_title
+        ORDER BY headcount DESC, e.job_title ASC
+        LIMIT ?
+        """,
+        (department_id, skill_id, limit),
+    ).fetchall()
+
+    return [row["job_title"] for row in rows]
+
+
+def _build_recommendation(
+    item: dict,
+    candidate_titles: list[str],
+) -> str | None:
+    """
+    Deterministic, template-based suggestion for closing a gap.
+
+    Not LLM-generated: the inputs are just headcount numbers and
+    job titles already in hand, so a template avoids adding an LLM
+    dependency to what is otherwise read-only SQL analytics.
+    """
+
+    if item["status"] == "OK":
+        return None
+
+    gap = max(item["required_headcount"] - item["current_headcount"], 0)
+
+    if item["status"] == "MISSING":
+        lead = (
+            f"No employees in this department currently cover "
+            f"{item['skill_name']}."
+        )
+    else:
+        lead = (
+            f"Only {item['current_headcount']} of the required "
+            f"{item['required_headcount']} employees cover "
+            f"{item['skill_name']}."
+        )
+
+    if candidate_titles:
+        upskill = (
+            f" Consider upskilling from an existing role such as "
+            f"{' or '.join(candidate_titles)}."
+        )
+    else:
+        upskill = ""
+
+    hire_noun = "hire" if gap == 1 else "hires"
+    hire = (
+        f" If upskilling isn't feasible, recommend hiring {gap} "
+        f"additional {item['skill_name']} {hire_noun}."
+    )
+
+    return (lead + upskill + hire).strip()
+
+
 def get_department_experience_gap(
     conn: sqlite3.Connection,
     department_id: str,
@@ -66,6 +143,9 @@ def get_department_experience_gap(
         MISSING -> current_headcount == 0
         LOW     -> current_headcount < required_headcount
         OK      -> current_headcount >= required_headcount
+
+    Each MISSING/LOW item also carries a "recommendation" string
+    (hire vs. upskill-from-role suggestion). OK items get None.
     """
 
     rows = conn.execute(
@@ -116,6 +196,19 @@ def get_department_experience_gap(
         item["current_headcount"] = current
         item["required_headcount"] = required
         item["status"] = status
+
+        if status == "OK":
+            item["recommendation"] = None
+        else:
+            candidates = _candidate_job_titles(
+                conn,
+                department_id,
+                item["skill_id"],
+            )
+            item["recommendation"] = _build_recommendation(
+                item,
+                candidates,
+            )
 
         results.append(item)
 

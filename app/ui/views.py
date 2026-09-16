@@ -404,7 +404,8 @@ def page_team_insights() -> None:
         return
 
     st.caption(
-        "Synthetic placeholder skill assessments are used for this demo."
+        "Coverage is derived from job title, not an individual "
+        "employee assessment. Synthetic placeholder data for this demo."
     )
 
     # This endpoint should be connected to the HR Agent Experience Gap
@@ -472,6 +473,13 @@ def page_team_insights() -> None:
             hide_index=True,
         )
 
+        for item in missing:
+            if item.get("recommendation"):
+                st.caption(
+                    f"**{item.get('skill_name')}:** "
+                    f"{item.get('recommendation')}"
+                )
+
     if low:
         st.subheader("🟡 Low coverage")
 
@@ -496,6 +504,13 @@ def page_team_insights() -> None:
             use_container_width=True,
             hide_index=True,
         )
+
+        for item in low:
+            if item.get("recommendation"):
+                st.caption(
+                    f"**{item.get('skill_name')}:** "
+                    f"{item.get('recommendation')}"
+                )
 
     if ok:
         with st.expander(f"Covered skills ({len(ok)})"):

@@ -1,7 +1,8 @@
 # Yusor — SQLite Database (agentic_hr.db)
 
 Built from your 11 CSV exports, extending the tables already defined in your
-working-draft schema, plus a login/RBAC layer added afterward. 14 tables total.
+working-draft schema, plus a login/RBAC layer added afterward. 14 tables total,
+plus 3 seed/placeholder tables added later for Experience Gap Insight (see below).
 ## Authentication & RBAC (added)
 
 - **users** — separate table, linked 1:1 to `employees` via `employee_id`. Kept
@@ -68,6 +69,29 @@ working-draft schema, plus a login/RBAC layer added afterward. 14 tables total.
   wants plain text chunks, say so and I'll also export each row as a `.txt` file per
   policy/article — both can coexist (DB for lookups, text files for embedding).
 
+## Experience Gap Insight tables (added, seed/placeholder data)
+
+- **skills** — lookup table: `skill_id, skill_name, category`.
+- **department_requirements** — which skills a department needs:
+  `department_id (FK), skill_id (FK), minimum_headcount, is_critical`. Tied
+  to the department rather than to a `job_title`, so a skill nobody was ever
+  hired for (e.g. Cyber Security in IT) still shows up as a gap instead of
+  having nothing to check against.
+- **skill_job_titles** — which job titles plausibly carry a skill:
+  `skill_id (FK), job_title`. A department's `current_headcount` for a skill
+  is the count of its employees whose `job_title` appears here for that
+  skill.
+
+**This is synthetic seed data, not a real skills assessment** — same
+convention as the `ChangeMe123!` password note above.
+`department_requirements` was hand-curated (~5-8 skills per department,
+including at least one deliberately uncovered skill so the `MISSING` case is
+demoable) and `skill_job_titles` was hand-curated per skill (plausible
+titles, not generated per employee). Populated by `app/seed_experience_gap.py`.
+An earlier draft used a per-employee `employee_skills` table with a
+`current_level` (1-5) score; that was replaced by `skill_job_titles` since a
+fabricated per-employee score over synthetic data wasn't adding real signal.
+
 ## `related_request_id` — not a hard foreign key
 
 `proposed_actions.related_request_id` points to either
@@ -112,6 +136,9 @@ departments
 | tasks | 0 (empty, ready for the running system) |
 | roles | 4 |
 | users | 80 (seeded, placeholder passwords — see above) |
+| skills | 72 (seed/placeholder — see above) |
+| department_requirements | 72 (seed/placeholder — see above) |
+| skill_job_titles | 135 (seed/placeholder — see above) |
 
 ## Example queries
 

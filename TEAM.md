@@ -400,8 +400,7 @@ tables or their rows):**
 skills                   (skill_id, skill_name, category)
 department_requirements  (department_id FK, skill_id FK,
                            minimum_headcount, is_critical)
-employee_skills          (employee_id FK, skill_id FK, current_level 1-5,
-                           assessed_by, assessed_date)
+skill_job_titles         (skill_id FK, job_title)
 ```
 
 Requirements are tied to the **department**, not to an existing `job_title`
@@ -411,10 +410,17 @@ zero Cyber Security coverage). `job_title`-scoped requirements can't
 surface that: if no one holds the title, there's nothing to check.
 
 Gap = for each `department_requirements` row, count employees in that
-department whose `employee_skills` entry for that skill meets a minimum
-proficiency. `current_headcount == 0` against a required skill is the
-headline case — flag it as `MISSING`, not just "low," since that's the
-Cyber-Security-style gap that matters most for a demo.
+department whose `job_title` appears in `skill_job_titles` for that skill.
+`current_headcount == 0` against a required skill is the headline case —
+flag it as `MISSING`, not just "low," since that's the Cyber-Security-style
+gap that matters most for a demo.
+
+**Revised from the original draft:** this originally specified a per-employee
+`employee_skills` table with a `current_level` (1-5) proficiency score,
+assessed per employee. That table was built and seeded, then replaced with
+`skill_job_titles` — headcount is now derived purely from job-title-to-skill
+mapping, no individual assessment or score. Simpler, and a fabricated
+per-employee "score" over synthetic data wasn't adding real signal.
 
 **May edit:** `app/agents/hr_agent.py`, new `app/db/skills.py`, a seed
 script for the three new tables, and a new "Team Insights" tab in
@@ -426,14 +432,15 @@ script for the three new tables, and a new "Team Insights" tab in
 `department_requirements` hand-curated (~5-8 skills per department,
 including at least one deliberately uncovered skill per department so the
 MISSING case is demoable — e.g. Cyber Security required but zero IT staff
-have it), `employee_skills` generated per employee's actual job_title.
+have it), `skill_job_titles` hand-curated per skill (which job titles
+plausibly carry it — not generated per employee).
 Label it clearly as seed/placeholder data in `DATABASE_SCHEMA.md`, same
 convention as the `ChangeMe123!` password note there.
 
 **New scope:**
 
 1. Seed script that populates `skills`, `department_requirements`,
-   `employee_skills`.
+   `skill_job_titles`.
 2. New HR Agent query `department_experience_gap` — same role-gating
    pattern as `_own_record_only` (manager/admin only). For a department,
    returns each required skill's `current_headcount` vs
@@ -442,21 +449,31 @@ convention as the `ChangeMe123!` password note there.
    `MISSING` first.
 3. "Team Insights" tab in the UI showing the top gaps per department,
    MISSING skills called out distinctly from LOW ones.
+4. Recommendation text on every `MISSING`/`LOW` skill — a template-built
+   `recommendation` string suggesting either upskilling an employee from
+   an existing job title in the department (ranked by headcount, excluding
+   titles that already cover the skill) or hiring the remaining shortfall.
+   `OK` skills get `recommendation: None`. Deliberately **not** LLM-generated
+   — the inputs are already-known numbers and titles, so a template avoids
+   pulling an LLM dependency into what's still read-only SQL analytics
+   (keeps "LLM calls only in Consultant" intact even though this rides
+   inside HR Agent).
 
 No Consultant, no Manager governance, no Orchestrator wiring — this is
 read-only analytics, not an action that needs approval.
 
 **Done when:** `department_experience_gap("IT")` returns Cyber Security (or
-whichever skill was seeded as uncovered) with `status: "MISSING"` and
-`current_headcount: 0`, and the "Team Insights" tab renders it distinctly
-from the LOW-coverage gaps.
+whichever skill was seeded as uncovered) with `status: "MISSING"`,
+`current_headcount: 0`, and a non-empty `recommendation`; the "Team
+Insights" tab renders it distinctly from the LOW-coverage gaps and shows
+the recommendation text.
 
 ### Prompt for your AI (Experience Gap — paste this)
 
 ```text
 You are working on Yusor, phase 2, Experience Gap Insight (see TEAM.md "New task plan"). Read AGENTS.md, TEAM.md, and README.md. This extends the HR Agent — it is not a new agent.
 
-Add three new tables only (skills, department_requirements, employee_skills) — do not touch or migrate any existing table or row. department_requirements is tied to department_id, not job_title, so the query can catch a skill nobody was ever hired for (e.g. IT has no Cyber Security coverage at all). Write a seed script with synthetic placeholder data, labeled clearly as such, including at least one deliberately uncovered skill per department. Add app/db/skills.py and a department_experience_gap query in app/agents/hr_agent.py (manager/admin-role only) that returns current_headcount vs required_headcount per skill, with status MISSING when headcount is 0. Add a "Team Insights" tab in app/ui/views.py that shows it, calling out MISSING distinctly from LOW.
+Add three new tables only (skills, department_requirements, skill_job_titles) — do not touch or migrate any existing table or row. department_requirements is tied to department_id, not job_title, so the query can catch a skill nobody was ever hired for (e.g. IT has no Cyber Security coverage at all). skill_job_titles maps a skill to the job titles that plausibly carry it (curated, not per-employee). Write a seed script with synthetic placeholder data, labeled clearly as such, including at least one deliberately uncovered skill per department. Add app/db/skills.py and a department_experience_gap query in app/agents/hr_agent.py (manager/admin-role only) that returns current_headcount vs required_headcount per skill, with status MISSING when headcount is 0, plus a template-built (not LLM) recommendation string suggesting upskilling from an existing department role or hiring the shortfall. Add a "Team Insights" tab in app/ui/views.py that shows it, calling out MISSING distinctly from LOW, including the recommendation text.
 Do not call RAG, an LLM, or touch Consultant/Manager/Orchestrator files.
 If I ask you to build a real skills-assessment workflow (employee self-rating, manager review flow), stop and flag it as separate scope — this task is read-only insight from seed data only.
 ```
