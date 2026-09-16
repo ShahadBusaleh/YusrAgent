@@ -589,7 +589,7 @@ class HRAgent(BaseAgent):
                         )
 
                         sources.append(
-                            f"employee_skills:{department_id}"
+                            f"skill_job_titles:{department_id}"
                         )
 
             # -------------------------------------------------

@@ -99,6 +99,20 @@ def decide_approval(
             decided_by=decided_by,
             cover_employee_id=cover_employee_id,
         )
+        _sync_personal_info_update(
+            conn,
+            proposal_id,
+            status=status,
+            decided_at=now,
+            decided_by=decided_by,
+        )
+        _sync_sensitive_change(
+            conn,
+            proposal_id,
+            status=status,
+            decided_at=now,
+            decided_by=decided_by,
+        )
     return get_approval(conn, approval_id)
 
 
@@ -184,3 +198,99 @@ def _sync_leave_request(
             """,
             (days, days, proposal["employee_id"]),
         )
+
+
+def _sync_personal_info_update(
+    conn: sqlite3.Connection,
+    proposal_id: str,
+    *,
+    status: str,
+    decided_at: str,
+    decided_by: str,
+) -> None:
+    """If the decided proposal is a personal_info_update, materialize it
+    into personal_info_update_requests."""
+    proposal = get_proposed_action(conn, proposal_id)
+    if not proposal or proposal.get("action_type") != "personal_info_update":
+        return
+
+    try:
+        payload = json.loads(proposal.get("payload_json") or "{}")
+    except (TypeError, ValueError):
+        return
+
+    request_id = next_id(conn, "personal_info_update_requests", "request_id", "PI")
+    conn.execute(
+        """
+        INSERT INTO personal_info_update_requests (
+            request_id, employee_id, field_name, old_value, new_value,
+            status, risk_level, submitted_at, decided_at, decided_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            request_id,
+            proposal["employee_id"],
+            payload.get("field_name"),
+            payload.get("old_value"),
+            payload.get("new_value"),
+            status,
+            proposal.get("risk_level"),
+            proposal.get("created_at"),
+            decided_at,
+            decided_by,
+        ),
+    )
+    conn.execute(
+        "UPDATE proposed_actions SET related_request_id = ? WHERE proposal_id = ?",
+        (request_id, proposal_id),
+    )
+
+
+def _sync_sensitive_change(
+    conn: sqlite3.Connection,
+    proposal_id: str,
+    *,
+    status: str,
+    decided_at: str,
+    decided_by: str,
+) -> None:
+    """If the decided proposal is a bank_update, materialize it into
+    sensitive_change_requests."""
+    proposal = get_proposed_action(conn, proposal_id)
+    if not proposal or proposal.get("action_type") != "bank_update":
+        return
+
+    try:
+        payload = json.loads(proposal.get("payload_json") or "{}")
+    except (TypeError, ValueError):
+        return
+
+    request_id = next_id(conn, "sensitive_change_requests", "request_id", "SC")
+    conn.execute(
+        """
+        INSERT INTO sensitive_change_requests (
+            request_id, employee_id, change_type, old_bank_code, old_iban,
+            new_bank_code, new_bank_name, new_iban,
+            status, risk_level, submitted_at, decided_at, decided_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            request_id,
+            proposal["employee_id"],
+            payload.get("change_type"),
+            payload.get("old_bank_code"),
+            payload.get("old_iban"),
+            payload.get("new_bank_code"),
+            payload.get("new_bank_name"),
+            payload.get("new_iban"),
+            status,
+            proposal.get("risk_level"),
+            proposal.get("created_at"),
+            decided_at,
+            decided_by,
+        ),
+    )
+    conn.execute(
+        "UPDATE proposed_actions SET related_request_id = ? WHERE proposal_id = ?",
+        (request_id, proposal_id),
+    )

@@ -38,15 +38,10 @@ def ensure_experience_gap_tables(
 
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS employee_skills (
-            employee_id TEXT NOT NULL,
+        CREATE TABLE IF NOT EXISTS skill_job_titles (
             skill_id TEXT NOT NULL,
-            current_level INTEGER NOT NULL,
-            assessed_by TEXT,
-            assessed_date TEXT,
-            PRIMARY KEY (employee_id, skill_id),
-            FOREIGN KEY (employee_id)
-                REFERENCES employees(employee_id),
+            job_title TEXT NOT NULL,
+            PRIMARY KEY (skill_id, job_title),
             FOREIGN KEY (skill_id)
                 REFERENCES skills(skill_id)
         )
@@ -61,10 +56,11 @@ def get_department_experience_gap(
     department_id: str,
 ) -> list[dict]:
     """
-    Return required skills and current qualified headcount.
+    Return required skills and current headcount per department.
 
-    A skill is qualified when the employee's current_level is
-    greater than or equal to the required skill proficiency.
+    No per-employee proficiency score is used. An employee counts
+    toward a skill's current_headcount when their job_title is one
+    of the titles mapped to that skill in skill_job_titles.
 
     Status:
         MISSING -> current_headcount == 0
@@ -81,20 +77,15 @@ def get_department_experience_gap(
             s.category,
             dr.minimum_headcount AS required_headcount,
             dr.is_critical,
-            COUNT(
-                CASE
-                    WHEN es.current_level >= 3
-                    THEN 1
-                END
-            ) AS current_headcount
+            COUNT(DISTINCT e.employee_id) AS current_headcount
         FROM department_requirements dr
         JOIN skills s
             ON s.skill_id = dr.skill_id
+        LEFT JOIN skill_job_titles sjt
+            ON sjt.skill_id = dr.skill_id
         LEFT JOIN employees e
             ON e.department_id = dr.department_id
-        LEFT JOIN employee_skills es
-            ON es.employee_id = e.employee_id
-            AND es.skill_id = dr.skill_id
+            AND e.job_title = sjt.job_title
         WHERE dr.department_id = ?
         GROUP BY
             dr.department_id,

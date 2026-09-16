@@ -3,17 +3,16 @@ Synthetic seed data for the Experience Gap Insight feature.
 
 IMPORTANT:
 - This data is synthetic / placeholder data for demonstration only.
-- It does not represent real employee skill assessments.
+- Coverage is derived from job_title, not an individual employee
+  assessment or proficiency score.
 - It only writes to the three new Experience Gap tables:
     skills
     department_requirements
-    employee_skills
+    skill_job_titles
 - Existing HR tables and rows are not modified.
 """
 
 from __future__ import annotations
-
-from datetime import date
 
 from app.db.connection import get_connection
 from app.db.skills import ensure_experience_gap_tables
@@ -364,54 +363,28 @@ def seed_department_requirements(conn) -> None:
             )
 
 
-def seed_employee_skills(conn) -> None:
+def seed_skill_job_titles(conn) -> None:
     """
-    Generate synthetic employee skills from actual job titles.
+    Map each skill to the job titles that plausibly carry it.
 
-    Current levels are placeholder/demo values only.
+    No per-employee assessment or proficiency score is stored.
+    Department headcount for a skill is derived at query time by
+    counting employees whose job_title appears here.
     """
 
-    employees = conn.execute(
-        """
-        SELECT employee_id, department_id, job_title
-        FROM employees
-        ORDER BY employee_id
-        """
-    ).fetchall()
-
-    today = date.today().isoformat()
-
-    for employee in employees:
-        employee_id = employee["employee_id"]
-        job_title = employee["job_title"]
-
-        skill_ids = TITLE_SKILL_RULES.get(
-            job_title,
-            [],
-        )
-
+    for job_title, skill_ids in TITLE_SKILL_RULES.items():
         for skill_id in skill_ids:
-            # Deterministic placeholder proficiency.
-            # 4 = competent demo level.
-            current_level = 4
-
             conn.execute(
                 """
-                INSERT OR IGNORE INTO employee_skills (
-                    employee_id,
+                INSERT OR IGNORE INTO skill_job_titles (
                     skill_id,
-                    current_level,
-                    assessed_by,
-                    assessed_date
+                    job_title
                 )
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?)
                 """,
                 (
-                    employee_id,
                     skill_id,
-                    current_level,
-                    "SYNTHETIC_SEED",
-                    today,
+                    job_title,
                 ),
             )
 
@@ -424,7 +397,7 @@ def main() -> None:
 
         seed_skills(conn)
         seed_department_requirements(conn)
-        seed_employee_skills(conn)
+        seed_skill_job_titles(conn)
 
         conn.commit()
 
@@ -432,9 +405,10 @@ def main() -> None:
         print("Tables populated:")
         print(" - skills")
         print(" - department_requirements")
-        print(" - employee_skills")
+        print(" - skill_job_titles")
         print()
-        print("NOTE: All skill assessments are synthetic placeholder data.")
+        print("NOTE: Skill coverage is derived from job_title, not an")
+        print("individual employee assessment or proficiency score.")
 
     finally:
         conn.close()
