@@ -586,14 +586,119 @@ def page_approvals() -> None:
             label = f"{_status_label(status)} · {label}"
         with st.expander(label, expanded=status == "pending" and index < 2):
             st.markdown(_approval_card_html(row, person), unsafe_allow_html=True)
+
+            # Explain this pending approval
+            if status == "pending":
+                if st.button(
+                    "Explain this",
+                    key=f"explain_{approval_id}",
+                    use_container_width=True,
+                ):
+                    try:
+                        brief_response = api.request(
+                            "GET",
+                            f"/approvals/{approval_id}/brief",
+                            timeout=120.0,
+                        )
+                        brief = api.raise_for_api(brief_response)
+
+                        if not isinstance(brief, dict):
+                            st.error("Unexpected Decision Brief response.")
+                        else:
+                            st.session_state[
+                                f"approval_brief_{approval_id}"
+                            ] = brief
+
+                    except RuntimeError as exc:
+                        st.error(str(exc))
+
+            # Show Decision Brief if it was requested
+            brief = st.session_state.get(
+                f"approval_brief_{approval_id}"
+            )
+
+            if brief:
+                decision_brief = brief.get("brief") or {}
+
+                st.markdown("### Decision Brief")
+
+                st.caption(
+                    f"Action: {decision_brief.get('action_type') or '—'}"
+                )
+
+                risk = decision_brief.get("risk_level")
+                if risk:
+                    st.caption(f"Risk level: {risk}")
+
+                # Historical precedent
+                precedent = decision_brief.get(
+                    "historical_precedent"
+                )
+
+                if precedent:
+                    st.markdown("**Historical precedent**")
+                    _kv_table(
+                        [
+                            (
+                                "Approved",
+                                precedent.get("approved_count", 0),
+                            ),
+                            (
+                                "Denied",
+                                precedent.get("denied_count", 0),
+                            ),
+                            (
+                                "Total",
+                                precedent.get("total_count", 0),
+                            ),
+                        ]
+                    )
+
+                # Policy explanation
+                policy = decision_brief.get("policy") or {}
+
+                recommendation = str(
+                    policy.get("recommendation") or ""
+                ).strip()
+
+                if recommendation:
+                    st.markdown("**Policy**")
+                    st.write(recommendation)
+
+                sources = policy.get("sources") or []
+
+                if sources:
+                    with st.expander("Policy sources"):
+                        for source in sources:
+                            if isinstance(source, dict):
+                                sid = source.get("id") or "source"
+                                text = source.get("text") or ""
+
+                                st.caption(str(sid))
+
+                                if text:
+                                    st.write(text)
+
+                # Manager explanation
+                manager = decision_brief.get("manager") or {}
+
+                manager_response = str(
+                    manager.get("response") or ""
+                ).strip()
+
+                if manager_response:
+                    st.markdown("**Manager assessment**")
+                    st.write(manager_response)
+
+                reasons = manager.get("reasons") or []
+
+                if reasons:
+                    st.markdown("**Notes**")
+                    for reason in reasons:
+                        st.write(f"- {reason}")
+
             proposal = proposals.get(row.get("proposal_id"))
             _render_proposal_details(proposal)
-            if status != "pending":
-                note = row.get("decision_note")
-                if note:
-                    st.caption("Your note")
-                    st.write(note)
-                continue
 
             cover_options = _cover_candidate_options(proposal)
             with st.form(f"decide_{approval_id}"):

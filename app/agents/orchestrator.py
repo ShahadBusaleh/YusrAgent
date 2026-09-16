@@ -8,6 +8,10 @@ from app.agents.manager_agent import ManagerAgent
 from app.config import get_settings
 from app.security.governance import detect_prompt_injection
 
+from app.db.connection import get_connection
+from app.db.approvals import list_pending_approvals
+from app.db.proposed_actions import get_proposed_action
+from app.agents.hr_agent import get_historical_precedent
 
 class OrchestratorAgent:
 
@@ -15,14 +19,16 @@ class OrchestratorAgent:
         settings = get_settings()
 
         self.client = OpenAI(
-        api_key=settings.llm_api_key,
-        base_url=settings.llm_base_url,)
+            api_key=settings.llm_api_key,
+            base_url=settings.llm_base_url,
+        )
 
         self.model = settings.llm_model
 
         self.hr_agent = HRAgent()
         self.consultant_agent = ConsultantAgent()
         self.manager_agent = ManagerAgent()
+
     # =========================================================
     # 1. SECURITY GUARDRAILS
     # =========================================================
@@ -44,7 +50,7 @@ class OrchestratorAgent:
 
         # Existing project security detector
         try:
-             injection_detected = detect_prompt_injection(query)
+            injection_detected = detect_prompt_injection(query)
         except Exception:
             injection_detected = False
 
@@ -80,7 +86,10 @@ class OrchestratorAgent:
         ]
 
         # Check explicit HIGH patterns first
-        if any(pattern in query_lower for pattern in high_risk_patterns):
+        if any(
+            pattern in query_lower
+            for pattern in high_risk_patterns
+        ):
             return {
                 "detected": True,
                 "type": "PROMPT_INJECTION",
@@ -89,7 +98,10 @@ class OrchestratorAgent:
             }
 
         # Check explicit MEDIUM patterns
-        if any(pattern in query_lower for pattern in medium_risk_patterns):
+        if any(
+            pattern in query_lower
+            for pattern in medium_risk_patterns
+        ):
             return {
                 "detected": True,
                 "type": "PROMPT_INJECTION",
@@ -126,6 +138,10 @@ class OrchestratorAgent:
         CONSULTANT
         BOTH
         OTHER
+
+        Phase 2 HR requests such as payroll, attendance,
+        personal-info updates, bank changes, and certificate
+        requests are routed through the existing HR intent.
         """
 
         prompt = f"""
@@ -138,7 +154,13 @@ HR
 - User's own employee data.
 - Leave balance or remaining leave.
 - Employee status or personal employment information.
-- HR actions such as submitting leave or updating contact information.
+- HR actions such as submitting leave.
+- Updating personal information such as phone, email, or address.
+- Payroll-related employee requests.
+- Attendance-related employee requests.
+- Bank or IBAN change requests.
+- Employment or HR certificate requests.
+- Other employee-specific HR actions.
 
 CONSULTANT
 - General HR policies.
@@ -174,6 +196,27 @@ Examples:
 
 "Can I postpone my annual leave to next year?"
 -> CONSULTANT
+
+"Show my attendance record."
+-> HR
+
+"Update my phone number."
+-> HR
+
+"Change my IBAN."
+-> HR
+
+"Request an employment certificate."
+-> HR
+
+"Show my payroll information."
+-> HR
+
+"How does the company calculate annual leave?"
+-> CONSULTANT
+
+"Can I change my bank account according to company policy?"
+-> BOTH
 
 Return ONLY valid JSON:
 
@@ -217,16 +260,21 @@ User request:
             # Remove markdown code fences if returned
             if content.startswith("```"):
                 content = content.replace(
-                    "```json", ""
+                    "```json",
+                    "",
                 )
                 content = content.replace(
-                    "```", ""
+                    "```",
+                    "",
                 )
                 content = content.strip()
 
             result = json.loads(content)
 
-            intent = result.get("intent", "OTHER")
+            intent = result.get(
+                "intent",
+                "OTHER",
+            )
 
             allowed_intents = {
                 "HR",
@@ -317,12 +365,17 @@ User request:
     # 4. HIGH-RISK SECURITY ACTION
     # =========================================================
 
-    def handle_high_risk(self, query: str, user: dict, security_result: dict) -> dict:
+    def handle_high_risk(
+        self,
+        query: str,
+        user: dict,
+        security_result: dict,
+    ) -> dict:
         """
         Send HIGH-risk security events to the Manager Agent.
         The Manager decides the security action.
         """
-    
+
         manager_result = self.manager_agent.run({
             "query": query,
             "user": user,
@@ -332,25 +385,38 @@ User request:
             "intent": "SECURITY_BLOCK",
             "execution_order": [],
         })
-    
+
         return {
-            "status": manager_result.get("decision", "FAIL"),
+            "status": manager_result.get(
+                "decision",
+                "FAIL",
+            ),
             "response": manager_result.get(
                 "response",
-                "Your request was blocked because a high-risk security threat was detected."
+                "Your request was blocked because a "
+                "high-risk security threat was detected.",
             ),
             "sources": [],
             "intent": "SECURITY_BLOCK",
             "execution_order": ["MANAGER"],
             "security": security_result,
-    
+
             # Manager's security decision
-            "security_action": manager_result.get("security_action"),
-            "account_action": manager_result.get("account_action"),
-            "hr_notification": manager_result.get("hr_notification"),
-    
-            "employee_id": user.get("employee_id"),
+            "security_action": manager_result.get(
+                "security_action"
+            ),
+            "account_action": manager_result.get(
+                "account_action"
+            ),
+            "hr_notification": manager_result.get(
+                "hr_notification"
+            ),
+
+            "employee_id": user.get(
+                "employee_id"
+            ),
         }
+
     # =========================================================
     # 5. ROUTE TO HR
     # =========================================================
@@ -364,7 +430,9 @@ User request:
         return self.hr_agent.run({
             "query": query,
             "user": user,
-            "employee_id": user.get("employee_id"),
+            "employee_id": user.get(
+                "employee_id"
+            ),
         })
 
     # =========================================================
@@ -379,7 +447,214 @@ User request:
         return self.consultant_agent.run({
             "query": query,
         })
+    # =========================================================
+    # 6.5 EXPLAIN PENDING APPROVAL
+    # =========================================================
 
+    def explain_pending_approval(
+        self,
+        proposal_id: str,
+    ) -> dict:
+        """
+        Build a Decision Brief for a pending approval.
+
+        Flow:
+        1. Get the proposed action.
+        2. Find its pending approval.
+        3. Ask HR Agent for employee context.
+        4. Get historical precedent from HR Agent helper.
+        5. Ask Consultant Agent for the relevant policy.
+        6. Ask Manager Agent to validate/compose the explanation.
+        7. Return a structured Decision Brief.
+        """
+
+        if not proposal_id:
+            return {
+                "status": "FAIL",
+                "error": "proposal_id is required.",
+            }
+
+        conn = get_connection()
+
+        try:
+            # -------------------------------------------------
+            # 1. Get proposed action
+            # -------------------------------------------------
+
+            proposal = get_proposed_action(
+                conn,
+                proposal_id,
+            )
+
+            if proposal is None:
+                return {
+                    "status": "FAIL",
+                    "error": "Proposed action not found.",
+                    "proposal_id": proposal_id,
+                }
+
+            # -------------------------------------------------
+            # 2. Find pending approval
+            # -------------------------------------------------
+
+            pending_approvals = list_pending_approvals(
+                conn,
+                status="pending",
+            )
+
+            approval = next(
+                (
+                    item
+                    for item in pending_approvals
+                    if item.get("proposal_id") == proposal_id
+                ),
+                None,
+            )
+
+            if approval is None:
+                return {
+                    "status": "FAIL",
+                    "error": "No pending approval found for this proposal.",
+                    "proposal_id": proposal_id,
+                }
+
+            employee_id = proposal.get("employee_id")
+            action_type = proposal.get("action_type")
+
+            # -------------------------------------------------
+            # 3. HR Agent
+            # -------------------------------------------------
+
+            hr_result = self.hr_agent.run({
+                "query": (
+                    "Review the employee record for this "
+                    "pending HR approval."
+                ),
+                "user": {
+                    "employee_id": employee_id,
+                    "role": "employee",
+                },
+                "employee_id": employee_id,
+            })
+
+            # Historical precedent is already implemented
+            # inside HR Agent. We call that helper here instead
+            # of putting SQL inside the Orchestrator.
+            precedent = get_historical_precedent(
+                conn,
+                employee_id,
+                action_type,
+            )
+
+            hr_facts = dict(
+                hr_result.get("facts") or {}
+            )
+
+            hr_facts["historical_precedent"] = precedent
+
+            hr_result["facts"] = hr_facts
+
+            # Prevent Manager from submitting the same action
+            # again while explaining an existing approval.
+            manager_hr_result = dict(hr_result)
+            manager_hr_result["proposed_action"] = None
+
+            # -------------------------------------------------
+            # 4. Consultant Agent
+            # -------------------------------------------------
+
+            consultant_query = (
+                "What HR policy applies to the action type "
+                f"'{action_type}'? Explain the relevant rules, "
+                "conditions, requirements, exceptions, and "
+                "supporting policy citations."
+            )
+
+            consultant_result = self.consultant_agent.run({
+                "query": consultant_query,
+            })
+
+            # -------------------------------------------------
+            # 5. Manager Agent
+            # -------------------------------------------------
+
+            manager_result = self.manager_agent.run({
+                "query": (
+                    "Explain this pending approval using the "
+                    "employee facts, historical precedent, "
+                    "and policy evidence."
+                ),
+                "user": {
+                    "employee_id": employee_id,
+                    "role": "employee",
+                },
+                "hr_result": manager_hr_result,
+                "consultant_result": consultant_result,
+            })
+
+            # -------------------------------------------------
+            # 6. Decision Brief
+            # -------------------------------------------------
+
+            return {
+                "status": "SUCCESS",
+                "proposal_id": proposal_id,
+                "approval_id": approval.get("approval_id"),
+
+                "brief": {
+                    "action_type": action_type,
+                    "employee_id": employee_id,
+                    "action_summary": approval.get(
+                        "action_summary"
+                    ),
+                    "risk_level": (
+                        proposal.get("risk_level")
+                        or approval.get("risk_level")
+                    ),
+
+                    "historical_precedent": precedent,
+
+                    "policy": {
+                        "recommendation": consultant_result.get(
+                            "recommendation",
+                            "",
+                        ),
+                        "sources": consultant_result.get(
+                            "sources",
+                            [],
+                        ),
+                        "conflicts": consultant_result.get(
+                            "conflicts",
+                            [],
+                        ),
+                    },
+
+                    "manager": {
+                        "decision": manager_result.get(
+                            "decision",
+                            "FAIL",
+                        ),
+                        "reasons": manager_result.get(
+                            "reasons",
+                            [],
+                        ),
+                        "response": manager_result.get(
+                            "response",
+                            "",
+                        ),
+                    },
+                },
+            }
+
+        except Exception as exc:
+            return {
+                "status": "FAIL",
+                "error": str(exc),
+                "proposal_id": proposal_id,
+            }
+
+        finally:
+            conn.close()
     # =========================================================
     # 7. MAIN ORCHESTRATOR
     # =========================================================
@@ -411,9 +686,9 @@ User request:
         # HIGH → STOP EVERYTHING
         if security_result["risk"] == "HIGH":
             return self.handle_high_risk(
-            query=query,
-            user=user,
-            security_result=security_result,
+                query=query,
+                user=user,
+                security_result=security_result,
             )
 
         # =====================================================
@@ -524,17 +799,12 @@ User request:
 
         return {
             "status": manager_result["decision"],
-
             "response": manager_result["response"],
-
             "sources": (
                 hr_result.get("sources", [])
                 + consultant_result.get("sources", [])
             ),
-
             "intent": intent,
-
             "execution_order": execution_order,
-
             "security": security_result,
         }

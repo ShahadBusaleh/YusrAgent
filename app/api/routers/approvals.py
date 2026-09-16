@@ -47,3 +47,48 @@ def decide(
         details=approval_id,
     )
     return updated
+
+
+@router.get("/{approval_id}/brief")
+def get_approval_brief(
+    approval_id: str,
+    user: CurrentUser = Depends(
+        require_role(*roles_at_least("hr_manager"))
+    ),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict:
+    approval = approvals_db.get_approval(
+        conn,
+        approval_id,
+    )
+
+    if approval is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Approval not found",
+        )
+
+    proposal_id = approval.get("proposal_id")
+
+    if not proposal_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Approval has no proposal_id",
+        )
+
+    orchestrator = OrchestratorAgent()
+
+    brief = orchestrator.explain_pending_approval(
+        proposal_id
+    )
+
+    if brief.get("status") != "SUCCESS":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=brief.get(
+                "error",
+                "Could not generate decision brief",
+            ),
+        )
+
+    return brief
