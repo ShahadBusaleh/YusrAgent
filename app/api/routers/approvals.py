@@ -4,6 +4,7 @@ import sqlite3
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from app.agents.orchestrator import OrchestratorAgent
 from app.api.deps import CurrentUser, require_role, roles_at_least
 from app.api.schemas import ApprovalDecision, ApprovalOut
 from app.db.connection import get_db

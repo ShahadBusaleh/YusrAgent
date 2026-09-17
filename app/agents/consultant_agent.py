@@ -162,6 +162,48 @@ def _error_response(
 
 
 # =========================================================
+# ACTION-TYPE CITATION LOOKUP
+# =========================================================
+
+_ACTION_TYPE_QUERIES: dict[str, str] = {
+    "bank_update": (
+        "What is the HR policy or Saudi labor law on changing an "
+        "employee's bank account or IBAN details?"
+    ),
+    "personal_info_update": (
+        "What is the HR policy on updating an employee's personal "
+        "information, such as mobile number, address, or email?"
+    ),
+    "leave_request": (
+        "What is the HR policy or Saudi labor law on submitting and "
+        "approving an employee leave request?"
+    ),
+    "certificate_request": (
+        "What is the HR policy on issuing an employment or salary "
+        "certificate letter for an employee?"
+    ),
+}
+
+
+def _query_for_action_type(action_type: str) -> str:
+    """Map a proposed-action type to the policy question Consultant
+    should answer for it.
+
+    This lets an approval-context lookup (input: {"action_type": ...})
+    reuse the exact same retrieval + generation pipeline as a normal
+    free-text query, instead of a separate code path.
+    """
+
+    key = str(action_type or "").strip().lower()
+
+    return _ACTION_TYPE_QUERIES.get(
+        key,
+        f"What HR policy or Saudi labor law applies to the action "
+        f"type '{action_type}'?",
+    )
+
+
+# =========================================================
 # TEXT HELPERS
 # =========================================================
 
@@ -776,12 +818,16 @@ class ConsultantAgent(BaseAgent):
                 ],
             )
 
-        query = sanitize_input(
-            input.get(
-                "query",
-                "",
-            )
-        )
+        raw_query = input.get("query", "")
+
+        # Second call shape: {"action_type": "bank_update"} looks up the
+        # policy/law citation for that action instead of a free-text
+        # question. Falls back to the templated query only when no
+        # explicit query was given.
+        if not raw_query and input.get("action_type"):
+            raw_query = _query_for_action_type(input["action_type"])
+
+        query = sanitize_input(raw_query)
 
         if not query:
 

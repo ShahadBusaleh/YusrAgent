@@ -193,6 +193,21 @@ class ManagerAgent(BaseAgent):
         consultant_result = input.get("consultant_result") or {}
         reasons: list[str] = []
 
+        if input.get("intent") == "SECURITY_BLOCK":
+            # The Orchestrator already made the block decision (assess_query_risk
+            # returned HIGH) before HR/Consultant ever ran, so there's no
+            # hr_result/consultant_result to validate here — just report why the
+            # request was blocked. Without this, the request fell through to the
+            # generic path below, which always empties `response` on FAIL, and
+            # the user never saw why their request was refused.
+            security = input.get("security") or {}
+            reason = security.get("reason") or "A security policy violation was detected."
+            return {
+                "decision": "FAIL",
+                "reasons": [reason],
+                "response": f"Your request was blocked: {reason}",
+            }
+
         if detect_prompt_injection(query):
             reasons.append("Prompt injection detected.")
 
@@ -235,21 +250,38 @@ class ManagerAgent(BaseAgent):
         recommendation = str(consultant_result.get("recommendation") or "")
         if is_decision_brief:
             recommendation = _compose_decision_brief(facts, consultant_result) or recommendation
+        is_action_summary = False
+        if not recommendation and proposed_action:
+            # Describe the actual submission (e.g. "Bank/IBAN update for
+            # EMP-0002: ...") instead of falling through to a bare profile
+            # line that says nothing about what the user asked for.
+            action_type = proposed_action.get("action_type", "")
+            payload = proposed_action.get("payload") or {}
+            recommendation = _action_summary(action_type, payload)
+            is_action_summary = bool(recommendation)
+        is_fallback_summary = False
         if not recommendation:
             recommendation = _fallback_hr_summary(facts)
+            is_fallback_summary = bool(recommendation)
         sources = [
             *(hr_result.get("sources") or []),
             *(consultant_result.get("sources") or []),
         ]
         response = mask_pii(recommendation)
 
-        if is_decision_brief:
-            # The brief is composed deterministically from hr_result.facts +
-            # consultant_result.recommendation (no LLM, nothing to hallucinate),
-            # but it's several sentences long, so validate_output's lexical-
-            # overlap-with-source-ids heuristic (tuned for short, single-citation
-            # answers) dilutes below its threshold and would FAIL every brief.
-            # Still require a real response backed by real sources.
+        if is_decision_brief or is_action_summary or is_fallback_summary:
+            # All three are composed deterministically from hr_result facts
+            # (no LLM, nothing to hallucinate) rather than an answer that
+            # needs grounding in retrieved text, so validate_output's
+            # lexical-overlap-with-source-ids heuristic doesn't apply: plain
+            # facts (names, balances, payload values) have no reason to
+            # share vocabulary with opaque `table:id` source strings. This
+            # matters most for `is_fallback_summary`, since the Orchestrator
+            # intentionally skips Consultant for HR-only intents (see
+            # _fallback_hr_summary's docstring) — without this branch every
+            # HR-only query (e.g. a plain leave-balance lookup) would fail
+            # here with an empty response. Still require a real response
+            # backed by real sources.
             if not response or not sources:
                 reasons.append("Response is empty, unsupported, or missing sources.")
         elif not validate_output(response, sources):

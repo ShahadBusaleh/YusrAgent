@@ -563,15 +563,15 @@ User request:
             # 4. Consultant Agent
             # -------------------------------------------------
 
-            consultant_query = (
-                "What HR policy applies to the action type "
-                f"'{action_type}'? Explain the relevant rules, "
-                "conditions, requirements, exceptions, and "
-                "supporting policy citations."
-            )
-
+            # Reuse Consultant's dedicated action_type -> policy-question
+            # mapping (see _query_for_action_type in consultant_agent.py)
+            # instead of a one-off free-text prompt here. The bespoke prompt
+            # this replaced retrieved unrelated law/policy text for actions
+            # like "bank_update" and produced a brief claiming no policy
+            # applied, even though Consultant's own action_type lookup
+            # finds the right citation (e.g. LAW006 for bank/IBAN changes).
             consultant_result = self.consultant_agent.run({
-                "query": consultant_query,
+                "action_type": action_type,
             })
 
             # -------------------------------------------------

@@ -41,6 +41,17 @@ plus 3 seed/placeholder tables added later for Experience Gap Insight (see below
 - **leave_balances** — one row per employee (snapshot as_of_date), not one row per
   leave type as the draft sketched. Matches your CSV's wide format
   (annual/sick/emergency entitlement, used, remaining).
+  **Entitlement/remaining columns are backfilled placeholder demo data**
+  (same convention as the `ChangeMe123!` password note above) —
+  `*_used` came from the original seed, but `annual_entitlement`,
+  `annual_remaining`, `sick_entitlement`, `sick_remaining`,
+  `emergency_entitlement`, `emergency_used`, and `emergency_remaining`
+  were all NULL until `python -m app.seed_leave_balances` filled them:
+  annual = 21 days/year (30 after 5+ years of service, per LAW037/LAW038),
+  sick = 30 days/year (per LAW060), emergency = 5 days/year flat (no
+  statutory citation — a placeholder company benefit). Re-running that
+  script after a reseed only fills gaps; it never overwrites a value
+  already set.
 - **leave_requests** — matches the draft closely: request_id, employee_id, type,
   dates, days, status, submitted/decided timestamps, decided_by.
 - **proposed_actions** — matches the draft. `payload_json` stored as-is (TEXT); parse
