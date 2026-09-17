@@ -557,6 +557,14 @@ def page_approvals() -> None:
         "These are the requests that need a person — not the system — to decide. "
         "Read the person first, then the risk.",
     )
+    _left, _right = st.columns([5, 1])
+    with _right:
+        # A browser refresh (F5) tears down the Streamlit session and signs
+        # you out, because the auth tokens live only in st.session_state.
+        # This button re-runs the script in place instead, so new approvals
+        # show up without losing the signed-in session.
+        if st.button("Refresh", use_container_width=True):
+            st.rerun()
     try:
         rows = api.raise_for_api(api.request("GET", "/approvals")) or []
     except RuntimeError as exc:
@@ -706,7 +714,11 @@ def page_approvals() -> None:
                 sources = policy.get("sources") or []
 
                 if sources:
-                    with st.expander("Policy sources"):
+                    show_sources = st.checkbox(
+                        "Show policy sources",
+                        key=f"policy_sources_{approval_id}",
+                    )
+                    if show_sources:
                         for source in sources:
                             if isinstance(source, dict):
                                 sid = source.get("id") or "source"
@@ -738,30 +750,41 @@ def page_approvals() -> None:
             proposal = proposals.get(row.get("proposal_id"))
             _render_proposal_details(proposal)
 
-            cover_options = _cover_candidate_options(proposal)
-            with st.form(f"decide_{approval_id}"):
-                cover_employee_id = None
-                if cover_options:
-                    ids, labels, default_index = cover_options
-                    cover_employee_id = st.selectbox(
-                        "Cover employee",
-                        ids,
-                        index=default_index,
-                        format_func=lambda eid: labels.get(eid, eid),
-                    )
-                note = st.text_area(
-                    "Note",
-                    placeholder="A sentence of context helps — especially if you send this back.",
-                    label_visibility="collapsed",
+            if status != "pending":
+                # Already decided — no decision form. Re-showing Approve/
+                # Send back here previously let a stray click re-run the
+                # decision (duplicate leave request, double-deducted balance).
+                st.caption(
+                    f"{_status_label(status)} by {row.get('decided_by') or '—'} "
+                    f"on {row.get('decided_at') or '—'}"
                 )
-                st.caption("A note is optional for approve. Please add one if you send it back.")
-                col_a, col_b = st.columns(2)
-                approve = col_a.form_submit_button("Approve", type="primary", use_container_width=True)
-                reject = col_b.form_submit_button("Send back", use_container_width=True)
-            if approve:
-                _decide(approval_id, "approve", note, person, cover_employee_id)
-            elif reject:
-                _decide(approval_id, "reject", note, person, cover_employee_id)
+                if row.get("decision_note"):
+                    st.caption(f"Note: {row['decision_note']}")
+            else:
+                cover_options = _cover_candidate_options(proposal)
+                with st.form(f"decide_{approval_id}"):
+                    cover_employee_id = None
+                    if cover_options:
+                        ids, labels, default_index = cover_options
+                        cover_employee_id = st.selectbox(
+                            "Cover employee",
+                            ids,
+                            index=default_index,
+                            format_func=lambda eid: labels.get(eid, eid),
+                        )
+                    note = st.text_area(
+                        "Note",
+                        placeholder="A sentence of context helps — especially if you send this back.",
+                        label_visibility="collapsed",
+                    )
+                    st.caption("A note is optional for approve. Please add one if you send it back.")
+                    col_a, col_b = st.columns(2)
+                    approve = col_a.form_submit_button("Approve", type="primary", use_container_width=True)
+                    reject = col_b.form_submit_button("Send back", use_container_width=True)
+                if approve:
+                    _decide(approval_id, "approve", note, person, cover_employee_id)
+                elif reject:
+                    _decide(approval_id, "reject", note, person, cover_employee_id)
 
 
 def _cover_candidate_options(proposal: dict | None) -> tuple[list, dict, int] | None:
