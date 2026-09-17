@@ -47,7 +47,7 @@ def get_employee(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
     return employee
 
-
+"""
 @router.patch("/{employee_id}", response_model=EmployeeOut)
 def update_employee(
     employee_id: str,
@@ -68,4 +68,50 @@ def update_employee(
         employee_id=employee_id,
         details=str(body.model_dump(exclude_unset=True)),
     )
+    return updated or current
+"""
+
+@router.patch("/{employee_id}", response_model=EmployeeOut)
+def update_employee(
+    employee_id: str,
+    body: EmployeeUpdate,
+    user: CurrentUser = Depends(get_current_user),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict:
+    # Regular employees can only update their own record.
+    if user.role == "employee" and employee_id != user.employee_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Own record only",
+        )
+
+    # Only employees and HR staff are allowed.
+    if user.role not in {"employee", "hr_specialist", "hr_manager", "admin"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient role",
+        )
+
+    current = employees_db.get_employee(conn, employee_id)
+
+    if current is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Employee not found",
+        )
+
+    updated = employees_db.update_employee_profile(
+        conn,
+        employee_id,
+        body.model_dump(exclude_unset=True),
+    )
+
+    write_audit(
+        conn,
+        actor=user.username,
+        event_type="employee_profile_update",
+        employee_id=employee_id,
+        details=str(body.model_dump(exclude_unset=True)),
+    )
+
     return updated or current

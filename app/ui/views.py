@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta
 
 import streamlit as st
 
+from app.api.routers.auth import me
 from app.ui import api_client as api
 from app.ui import styles
 
@@ -222,7 +223,7 @@ def page_leave() -> None:
         )
     st.caption("Need to submit a new request? Ask Yusor in the chat.")
 
-
+"""
 def page_employees() -> None:
     role = (st.session_state.get("me") or {}).get("role")
     if role == "hr_manager":
@@ -311,8 +312,174 @@ def page_employees() -> None:
             st.rerun()
         except RuntimeError as exc:
             st.error(str(exc))
+"""
 
+def page_employees() -> None:
+    me = st.session_state.get("me") or {}
+    role = me.get("role")
 
+    hr_roles = {"hr_manager", "hr_specialist", "admin"}
+
+    # ---------------------------------------------------------
+    # HR USERS: require password before accessing employee data
+    # ---------------------------------------------------------
+    if role in hr_roles:
+
+        styles.hero(
+            "Employee records",
+            "Verify your identity",
+            "Enter your password before searching employee records.",
+        )
+
+        if not st.session_state.get("employee_records_verified", False):
+
+            with st.form("verify_employee_records"):
+                password = st.text_input(
+                    "Password",
+                    type="password",
+                )
+
+                verify = st.form_submit_button(
+                    "Verify password",
+                    type="primary",
+                )
+
+            if verify:
+                response = api.request(
+                    "POST",
+                    "/auth/verify-password",
+                    json={
+                        "username": me.get("username"),
+                        "password": password,
+                    },
+                )
+
+                if response.status_code == 200:
+                    st.session_state.employee_records_verified = True
+                    st.rerun()
+                else:
+                    st.error("Invalid password.")
+
+            return
+
+        # -----------------------------------------------------
+        # Password verified → now show employee search
+        # -----------------------------------------------------
+
+        q = st.text_input(
+            "Search by name, id, or email",
+            placeholder="EMP0001 or Sara",
+        )
+
+        listing = api.request(
+            "GET",
+            "/employees",
+            params={"q": q} if q else {},
+        )
+
+        try:
+            rows = api.raise_for_api(listing) or []
+        except RuntimeError as exc:
+            st.error(str(exc))
+            return
+
+        if not rows:
+            st.caption("No matching employees.")
+            return
+
+        st.dataframe(
+            [
+                {
+                    "employee_id": r.get("employee_id"),
+                    "full_name": r.get("full_name"),
+                    "job_title": r.get("job_title"),
+                    "department_name": r.get("department_name"),
+                    "employment_status": str(
+                        r.get("employment_status") or ""
+                    ).title(),
+                    "email": r.get("email"),
+                    "mobile": r.get("mobile"),
+                }
+                for r in rows
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        employee_id = st.text_input(
+            "Employee ID to view / update"
+        )
+
+        if not employee_id:
+            return
+
+    else:
+        # Employee behavior stays unchanged for now.
+        return
+
+    # ---------------------------------------------------------
+    # Employee profile
+    # ---------------------------------------------------------
+
+    detail_resp = api.request(
+        "GET",
+        f"/employees/{employee_id}",
+    )
+
+    try:
+        detail = api.raise_for_api(detail_resp)
+    except RuntimeError as exc:
+        st.error(str(exc))
+        return
+
+    _render_employee_profile(detail)
+
+    with st.form("profile_update"):
+        c1, c2 = st.columns(2)
+
+        mobile = c1.text_input(
+            "Mobile",
+            value=detail.get("mobile") or "",
+        )
+
+        email = c2.text_input(
+            "Email",
+            value=detail.get("email") or "",
+        )
+
+        city = c1.text_input(
+            "City",
+            value=detail.get("city") or "",
+        )
+
+        address = c2.text_input(
+            "Address",
+            value=detail.get("address") or "",
+        )
+
+        save = st.form_submit_button(
+            "Save profile fields",
+            type="primary",
+        )
+
+    if save:
+        resp = api.request(
+            "PATCH",
+            f"/employees/{employee_id}",
+            json={
+                "mobile": mobile,
+                "email": email,
+                "city": city,
+                "address": address,
+            },
+        )
+
+        try:
+            api.raise_for_api(resp)
+            st.success("Updated")
+            st.rerun()
+        except RuntimeError as exc:
+            st.error(str(exc))
 def _kv_table(pairs: list[tuple[str, object]]) -> None:
     rows = [
         {"Field": label, "Value": value if value not in (None, "") else "—"}
@@ -706,16 +873,19 @@ def page_approvals() -> None:
                 sources = policy.get("sources") or []
 
                 if sources:
-                    with st.expander("Policy sources"):
-                        for source in sources:
-                            if isinstance(source, dict):
-                                sid = source.get("id") or "source"
-                                text = source.get("text") or ""
+                    st.markdown("**Policy sources**")
 
-                                st.caption(str(sid))
+                    for source in sources:
+                        if isinstance(source, dict):
+                            sid = source.get("id") or "source"
+                            text = source.get("text") or ""
 
-                                if text:
-                                    st.write(text)
+                            st.caption(str(sid))
+
+                            if text:
+                                st.write(text)
+                                    
+                    
 
                 # Manager explanation
                 manager = decision_brief.get("manager") or {}

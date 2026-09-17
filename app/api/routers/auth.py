@@ -108,3 +108,25 @@ def me(
         full_name=(employee or {}).get("full_name"),
         job_title=(employee or {}).get("job_title"),
     )
+
+@router.post("/verify-password")
+def verify_current_password(
+    body: LoginRequest,
+    user: CurrentUser = Depends(get_current_user),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict:
+    auth_user = users_db.get_user_auth_by_id(conn, user.user_id)
+
+    if auth_user is None or not auth_user.get("is_active"):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Inactive or unknown user",
+        )
+
+    if not verify_password(body.password, auth_user["password_hash"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid password",
+        )
+
+    return {"valid": True}

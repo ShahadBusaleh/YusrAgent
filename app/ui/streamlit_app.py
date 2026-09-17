@@ -30,11 +30,11 @@ PAGES_BY_ROLE = {
     "hr_specialist": [
         "Ask Yusor",
         "My leave",
-     #   "Employees",
+       # "Employees",
     ],
     "hr_manager": [
         "Approvals",
-     #   "Employees",
+        "Employees",
         "Team Insights",
         "Ask Yusor",
         "My leave",
@@ -42,7 +42,7 @@ PAGES_BY_ROLE = {
     "admin": [
         "Ask Yusor",
         "My leave",
-      #  "Employees",
+       # "Employees",
         "Approvals",
         "Users",
         "Audit log",
