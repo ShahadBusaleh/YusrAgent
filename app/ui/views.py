@@ -390,26 +390,46 @@ def page_team_insights() -> None:
     styles.hero(
         "HR manager",
         "Team Insights",
-        "See which skills are missing or under-covered across your teams.",
+        "See which experience titles are missing or under-covered "
+        "across your teams.",
     )
 
-    department_id = st.text_input(
-        "Department ID",
-        value="DEP-06",
-        placeholder="e.g. DEP-06",
-    ).strip()
+    dept_response = api.request("GET", "/experience-gap/departments")
 
-    if not department_id:
-        st.info("Enter a department ID to view skill coverage.")
+    try:
+        dept_data = api.raise_for_api(dept_response)
+    except RuntimeError as exc:
+        st.error(str(exc))
         return
+
+    departments = (dept_data or {}).get("departments") or []
+
+    if not departments:
+        st.info("No departments found.")
+        return
+
+    name_to_id = {
+        d.get("department_name"): d.get("department_id")
+        for d in departments
+    }
+    names = list(name_to_id.keys())
+    default_index = next(
+        (i for i, n in enumerate(names) if name_to_id[n] == "DEP-06"),
+        0,
+    )
+
+    department_name = st.selectbox(
+        "Department",
+        names,
+        index=default_index,
+    )
+    department_id = name_to_id[department_name]
 
     st.caption(
         "Coverage is derived from job title, not an individual "
         "employee assessment. Synthetic placeholder data for this demo."
     )
 
-    # This endpoint should be connected to the HR Agent Experience Gap
-    # query once the backend route is exposed.
     response = api.request(
         "GET",
         f"/experience-gap/{department_id}",
@@ -425,24 +445,24 @@ def page_team_insights() -> None:
         st.error("Unexpected Experience Gap response.")
         return
 
-    skills = data.get("skills") or []
+    titles = data.get("skills") or []
 
-    if not skills:
-        st.info("No skill requirements found for this department.")
+    if not titles:
+        st.info("No experience title requirements found for this department.")
         return
 
     missing = [
-        item for item in skills
+        item for item in titles
         if str(item.get("status") or "").upper() == "MISSING"
     ]
 
     low = [
-        item for item in skills
+        item for item in titles
         if str(item.get("status") or "").upper() == "LOW"
     ]
 
     ok = [
-        item for item in skills
+        item for item in titles
         if str(item.get("status") or "").upper() == "OK"
     ]
 
@@ -453,14 +473,14 @@ def page_team_insights() -> None:
     c3.metric("Covered", len(ok))
 
     if missing:
-        st.subheader("🔴 Missing skills")
+        st.subheader("🔴 Missing experience titles")
 
         st.dataframe(
             [
                 {
-                    "Skill": item.get("skill_name"),
-                    "Required": item.get("required_headcount"),
-                    "Current": item.get("current_headcount"),
+                    "Experience Title": item.get("skill_name"),
+                    "Required Employees": item.get("required_headcount"),
+                    "Current Employees": item.get("current_headcount"),
                     "Critical": (
                         "Yes"
                         if item.get("is_critical")
@@ -486,9 +506,9 @@ def page_team_insights() -> None:
         st.dataframe(
             [
                 {
-                    "Skill": item.get("skill_name"),
-                    "Required": item.get("required_headcount"),
-                    "Current": item.get("current_headcount"),
+                    "Experience Title": item.get("skill_name"),
+                    "Required Employees": item.get("required_headcount"),
+                    "Current Employees": item.get("current_headcount"),
                     "Gap": (
                         int(item.get("required_headcount") or 0)
                         - int(item.get("current_headcount") or 0)
@@ -513,13 +533,16 @@ def page_team_insights() -> None:
                 )
 
     if ok:
-        with st.expander(f"Covered skills ({len(ok)})"):
+        with st.expander(f"Covered experience titles ({len(ok)})"):
+            st.caption(
+                "Already covered — shown as current department "
+                "structure, no action needed."
+            )
             st.dataframe(
                 [
                     {
-                        "Skill": item.get("skill_name"),
-                        "Required": item.get("required_headcount"),
-                        "Current": item.get("current_headcount"),
+                        "Experience Title": item.get("skill_name"),
+                        "Current Employees": item.get("current_headcount"),
                     }
                     for item in ok
                 ],

@@ -6,13 +6,25 @@ from fastapi import APIRouter, Depends
 
 from app.api.deps import CurrentUser, require_role, roles_at_least
 from app.db.connection import get_db
-from app.db.skills import get_department_experience_gap
+from app.db.skills import get_department_experience_gap, list_departments
 
 
 router = APIRouter(
     prefix="/experience-gap",
     tags=["experience-gap"],
 )
+
+
+@router.get("/departments")
+def get_departments(
+    user: CurrentUser = Depends(
+        require_role(*roles_at_least("hr_manager"))
+    ),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict:
+    """Return all departments for the Team Insights department picker."""
+
+    return {"departments": list_departments(conn)}
 
 
 @router.get("/{department_id}")

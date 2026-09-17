@@ -56,12 +56,18 @@ def _candidate_job_titles(
     department_id: str,
     skill_id: str,
     limit: int = 2,
-) -> list[str]:
+) -> list[dict]:
     """
     Job titles already present in the department that do not yet
     cover the given skill, ranked by how many employees hold that
     title (a bigger existing pool is a more realistic upskilling
     target). Used only to build a suggestion, not to change status.
+
+    Returns [{"job_title": ..., "headcount": ...}, ...], capped at
+    `limit` rows. The headcount is only summed across these displayed
+    titles (not every non-matching title in the department) so the
+    "how many people could realistically be trained" figure matches
+    the roles actually named in the recommendation.
     """
 
     rows = conn.execute(
@@ -79,53 +85,89 @@ def _candidate_job_titles(
         (department_id, skill_id, limit),
     ).fetchall()
 
-    return [row["job_title"] for row in rows]
+    return [dict(row) for row in rows]
+
+
+_CATEGORY_TRAINING_HINTS: dict[str, str] = {
+    "Analytics": "a data-analysis/BI certification (e.g. SQL, Power BI) or an internal data bootcamp",
+    "Commercial": "commercial/contract-management training or a mentorship rotation with the commercial team",
+    "Communication": "a communication and presentation-skills workshop",
+    "Compliance": "a compliance certification course and shadowing the compliance team",
+    "Customer Experience": "customer-experience/service-excellence training",
+    "Engineering": "an engineering certification or a hands-on rotation with senior engineers",
+    "Finance": "a finance/accounting certification (e.g. cost accounting, CFA foundations)",
+    "General": "an internal cross-training rotation",
+    "Human Resources": "an HR-practices certification (e.g. CIPD, SHRM) or shadowing the HR team",
+    "Leadership": "a leadership/management development program",
+    "Legal": "a legal and contracts fundamentals course",
+    "Marketing": "a digital-marketing certification or a rotation with the marketing team",
+    "Operations": "an operations-management training program",
+    "Procurement": "a procurement/supply-chain certification (e.g. CIPS)",
+    "Risk": "a risk-management certification course",
+    "Safety": "a health & safety certification (e.g. NEBOSH, OSHA)",
+    "Sales": "a sales-methodology training program",
+    "Security": "a security certification (e.g. CompTIA Security+, CISSP foundations)",
+    "Supply Chain": "a supply-chain management certification",
+    "Technology": "a technical certification or bootcamp (e.g. cloud, software development)",
+}
+
+_DEFAULT_TRAINING_HINT = "a relevant internal or external training course"
 
 
 def _build_recommendation(
     item: dict,
-    candidate_titles: list[str],
+    candidates: list[dict],
 ) -> str | None:
     """
-    Deterministic, template-based suggestion for closing a gap.
+    Deterministic, template-based development suggestion for a gap.
 
-    Not LLM-generated: the inputs are just headcount numbers and
-    job titles already in hand, so a template avoids adding an LLM
-    dependency to what is otherwise read-only SQL analytics.
+    Frames every gap as an internal-growth question — which current
+    employees are positioned to develop into this experience title,
+    and how — never as a hiring recommendation. Not LLM-generated:
+    the inputs are just headcount numbers and job titles already in
+    hand, so a template avoids adding an LLM dependency to what is
+    otherwise read-only SQL analytics.
     """
 
     if item["status"] == "OK":
         return None
 
-    gap = max(item["required_headcount"] - item["current_headcount"], 0)
+    skill_name = item["skill_name"]
+    training_hint = _CATEGORY_TRAINING_HINTS.get(
+        item.get("category"), _DEFAULT_TRAINING_HINT
+    )
 
     if item["status"] == "MISSING":
         lead = (
-            f"No employees in this department currently cover "
-            f"{item['skill_name']}."
+            f"{skill_name} is an experience gap — no employee in "
+            f"this department currently holds a role built around it."
         )
     else:
         lead = (
-            f"Only {item['current_headcount']} of the required "
-            f"{item['required_headcount']} employees cover "
-            f"{item['skill_name']}."
+            f"{skill_name} is under-represented — only "
+            f"{item['current_headcount']} of the "
+            f"{item['required_headcount']} employees the department "
+            f"is targeting currently have it."
         )
 
-    if candidate_titles:
-        upskill = (
-            f" Consider upskilling from an existing role such as "
-            f"{' or '.join(candidate_titles)}."
+    pool_size = sum(c["headcount"] for c in candidates)
+    titles = " or ".join(c["job_title"] for c in candidates)
+
+    if candidates:
+        develop = (
+            f" {pool_size} employees in roles such as {titles} are "
+            f"the most natural fit to grow into it — supporting them "
+            f"through {training_hint} builds a path to promotion "
+            f"into a {skill_name}-focused role."
         )
     else:
-        upskill = ""
+        develop = (
+            f" Encourage employees across the department to pursue "
+            f"{training_hint} to build toward this experience over "
+            f"time."
+        )
 
-    hire_noun = "hire" if gap == 1 else "hires"
-    hire = (
-        f" If upskilling isn't feasible, recommend hiring {gap} "
-        f"additional {item['skill_name']} {hire_noun}."
-    )
-
-    return (lead + upskill + hire).strip()
+    return (lead + develop).strip()
 
 
 def get_department_experience_gap(
@@ -227,3 +269,17 @@ def get_department_experience_gap(
     )
 
     return results
+
+
+def list_departments(conn: sqlite3.Connection) -> list[dict]:
+    """Return all departments as {department_id, department_name}, name-sorted."""
+
+    rows = conn.execute(
+        """
+        SELECT department_id, department_name
+        FROM departments
+        ORDER BY department_name
+        """
+    ).fetchall()
+
+    return [dict(row) for row in rows]
