@@ -846,9 +846,21 @@ User request:
                 "execution_order": execution_order,
                 "security": security_result,
             }
-
-
         elif intent == "GRIEVANCE":
+
+            # The orchestrator detected a grievance.
+            # If the employee has not chosen an identity option yet,
+            # stop here and ask the UI to show Hide / Show.
+            if identity_visible is None:
+                return {
+                    "status": "IDENTITY_REQUIRED",
+                    "response": "",
+                    "sources": [],
+                    "intent": "GRIEVANCE",
+                    "execution_order": [],
+                    "security": security_result,
+                    "needs_identity_choice": True,
+                }
 
             execution_order.append("CONSULTANT")
 
@@ -856,8 +868,8 @@ User request:
                 query=query,
             )
 
-            # If the employee chose to hide their identity,
-            # do not expose employee-specific information.
+            # If the employee chose to show their identity,
+            # employee-specific HR data can be used.
             if identity_visible:
                 execution_order.append("HR")
 
@@ -867,12 +879,14 @@ User request:
                 )
 
             else:
+                # Anonymous grievance:
+                # do not expose employee-specific information.
                 hr_result = {
                     "facts": {},
                     "proposed_action": None,
                     "sources": [],
                 }
-            
+
             # Governance checks the grievance workflow.
             manager_result = self.manager_agent.run({
                 "query": query,
@@ -886,7 +900,6 @@ User request:
 
             # Governance PASS means the grievance can proceed
             # to human HR review. It is NOT the final grievance decision.
-
             if manager_result.get("decision") == "PASS":
 
                 conn = get_connection()
@@ -929,6 +942,7 @@ User request:
                     "hr_review": True,
                     "grievance_id": grievance.get("grievance_id"),
                 }
+
             return {
                 "status": "BLOCKED",
                 "response": manager_result.get(
@@ -945,6 +959,8 @@ User request:
                 "identity_visible": bool(identity_visible),
                 "hr_review": False,
             }
+
+        
         # =====================================================
         # STEP 5 — MANAGER
         # =====================================================

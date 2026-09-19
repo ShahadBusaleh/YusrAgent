@@ -44,28 +44,42 @@ def page_chat() -> None:
         "dates** (YYYY-MM-DD) — Yusor will check your balance, suggest someone "
         "to cover for you, and send it for approval automatically."
     )
+
     example_cols = st.columns(3)
     for col, (label, text) in zip(example_cols, _leave_query_examples()):
         if col.button(label, use_container_width=True):
             st.session_state["chat_query"] = text
+
+    # Keep the selected identity option only after
+    # the orchestrator detects a grievance.
+    identity_visible = st.session_state.get("grievance_identity_visible")
+
     with st.form("ask_form"):
         query = st.text_area(
             "Your request",
             height=150,
             key="chat_query",
-            placeholder="e.g. I want to submit a grievance because my manager refused my annual leave request.",
+            placeholder=(
+                "e.g. I want to submit a grievance because my manager "
+                "refused my annual leave request."
+            ),
         )
 
-        identity_option = st.radio(
-    "If this is a grievance, how would you like to submit it?",
-    [
-        "🔒 Hide my identity",
-        "👤 Show my identity",
-    ],
-    horizontal=True,
-    key="grievance_identity_option",
-)
+        # Show Hide / Show only after the orchestrator
+        # has detected a grievance.
+        if st.session_state.get("grievance_needs_identity"):
+            identity_option = st.radio(
+                "If this is a grievance, how would you like to submit it?",
+                [
+                    "🔒 Hide my identity",
+                    "👤 Show my identity",
+                ],
+                horizontal=True,
+                key="grievance_identity_option",
+            )
 
+            identity_visible = identity_option == "👤 Show my identity"
+            st.session_state["grievance_identity_visible"] = identity_visible
 
         submitted = st.form_submit_button(
             "Submit request",
@@ -77,28 +91,34 @@ def page_chat() -> None:
 
     api.refresh_session()
 
-    identity_visible = identity_option == "👤 Show my identity"
-
     response = api.request(
-    "POST",
-    "/agent/query",
-    json={
-        "query": query.strip(),
-        "identity_visible": identity_option == "👤 Show my identity",
-    },
-    timeout=120.0,
-)
+        "POST",
+        "/agent/query",
+        json={
+            "query": query.strip(),
+            "identity_visible": identity_visible,
+        },
+        timeout=120.0,
+    )
+
     if response.status_code == 501:
         try:
-            detail = response.json().get("detail", "Manual implementation pending")
+            detail = response.json().get(
+                "detail",
+                "Manual implementation pending",
+            )
         except Exception:
             detail = "Manual implementation pending"
+
         st.info(detail)
         return
 
     if response.status_code == 401:
-        st.error("Your session expired. Sign out, sign in again, then resubmit.")
+        st.error(
+            "Your session expired. Sign out, sign in again, then resubmit."
+        )
         return
+
     try:
         payload = api.raise_for_api(response)
     except RuntimeError as exc:
@@ -109,13 +129,38 @@ def page_chat() -> None:
         st.error("Unexpected agent response.")
         return
 
+    # -------------------------------------------------
+    # Orchestrator detected a grievance and needs
+    # the employee to choose Hide / Show.
+    # -------------------------------------------------
+
+    if (
+        payload.get("intent") == "GRIEVANCE"
+        and payload.get("needs_identity_choice") is True
+    ):
+        st.session_state["grievance_needs_identity"] = True
+        st.rerun()
+
+    # -------------------------------------------------
+    # Request completed — clear grievance UI state.
+    # -------------------------------------------------
+
+    st.session_state.pop("grievance_needs_identity", None)
+    st.session_state.pop("grievance_identity_visible", None)
+
     status = str(payload.get("status") or "").strip() or "UNKNOWN"
     answer_text = str(payload.get("response") or "").strip()
-    badge_color = {"PASS": "#7eb4e0", "FAIL": "#e08a7e", "REPLAN": "#d7c6a4"}.get(
-        status, "#c5d0d8"
-    )
+
+    badge_color = {
+        "PASS": "#7eb4e0",
+        "FAIL": "#e08a7e",
+        "REPLAN": "#d7c6a4",
+        "PENDING_HR_REVIEW": "#7eb4e0",
+    }.get(status, "#c5d0d8")
+
     st.markdown(
-        f'<span class="yusor-role" style="background:{badge_color}">{status}</span>',
+        f'<span class="yusor-role" style="background:{badge_color}">'
+        f"{status}</span>",
         unsafe_allow_html=True,
     )
 
@@ -126,29 +171,40 @@ def page_chat() -> None:
 
     source_ids: list[str] = []
     source_texts: list[tuple[str, str]] = []
+
     for item in payload.get("sources") or []:
         if isinstance(item, str):
             if item.strip():
                 source_ids.append(item.strip())
             continue
+
         if not isinstance(item, dict):
             continue
+
         sid = item.get("id") or item.get("source_id")
         sid = str(sid).strip() if sid else ""
+
         if sid:
             source_ids.append(sid)
+
         text = item.get("text")
+
         if isinstance(text, str) and text.strip():
-            source_texts.append((sid or "source", text.strip()))
+            source_texts.append(
+                (sid or "source", text.strip())
+            )
 
     if source_ids:
-        st.markdown("**Sources:** " + " · ".join(f"`{sid}`" for sid in source_ids))
+        st.markdown(
+            "**Sources:** "
+            + " · ".join(f"`{sid}`" for sid in source_ids)
+        )
+
     if source_texts:
         with st.expander("Source excerpts"):
             for sid, text in source_texts:
                 st.caption(sid)
                 st.write(text)
-
 
 def page_leave() -> None:
     styles.hero(
