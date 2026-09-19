@@ -18,12 +18,16 @@ def agent_query(
     """Any authenticated role. Orchestrator is a stub until implemented by hand."""
     return OrchestratorAgent().run(
         {
-            "query": sanitize_input(body.query),
-            "user": {
-                "user_id": user.user_id,
-                "employee_id": user.employee_id,
-                "username": user.username,
-                "role": user.role,
-            },
+
+            
+    "query": sanitize_input(body.query),
+    "identity_visible": body.identity_visible,
+    "user": {
+        "user_id": user.user_id,
+        "employee_id": user.employee_id,
+        "username": user.username,
+        "role": user.role,
+    },
+           
         }
     )

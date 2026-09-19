@@ -408,8 +408,6 @@ def stat_card(label: str, value, variant: str = "blue") -> str:
         f'<div class="stat-sub">days remaining</div>'
         f"</div>"
     )
-
-
 def queue_stats(waiting: int, approved: int, sent_back: int) -> str:
     return (
         '<div class="queue-row">'
@@ -417,6 +415,21 @@ def queue_stats(waiting: int, approved: int, sent_back: int) -> str:
         f'<div class="queue-stat-value">{waiting}</div></div>'
         f'<div class="queue-stat"><div class="queue-stat-label">Approved</div>'
         f'<div class="queue-stat-value">{approved}</div></div>'
+        f'<div class="queue-stat queue-stat--back"><div class="queue-stat-label">Sent back</div>'
+        f'<div class="queue-stat-value">{sent_back}</div></div>'
+        "</div>"
+    )
+def grievance_queue_stats(
+    waiting: int,
+    submitted: int,
+    sent_back: int,
+) -> str:
+    return (
+        '<div class="queue-row">'
+        f'<div class="queue-stat queue-stat--wait"><div class="queue-stat-label">Waiting</div>'
+        f'<div class="queue-stat-value">{waiting}</div></div>'
+        f'<div class="queue-stat"><div class="queue-stat-label">Submitted</div>'
+        f'<div class="queue-stat-value">{submitted}</div></div>'
         f'<div class="queue-stat queue-stat--back"><div class="queue-stat-label">Sent back</div>'
         f'<div class="queue-stat-value">{sent_back}</div></div>'
         "</div>"

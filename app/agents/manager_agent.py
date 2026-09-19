@@ -214,6 +214,32 @@ class ManagerAgent(BaseAgent):
         if not check_authorization(user, {"type": "agent_query"}):
             reasons.append("User is not authorized to submit agent queries.")
 
+        if detect_prompt_injection(query):
+            reasons.append("Prompt injection detected.")
+
+        if not check_authorization(user, {"type": "agent_query"}):
+            reasons.append("User is not authorized to submit agent queries.")
+
+        # Grievance workflow:
+        # Manager only validates whether the grievance can proceed to Human HR.
+        if input.get("intent") == "GRIEVANCE":
+            conflicts = consultant_result.get("conflicts") or []
+
+            if conflicts:
+                reasons.extend(str(conflict) for conflict in conflicts)
+
+            if reasons:
+                return {
+                    "decision": "FAIL",
+                    "reasons": reasons,
+                    "response": "",
+                }
+
+            return {
+                "decision": "PASS",
+                "reasons": [],
+                "response": "Grievance workflow approved for Human HR review.",
+            }
         conflicts = consultant_result.get("conflicts") or []
         if conflicts:
             reasons.extend(str(conflict) for conflict in conflicts)

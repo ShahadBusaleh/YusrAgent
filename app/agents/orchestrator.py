@@ -10,6 +10,7 @@ from app.security.governance import detect_prompt_injection
 
 from app.db.connection import get_connection
 from app.db.approvals import list_pending_approvals
+from app.db.grievances import create_grievance
 from app.db.proposed_actions import get_proposed_action
 from app.agents.hr_agent import get_historical_precedent
 
@@ -137,6 +138,7 @@ class OrchestratorAgent:
         HR
         CONSULTANT
         BOTH
+        GRIEVANCE
         OTHER
 
         Phase 2 HR requests such as payroll, attendance,
@@ -175,6 +177,28 @@ BOTH
 - The request requires BOTH:
   1. Employee-specific information from HR.
   2. General policy, law, or policy interpretation from Consultant.
+
+  
+GRIEVANCE
+- Employee complaints or grievances about:
+  - salary deductions
+  - unfair treatment
+  - workplace issues
+  - violations of Saudi Labor Law
+  - violations of company HR policies
+  - employment-related complaints
+  - disputes with the employer or workplace
+
+Examples:
+
+"I want to submit a complaint about my salary deduction."
+-> GRIEVANCE
+
+"I believe my employer violated my annual leave rights."
+-> GRIEVANCE
+
+"I want to file a grievance about unfair treatment at work."
+-> GRIEVANCE
 
 OTHER
 - Requests unrelated to HR.
@@ -220,7 +244,7 @@ Examples:
 
 Return ONLY valid JSON:
 
-{{"intent": "HR"}}
+{{"intent": "GRIEVANCE"}}
 
 Allowed intents:
 HR
@@ -280,6 +304,7 @@ User request:
                 "HR",
                 "CONSULTANT",
                 "BOTH",
+                "GRIEVANCE",
                 "OTHER",
             }
 
@@ -660,6 +685,7 @@ User request:
     # =========================================================
 
     def run(self, input: dict) -> dict:
+        identity_visible = input.get("identity_visible")
         """
         Main orchestration workflow:
 
@@ -771,6 +797,103 @@ User request:
                     user=user,
                 )
 
+        elif intent == "GRIEVANCE":
+
+            execution_order.append("CONSULTANT")
+
+            consultant_result = self.run_consultant(
+                query=query,
+            )
+
+            # If the employee chose to hide their identity,
+            # do not expose employee-specific information.
+            if identity_visible:
+                execution_order.append("HR")
+
+                hr_result = self.run_hr(
+                    query=query,
+                    user=user,
+                )
+
+            else:
+                hr_result = {
+                    "facts": {},
+                    "proposed_action": None,
+                    "sources": [],
+                }
+            
+            # Governance checks the grievance workflow.
+            manager_result = self.manager_agent.run({
+                "query": query,
+                "user": user,
+                "security": security_result,
+                "intent": "GRIEVANCE",
+                "hr_result": hr_result,
+                "consultant_result": consultant_result,
+                "execution_order": execution_order,
+            })
+
+            # Governance PASS means the grievance can proceed
+            # to human HR review. It is NOT the final grievance decision.
+
+            if manager_result.get("decision") == "PASS":
+
+                conn = get_connection()
+
+                try:
+                    grievance = create_grievance(
+                        conn,
+                        employee_id=user.get("employee_id"),
+                        identity_visible=bool(identity_visible),
+                        complaint=query,
+                        consultant_recommendation=consultant_result.get(
+                            "recommendation",
+                            "",
+                        ),
+                        sources=json.dumps(
+                            consultant_result.get("sources", []),
+                            ensure_ascii=False,
+                        ),
+                    )
+
+                    conn.commit()
+
+                finally:
+                    conn.close()
+
+                return {
+                    "status": "PENDING_HR_REVIEW",
+                    "response": (
+                        "Your grievance has been submitted successfully. "
+                        "HR will review your case."
+                    ),
+                    "sources": consultant_result.get(
+                        "sources",
+                        [],
+                    ),
+                    "intent": "GRIEVANCE",
+                    "execution_order": execution_order,
+                    "security": security_result,
+                    "identity_visible": bool(identity_visible),
+                    "hr_review": True,
+                    "grievance_id": grievance.get("grievance_id"),
+                }
+            return {
+                "status": "BLOCKED",
+                "response": manager_result.get(
+                    "response",
+                    "Your grievance could not be submitted.",
+                ),
+                "sources": consultant_result.get(
+                    "sources",
+                    [],
+                ),
+                "intent": "GRIEVANCE",
+                "execution_order": execution_order,
+                "security": security_result,
+                "identity_visible": bool(identity_visible),
+                "hr_review": False,
+            }
         # =====================================================
         # STEP 5 — MANAGER
         # =====================================================

@@ -186,3 +186,4 @@ class AuditLogOut(BaseModel):
 
 class AgentQueryRequest(BaseModel):
     query: str = Field(min_length=1, max_length=4000)
+    identity_visible: bool | None = None

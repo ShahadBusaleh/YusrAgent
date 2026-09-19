@@ -48,25 +48,46 @@ def page_chat() -> None:
     for col, (label, text) in zip(example_cols, _leave_query_examples()):
         if col.button(label, use_container_width=True):
             st.session_state["chat_query"] = text
-
     with st.form("ask_form"):
         query = st.text_area(
             "Your request",
             height=150,
             key="chat_query",
-            placeholder="e.g. How many annual leave days do I have remaining?",
+            placeholder="e.g. I want to submit a grievance because my manager refused my annual leave request.",
         )
-        submitted = st.form_submit_button("Submit request", type="primary")
+
+        identity_option = st.radio(
+    "If this is a grievance, how would you like to submit it?",
+    [
+        "🔒 Hide my identity",
+        "👤 Show my identity",
+    ],
+    horizontal=True,
+    key="grievance_identity_option",
+)
+
+
+        submitted = st.form_submit_button(
+            "Submit request",
+            type="primary",
+        )
+
     if not (submitted and query.strip()):
         return
 
     api.refresh_session()
+
+    identity_visible = identity_option == "👤 Show my identity"
+
     response = api.request(
-        "POST",
-        "/agent/query",
-        json={"query": query.strip()},
-        timeout=120.0,
-    )
+    "POST",
+    "/agent/query",
+    json={
+        "query": query.strip(),
+        "identity_visible": identity_option == "👤 Show my identity",
+    },
+    timeout=120.0,
+)
     if response.status_code == 501:
         try:
             detail = response.json().get("detail", "Manual implementation pending")
@@ -572,6 +593,47 @@ def page_approvals() -> None:
         return
     if not isinstance(rows, list):
         rows = []
+    try:
+        grievances = api.raise_for_api(
+            api.request("GET", "/grievances")
+        ) or []
+        waiting_grievances = [
+            g for g in grievances
+            if str(g.get("status") or "").upper() == "PENDING_HR_REVIEW"
+        ]
+
+        submitted_grievances = [
+            g for g in grievances
+            if str(g.get("status") or "").upper() == "SUBMITTED"
+        ]
+
+        sent_back_grievances = [
+            g for g in grievances
+            if str(g.get("status") or "").upper() == "SENT_BACK"
+        ]
+
+        
+    except RuntimeError as exc:
+        st.error(str(exc))
+        grievances = []
+
+    if not isinstance(grievances, list):
+        grievances = []
+
+    waiting_grievances = [
+        g for g in grievances
+        if str(g.get("status") or "").upper() == "PENDING_HR_REVIEW"
+    ]
+
+    submitted_grievances = [
+        g for g in grievances
+        if str(g.get("status") or "").upper() == "SUBMITTED"
+    ]
+
+    sent_back_grievances = [
+        g for g in grievances
+        if str(g.get("status") or "").upper() == "SENT_BACK"
+    ]
 
     waiting = [r for r in rows if (r.get("status") or "").lower() == "pending"]
     approved = [r for r in rows if (r.get("status") or "").lower() == "approved"]
@@ -580,12 +642,12 @@ def page_approvals() -> None:
         styles.queue_stats(len(waiting), len(approved), len(sent_back)),
         unsafe_allow_html=True,
     )
-
+        
     filter_label = st.radio(
-        "Show",
-        ["Waiting", "Approved", "Sent back", "Everything"],
-        horizontal=True,
-    )
+    "Show",
+    ["Waiting", "Approved", "Sent back", "Everything"],
+    horizontal=True,
+)
     visible = {
         "Waiting": waiting,
         "Approved": approved,
@@ -711,6 +773,7 @@ def page_approvals() -> None:
                     st.markdown("**Policy**")
                     st.write(recommendation)
 
+
                 sources = policy.get("sources") or []
 
                 if sources:
@@ -718,17 +781,33 @@ def page_approvals() -> None:
                         "Show policy sources",
                         key=f"policy_sources_{approval_id}",
                     )
-                    if show_sources:
-                        for source in sources:
-                            if isinstance(source, dict):
-                                sid = source.get("id") or "source"
-                                text = source.get("text") or ""
 
-                                st.caption(str(sid))
+                if show_sources:
+                    for source in sources:
+                        if isinstance(source, dict):
+                            sid = source.get("id") or "source"
+                            text = source.get("text") or ""
 
-                                if text:
-                                    st.write(text)
+                            article = ""
+                            title = ""
 
+                            for line in text.splitlines():
+                                if line.startswith("Article:"):
+                                    article = line.replace("Article:", "").strip()
+                                elif line.startswith("Title:"):
+                                    title = line.replace("Title:", "").strip()
+
+                            if article and title:
+                                st.markdown(
+                                    f"- **{sid} — Article {article}: {title}**"
+                                )
+                            elif title:
+                                st.markdown(
+                                    f"- **{sid} — {title}**"
+                                )
+                            else:
+                                st.markdown(f"- **{sid}**")
+                                
                 # Manager explanation
                 manager = decision_brief.get("manager") or {}
 
@@ -785,6 +864,226 @@ def page_approvals() -> None:
                     _decide(approval_id, "approve", note, person, cover_employee_id)
                 elif reject:
                     _decide(approval_id, "reject", note, person, cover_employee_id)
+
+        # Grievances
+   
+
+    st.markdown("<br><br>", unsafe_allow_html=True)
+
+    st.markdown("### Grievances")
+
+    st.markdown(
+        styles.grievance_queue_stats(
+            len(waiting_grievances),
+            len(submitted_grievances),
+            len(sent_back_grievances),
+        ),
+        unsafe_allow_html=True,
+    )
+    st.divider()
+    st.subheader("Employee Grievances")
+
+    grievance_tab = st.radio(
+        "Grievances",
+        ["Waiting", "Submitted", "Sent Back"],
+        horizontal=True,
+        key="grievance_filter",
+    )
+
+    grievance_groups = {
+        "Waiting": waiting_grievances,
+        "Submitted": submitted_grievances,
+        "Sent Back": sent_back_grievances,
+    }
+
+    visible_grievances = grievance_groups[grievance_tab]
+
+    if not visible_grievances:
+        st.caption(
+            f"No grievances in {grievance_tab.lower()}."
+        )
+    else:
+        for grievance in visible_grievances:
+            grievance_id = str(
+                grievance.get("grievance_id") or ""
+            )
+
+            identity_visible = bool(
+                grievance.get("identity_visible")
+            )
+
+            if identity_visible:
+                employee_id = str(
+                    grievance.get("employee_id") or ""
+                )
+                person = (
+                    _employee_names([employee_id]).get(employee_id)
+                    or employee_id
+                    or "Employee"
+                )
+            else:
+                person = "Anonymous employee"
+
+            status = str(
+                grievance.get("status") or ""
+            ).upper()
+
+            with st.expander(
+                f"{person} · {grievance_id}",
+                expanded=status == "PENDING_HR_REVIEW",
+            ):
+                st.markdown("### Grievance")
+
+                st.write(
+                    grievance.get("complaint")
+                    or "No complaint provided."
+                )
+
+                _kv_table(
+                    [
+                        (
+                            "Grievance ID",
+                            grievance.get("grievance_id"),
+                        ),
+                        (
+                            "Identity",
+                            "Shown"
+                            if identity_visible
+                            else "Hidden",
+                        ),
+                        (
+                            "Submitted",
+                            _friendly_when(
+                                grievance.get("submitted_at")
+                            ),
+                        ),
+                        (
+                            "Status",
+                            status.replace("_", " ").title(),
+                        ),
+                    ]
+                )
+
+                if status == "PENDING_HR_REVIEW":
+
+                    if st.button(
+                        "Explain this",
+                        key=f"explain_grievance_{grievance_id}",
+                        use_container_width=True,
+                    ):
+                        st.session_state[
+                            f"grievance_brief_{grievance_id}"
+                        ] = {
+                            "recommendation": (
+                                grievance.get(
+                                    "consultant_recommendation"
+                                )
+                                or ""
+                            ),
+                            "sources": grievance.get(
+                                "sources"
+                            ),
+                        }
+
+                    brief = st.session_state.get(
+                        f"grievance_brief_{grievance_id}"
+                    )
+
+                    if brief:
+                        st.markdown("### Decision Brief")
+
+                        recommendation = str(
+                            brief.get("recommendation") or ""
+                        ).strip()
+
+                        if recommendation:
+                            st.markdown(
+                                "**Consultant assessment**"
+                            )
+                            st.write(recommendation)
+
+                        sources = brief.get("sources")
+
+                        if sources:
+                            st.markdown(
+                                "**Policy / Law sources**"
+                            )
+                            st.write(sources)
+
+                    with st.form(
+                        f"grievance_decision_{grievance_id}"
+                    ):
+                        response_note = st.text_area(
+                            "Note",
+                            placeholder=(
+                                "Add a note for the grievance decision."
+                            ),
+                        )
+
+                        col_a, col_b = st.columns(2)
+
+                        accept = col_a.form_submit_button(
+                            "Accept",
+                            type="primary",
+                            use_container_width=True,
+                        )
+
+                        reject = col_b.form_submit_button(
+                            "Send back",
+                            use_container_width=True,
+                        )
+
+                    if accept:
+                        _decide_grievance(
+                            grievance_id,
+                            "accept",
+                            response_note,
+                        )
+
+                    elif reject:
+                        _decide_grievance(
+                            grievance_id,
+                            "reject",
+                            response_note,
+                        )
+
+                else:
+                    if grievance.get("hr_response"):
+                        st.markdown("**HR note**")
+                        st.write(
+                            grievance.get("hr_response")
+                        )     
+
+def _decide_grievance(
+    grievance_id: str,
+    decision: str,
+    response: str,
+) -> None:
+    resp = api.request(
+        "POST",
+        f"/grievances/{grievance_id}/decide",
+        json={
+            "decision": decision,
+            "response": response or None,
+        },
+    )
+
+    try:
+        api.raise_for_api(resp)
+
+        if decision == "accept":
+            st.success(
+                "Grievance accepted and submitted for HR review."
+            )
+        else:
+            st.success(
+                "Grievance sent back."
+            )
+
+        st.rerun()
+
+    except RuntimeError as exc:
+        st.error(str(exc))
 
 
 def _cover_candidate_options(proposal: dict | None) -> tuple[list, dict, int] | None:
