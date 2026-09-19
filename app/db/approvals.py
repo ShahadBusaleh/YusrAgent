@@ -75,16 +75,24 @@ def decide_approval(
     current = get_approval(conn, approval_id)
     if current is None:
         return None
+    if current.get("status") != "pending":
+        # Already decided — return as-is instead of re-running the
+        # side effects below (which would double-create leave requests
+        # and double-deduct the leave balance on a repeat click).
+        return current
     now = datetime.now(timezone.utc).isoformat()
     status = "approved" if decision == "approve" else "rejected"
-    conn.execute(
+    cursor = conn.execute(
         """
         UPDATE pending_approvals
         SET status = ?, decided_at = ?, decided_by = ?, decision_note = ?
-        WHERE approval_id = ?
+        WHERE approval_id = ? AND status = 'pending'
         """,
         (status, now, decided_by, decision_note, approval_id),
     )
+    if cursor.rowcount == 0:
+        # Someone else decided it between our read and this write.
+        return get_approval(conn, approval_id)
     proposal_id = current.get("proposal_id")
     if proposal_id:
         conn.execute(
