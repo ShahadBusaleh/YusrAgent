@@ -570,6 +570,169 @@ def page_team_insights() -> None:
                 use_container_width=True,
                 hide_index=True,
             )
+            
+def page_career_growth() -> None:
+    """
+    Employee / HR Manager career development dashboard.
+    """
+
+    styles.hero(
+        "Career Development",
+        "Skill Growth",
+        "Track skill development progress, goals, and completed growth paths.",
+    )
+
+    me = st.session_state.get("me") or {}
+
+    role = me.get("role")
+    current_employee_id = me.get("employee_id")
+
+    if role in {"hr_manager", "admin"}:
+
+        employee_id = st.text_input(
+            "Employee ID",
+            value=current_employee_id or "",
+        )
+
+    else:
+        employee_id = current_employee_id
+
+
+    if not employee_id:
+        st.info("No employee selected.")
+        return
+
+
+    response = api.request(
+        "POST",
+        "/agent/query",
+        json={
+            "query": "Show my career development progress",
+        },
+    )
+
+
+    try:
+        data = api.raise_for_api(response)
+
+    except RuntimeError as exc:
+        st.error(str(exc))
+        return
+
+
+    if not isinstance(data, dict):
+        st.error("Unexpected Career response.")
+        return
+
+
+    career_data = (
+        data.get("response")
+        if isinstance(data.get("response"), dict)
+        else data
+    )
+
+
+    employee = career_data.get("employee") or {}
+
+    st.subheader(
+        employee.get("full_name")
+        or employee_id
+    )
+
+    st.caption(
+        " · ".join(
+            item
+            for item in (
+                employee.get("job_title"),
+                employee.get("department"),
+            )
+            if item
+        )
+    )
+
+
+    summary = career_data.get("summary") or {}
+
+    cols = st.columns(3)
+
+    cols[0].metric(
+        "Completed",
+        summary.get("completed", 0),
+    )
+
+    cols[1].metric(
+        "In Progress",
+        summary.get("in_progress", 0),
+    )
+
+    cols[2].metric(
+        "Recommended",
+        summary.get("recommended", 0),
+    )
+
+
+    st.subheader("Skill Development")
+
+
+    progress_items = (
+        career_data.get("skill_progress")
+        or []
+    )
+
+
+    if not progress_items:
+        st.info(
+            "No skill development goals found."
+        )
+        return
+
+
+    for item in progress_items:
+
+        skill_name = item.get(
+            "skill_name",
+            "Skill",
+        )
+
+        percentage = (
+            int(
+                item.get(
+                    "progress_percentage",
+                    0,
+                )
+            )
+            / 100
+        )
+
+        status = item.get(
+            "status",
+            "UNKNOWN",
+        )
+
+        with st.container():
+
+            st.markdown(
+                f"### {skill_name}"
+            )
+
+            st.progress(
+                percentage
+            )
+
+            st.caption(
+                f"""
+                Progress:
+                {item.get('current_level', 0)}
+                /
+                {item.get('target_level', 0)}
+
+                Status:
+                {status}
+
+                Deadline:
+                {item.get('deadline') or '—'}
+                """
+            )
 
 def page_approvals() -> None:
     styles.hero(

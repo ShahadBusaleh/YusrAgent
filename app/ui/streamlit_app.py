@@ -26,27 +26,31 @@ PAGES_BY_ROLE = {
     "employee": [
         "Ask Yusor",
         "My leave",
+        "Career Growth",
     ],
+
     "hr_specialist": [
         "Ask Yusor",
         "My leave",
-       # "Employees",
     ],
+
     "hr_manager": [
         "Approvals",
         "Employees",
         "Team Insights",
+        "Career Growth",
         "Ask Yusor",
         "My leave",
     ],
+
     "admin": [
         "Ask Yusor",
         "My leave",
-       # "Employees",
         "Approvals",
         "Users",
         "Audit log",
         "Team Insights",
+        "Career Growth",
     ],
 }
 
@@ -56,11 +60,14 @@ NAV_LABELS = {
         "Approvals": "Waiting on you",
         "Employees": "People",
         "Team Insights": "Team Insights",
+        "Career Growth": "Career Growth",
         "Ask Yusor": "Ask Yusor",
         "My leave": "My leave",
     },
+
     "admin": {
         "Team Insights": "Team Insights",
+        "Career Growth": "Career Growth",
     },
 }
 
@@ -97,12 +104,14 @@ def _login() -> None:
         )
 
         st.subheader("Sign in")
+
         st.caption(
-            "Seeded local accounts use password `ChangeMe123!`."
+            "Use your assigned account credentials to sign in."
         )
 
         with st.form("login"):
             username = st.text_input("Username")
+
             password = st.text_input(
                 "Password",
                 type="password",
@@ -158,6 +167,7 @@ def _logout() -> None:
                 )
             },
         )
+
     except Exception:
         pass
 
@@ -172,7 +182,9 @@ def _logout() -> None:
 
 
 def _shell() -> None:
+
     me = st.session_state.me
+
     role = me["role"]
 
     pages = PAGES_BY_ROLE.get(
@@ -192,7 +204,9 @@ def _shell() -> None:
 
     first_name = str(display_name).split()[0]
 
+
     with st.sidebar:
+
         st.markdown(
             '<div class="yusor-brand">YUSOR</div>',
             unsafe_allow_html=True,
@@ -212,7 +226,9 @@ def _shell() -> None:
             unsafe_allow_html=True,
         )
 
+
         if role == "hr_manager":
+
             st.markdown(
                 f'<p class="sidebar-hello">'
                 f'Hi {html.escape(first_name)}. '
@@ -221,7 +237,9 @@ def _shell() -> None:
                 unsafe_allow_html=True,
             )
 
+
         st.write("")
+
 
         page = st.radio(
             "Navigate",
@@ -233,7 +251,9 @@ def _shell() -> None:
             label_visibility="collapsed",
         )
 
+
         st.write("")
+
 
         if st.button(
             "Sign out",
@@ -242,32 +262,56 @@ def _shell() -> None:
             _logout()
             return
 
+
+
     if page == "Ask Yusor":
+
         views.page_chat()
 
+
     elif page == "My leave":
+
         views.page_leave()
 
+
     elif page == "Employees":
+
         views.page_employees()
 
+
     elif page == "Team Insights":
+
         views.page_team_insights()
 
+
+    elif page == "Career Growth":
+
+        views.page_career_growth()
+
+
     elif page == "Approvals":
+
         views.page_approvals()
 
+
     elif page == "Users":
+
         views.page_users()
 
+
     elif page == "Audit log":
+
         views.page_audit()
+
 
 
 if (
     "access_token" not in st.session_state
     or "me" not in st.session_state
 ):
+
     _login()
+
 else:
+
     _shell()
