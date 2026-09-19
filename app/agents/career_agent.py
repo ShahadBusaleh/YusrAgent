@@ -2,7 +2,7 @@
 Career Development Agent.
 
 Rule-based agent for employee skill growth tracking.
-Includes RBAC authorization.
+Includes RBAC authorization and development recommendations.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from app.agents.base import BaseAgent
 from app.db.connection import get_connection
 from app.db.career_goals import list_employee_skill_progress
 from app.db.employees import get_employee
+from app.db.career_recommendations import get_skill_recommendations
 
 
 _ALLOWED_STAFF_ROLES = {
@@ -22,16 +23,6 @@ _ALLOWED_STAFF_ROLES = {
 class CareerAgent(BaseAgent):
 
     def run(self, input: dict) -> dict:
-        """
-        Input:
-        {
-            "employee_id": "EMP-0321",
-            "user": {
-                "employee_id": "EMP-0001",
-                "role": "hr_manager"
-            }
-        }
-        """
 
         employee_id = str(
             input.get("employee_id") or ""
@@ -50,7 +41,6 @@ class CareerAgent(BaseAgent):
             }
 
 
-        # Employee can only view own development
         if (
             viewer_role == "employee"
             and viewer_employee_id != employee_id
@@ -64,7 +54,6 @@ class CareerAgent(BaseAgent):
             }
 
 
-        # Only HR managers/admins can view others
         if (
             viewer_employee_id != employee_id
             and viewer_role not in _ALLOWED_STAFF_ROLES
@@ -100,7 +89,17 @@ class CareerAgent(BaseAgent):
             )
 
 
+            for item in progress:
+
+                item["recommendations"] = (
+                    get_skill_recommendations(
+                        item.get("category", "")
+                    )
+                )
+
+
             return {
+
                 "status": "SUCCESS",
 
                 "employee": {

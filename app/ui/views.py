@@ -570,7 +570,7 @@ def page_team_insights() -> None:
                 use_container_width=True,
                 hide_index=True,
             )
-            
+
 def page_career_growth() -> None:
     """
     Employee / HR Manager career development dashboard.
@@ -588,12 +588,10 @@ def page_career_growth() -> None:
     current_employee_id = me.get("employee_id")
 
     if role in {"hr_manager", "admin"}:
-
         employee_id = st.text_input(
             "Employee ID",
             value=current_employee_id or "",
         )
-
     else:
         employee_id = current_employee_id
 
@@ -634,10 +632,12 @@ def page_career_growth() -> None:
 
     employee = career_data.get("employee") or {}
 
+
     st.subheader(
         employee.get("full_name")
         or employee_id
     )
+
 
     st.caption(
         " · ".join(
@@ -652,6 +652,7 @@ def page_career_growth() -> None:
 
 
     summary = career_data.get("summary") or {}
+
 
     cols = st.columns(3)
 
@@ -704,10 +705,12 @@ def page_career_growth() -> None:
             / 100
         )
 
+
         status = item.get(
             "status",
             "UNKNOWN",
         )
+
 
         with st.container():
 
@@ -715,9 +718,11 @@ def page_career_growth() -> None:
                 f"### {skill_name}"
             )
 
+
             st.progress(
                 percentage
             )
+
 
             st.caption(
                 f"""
@@ -733,6 +738,47 @@ def page_career_growth() -> None:
                 {item.get('deadline') or '—'}
                 """
             )
+
+
+            recommendations = item.get(
+                "recommendations"
+            ) or {}
+
+
+            training = recommendations.get(
+                "training"
+            ) or []
+
+
+            certifications = recommendations.get(
+                "certifications"
+            ) or []
+
+
+            if training or certifications:
+
+                st.markdown(
+                    "**Recommended Development**"
+                )
+
+
+                if training:
+                    st.write("Training:")
+                    for course in training:
+                        st.write(
+                            f"- {course}"
+                        )
+
+
+                if certifications:
+                    st.write(
+                        "Certifications:"
+                    )
+
+                    for cert in certifications:
+                        st.write(
+                            f"- {cert}"
+                        )
 
 def page_approvals() -> None:
     styles.hero(
