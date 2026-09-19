@@ -14,24 +14,51 @@ from app.db.proposed_actions import get_proposed_action
 _LEAVE_BALANCE_COLUMNS = {"annual", "sick", "emergency"}
 
 
+
 def list_pending_approvals(
-    conn: sqlite3.Connection, status: str | None = None
+    conn: sqlite3.Connection,
+    status: str | None = None,
+    exclude_employee_id: str | None = None,
 ) -> list[dict]:
     if status:
-        rows = conn.execute(
-            """
-            SELECT * FROM pending_approvals
-            WHERE status = ?
-            ORDER BY created_at DESC
-            """,
-            (status,),
-        ).fetchall()
+        if exclude_employee_id:
+            rows = conn.execute(
+                """
+                SELECT * FROM pending_approvals
+                WHERE status = ?
+                  AND employee_id != ?
+                ORDER BY created_at DESC
+                """,
+                (status, exclude_employee_id),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT * FROM pending_approvals
+                WHERE status = ?
+                ORDER BY created_at DESC
+                """,
+                (status,),
+            ).fetchall()
     else:
-        rows = conn.execute(
-            "SELECT * FROM pending_approvals ORDER BY created_at DESC"
-        ).fetchall()
-    return rows_to_dicts(rows)
+        if exclude_employee_id:
+            rows = conn.execute(
+                """
+                SELECT * FROM pending_approvals
+                WHERE employee_id != ?
+                ORDER BY created_at DESC
+                """,
+                (exclude_employee_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT * FROM pending_approvals
+                ORDER BY created_at DESC
+                """
+            ).fetchall()
 
+    return rows_to_dicts(rows)
 
 def get_approval(conn: sqlite3.Connection, approval_id: str) -> dict | None:
     row = conn.execute(

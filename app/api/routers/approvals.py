@@ -20,8 +20,11 @@ def list_approvals(
     user: CurrentUser = Depends(require_role(*roles_at_least("hr_manager"))),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> list[dict]:
-    return approvals_db.list_pending_approvals(conn, status=status_filter)
-
+    return approvals_db.list_pending_approvals(
+    conn,
+    status=status_filter,
+    exclude_employee_id=user.employee_id,
+)
 
 @router.post("/{approval_id}/decide", response_model=ApprovalOut)
 def decide(
@@ -30,6 +33,24 @@ def decide(
     user: CurrentUser = Depends(require_role(*roles_at_least("hr_manager"))),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict:
+    approval = approvals_db.get_approval(
+        conn,
+        approval_id,
+    )
+
+    if approval is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Not found",
+        )
+
+    # Prevent an HR employee from approving/rejecting their own request.
+    if approval.get("employee_id") == user.employee_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You cannot approve or reject your own request.",
+        )
+
     updated = approvals_db.decide_approval(
         conn,
         approval_id,
@@ -38,8 +59,13 @@ def decide(
         decision_note=body.decision_note,
         cover_employee_id=body.cover_employee_id,
     )
+
     if updated is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Not found",
+        )
+
     write_audit(
         conn,
         actor=user.username,
@@ -47,8 +73,8 @@ def decide(
         employee_id=updated.get("employee_id"),
         details=approval_id,
     )
-    return updated
 
+    return updated
 
 @router.get("/{approval_id}/brief")
 def get_approval_brief(
@@ -69,6 +95,11 @@ def get_approval_brief(
             detail="Approval not found",
         )
 
+    if approval.get("employee_id") == user.employee_id:
+        raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You cannot view the decision brief for your own request.",
+    )
     proposal_id = approval.get("proposal_id")
 
     if not proposal_id:
