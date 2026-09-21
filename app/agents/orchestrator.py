@@ -5,7 +5,6 @@ from openai import OpenAI
 from app.agents.hr_agent import HRAgent
 from app.agents.consultant_agent import ConsultantAgent
 from app.agents.manager_agent import ManagerAgent
-from app.agents.career_agent import CareerAgent
 
 from app.config import get_settings
 from app.security.governance import detect_prompt_injection
@@ -37,7 +36,6 @@ class OrchestratorAgent:
         self.hr_agent = HRAgent()
         self.consultant_agent = ConsultantAgent()
         self.manager_agent = ManagerAgent()
-        self.career_agent = CareerAgent()
 
     # =========================================================
     # 1. SECURITY GUARDRAILS
@@ -148,7 +146,6 @@ class OrchestratorAgent:
         CONSULTANT
         BOTH
         GRIEVANCE
-        CAREER
         OTHER
 
         Phase 2 HR requests such as payroll, attendance,
@@ -188,14 +185,6 @@ BOTH
   1. Employee-specific information from HR.
   2. General policy, law, or policy interpretation from Consultant.
 
-CAREER
-- Employee career development requests.
-- Skill growth tracking.
-- Development plans.
-- Training recommendations.
-- Professional growth goals.
-- Questions about improving skills for future roles.
-
 GRIEVANCE
 - Employee complaints or grievances about:
   - salary deductions
@@ -216,15 +205,6 @@ Examples:
 
 "I want to file a grievance about unfair treatment at work."
 -> GRIEVANCE
-
-CAREER
-
-- Employee skill development.
-- Career growth plans.
-- Skill progress tracking.
-- Training recommendations.
-- Professional development goals.
-- Future career path planning.
 
 OTHER
 - Requests unrelated to HR.
@@ -268,15 +248,6 @@ Examples:
 "Can I change my bank account according to company policy?"
 -> BOTH
 
-"Show my career development progress"
--> CAREER
-
-"What skills should I improve for my future role?"
--> CAREER
-
-"Create a development plan for me"
--> CAREER
-
 Return ONLY valid JSON:
 
 {{"intent": "GRIEVANCE"}}
@@ -286,7 +257,6 @@ HR
 CONSULTANT
 BOTH
 GRIEVANCE
-CAREER
 OTHER
 
 User request:
@@ -342,7 +312,6 @@ User request:
                 "CONSULTANT",
                 "BOTH",
                 "GRIEVANCE",
-                 "CAREER",
                 "OTHER",
             }
 
@@ -873,23 +842,6 @@ User request:
                     query=query,
                     user=user,
                 )
-        elif intent == "CAREER":
-
-            execution_order.append("CAREER")
-
-            career_result = self.career_agent.run({
-                "employee_id": user.get("employee_id"),
-                "user": user,
-            })
-
-            return {
-                "status": "SUCCESS",
-                "response": career_result,
-                "sources": career_result.get("sources", []),
-                "intent": "CAREER",
-                "execution_order": execution_order,
-                "security": security_result,
-            }
         elif intent == "GRIEVANCE":
 
             # The orchestrator detected a grievance.

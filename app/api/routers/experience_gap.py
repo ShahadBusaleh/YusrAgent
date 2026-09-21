@@ -42,6 +42,9 @@ def get_experience_gap(
         department_id,
     )
 
+    for item in skills:
+        item.pop("_candidate_employees", None)
+
     return {
         "department_id": department_id,
         "skills": skills,

@@ -121,12 +121,18 @@ def _build_recommendation(
     """
     Deterministic, template-based development suggestion for a gap.
 
-    Frames every gap as an internal-growth question — which current
-    employees are positioned to develop into this experience title,
-    and how — never as a hiring recommendation. Not LLM-generated:
-    the inputs are just headcount numbers and job titles already in
-    hand, so a template avoids adding an LLM dependency to what is
-    otherwise read-only SQL analytics.
+    Frames every gap as an internal-growth question first — which
+    current employees are positioned to develop into this experience
+    title, and how. Only falls back to a hiring recommendation when
+    no employee in the department is in an adjacent role at all. Not
+    LLM-generated: the inputs are just headcount numbers and job
+    titles already in hand, so a template avoids adding an LLM
+    dependency to what is otherwise read-only SQL analytics.
+
+    `candidates` is the employee-level list from
+    `get_gap_candidate_employees` (already ranked so each employee's
+    job title appears in the same "biggest pool first" order the old
+    aggregated headcount ranking used).
     """
 
     if item["status"] == "OK":
@@ -150,8 +156,13 @@ def _build_recommendation(
             f"is targeting currently have it."
         )
 
-    pool_size = sum(c["headcount"] for c in candidates)
-    titles = " or ".join(c["job_title"] for c in candidates)
+    pool_size = len(candidates)
+
+    titles_seen: list[str] = []
+    for c in candidates:
+        if c["job_title"] not in titles_seen:
+            titles_seen.append(c["job_title"])
+    titles = " or ".join(titles_seen)
 
     if candidates:
         develop = (
@@ -162,12 +173,66 @@ def _build_recommendation(
         )
     else:
         develop = (
-            f" Encourage employees across the department to pursue "
-            f"{training_hint} to build toward this experience over "
-            f"time."
+            f" No employee in this department is in an adjacent role "
+            f"today, so there is no realistic internal candidate to "
+            f"develop — recommend hiring externally for this "
+            f"experience."
         )
 
     return (lead + develop).strip()
+
+
+def get_gap_candidate_employees(
+    conn: sqlite3.Connection,
+    department_id: str,
+    skill_id: str,
+    title_limit: int = 2,
+) -> list[dict]:
+    """
+    Actual employees behind the "closest experience" job titles for a
+    gap skill — the same ranking `_candidate_job_titles` already uses
+    to build the HR recommendation sentence, resolved to real
+    employee rows instead of an aggregated headcount.
+
+    Returns [{"employee_id", "full_name", "job_title"}, ...], ordered
+    by the same "biggest pool first" title ranking `_candidate_job_titles`
+    uses (then by name within a title) so callers that need the
+    ranked title order (e.g. the recommendation sentence) don't have
+    to re-rank it themselves.
+    """
+
+    candidate_titles = [
+        c["job_title"]
+        for c in _candidate_job_titles(
+            conn,
+            department_id,
+            skill_id,
+            limit=title_limit,
+        )
+    ]
+
+    if not candidate_titles:
+        return []
+
+    placeholders = ",".join("?" for _ in candidate_titles)
+
+    rows = conn.execute(
+        f"""
+        SELECT employee_id, full_name, job_title
+        FROM employees
+        WHERE department_id = ?
+          AND job_title IN ({placeholders})
+        ORDER BY full_name
+        """,
+        (department_id, *candidate_titles),
+    ).fetchall()
+
+    title_rank = {title: i for i, title in enumerate(candidate_titles)}
+
+    employees = [dict(row) for row in rows]
+    employees.sort(key=lambda e: title_rank[e["job_title"]])
+
+    return employees
 
 
 def get_department_experience_gap(
@@ -241,8 +306,10 @@ def get_department_experience_gap(
 
         if status == "OK":
             item["recommendation"] = None
+            item["hire_recommended"] = False
+            item["_candidate_employees"] = []
         else:
-            candidates = _candidate_job_titles(
+            candidates = get_gap_candidate_employees(
                 conn,
                 department_id,
                 item["skill_id"],
@@ -251,6 +318,12 @@ def get_department_experience_gap(
                 item,
                 candidates,
             )
+            item["hire_recommended"] = not bool(candidates)
+            # Internal only - stripped before this leaves the API
+            # boundary (see experience_gap router). Lets callers like
+            # Growth Opportunities reuse the same candidate lookup
+            # instead of re-querying it per skill.
+            item["_candidate_employees"] = candidates
 
         results.append(item)
 

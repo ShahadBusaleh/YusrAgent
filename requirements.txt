@@ -9,3 +9,4 @@ streamlit==1.42.2
 qdrant-client==1.15.1
 sentence-transformers==3.4.1
 openai==1.68.2
+pypdf==6.17.0

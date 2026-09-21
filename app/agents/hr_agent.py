@@ -579,6 +579,9 @@ class HRAgent(BaseAgent):
                             department_id,
                         )
 
+                        for item in gap:
+                            item.pop("_candidate_employees", None)
+
                         facts["experience_gap"] = {
                             "department_id": department_id,
                             "skills": gap,

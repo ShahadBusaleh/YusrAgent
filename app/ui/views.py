@@ -572,8 +572,9 @@ def page_team_insights() -> None:
 
         for item in missing:
             if item.get("recommendation"):
+                badge = "🛑 **Hire recommended** — " if item.get("hire_recommended") else ""
                 st.caption(
-                    f"**{item.get('skill_name')}:** "
+                    f"{badge}**{item.get('skill_name')}:** "
                     f"{item.get('recommendation')}"
                 )
 
@@ -604,8 +605,9 @@ def page_team_insights() -> None:
 
         for item in low:
             if item.get("recommendation"):
+                badge = "🛑 **Hire recommended** — " if item.get("hire_recommended") else ""
                 st.caption(
-                    f"**{item.get('skill_name')}:** "
+                    f"{badge}**{item.get('skill_name')}:** "
                     f"{item.get('recommendation')}"
                 )
 
@@ -627,214 +629,98 @@ def page_team_insights() -> None:
                 hide_index=True,
             )
 
-def page_career_growth() -> None:
+def page_growth_opportunities() -> None:
     """
-    Employee / HR Manager career development dashboard.
+    Employee view: department experience gaps this employee is a
+    close-fit candidate for, with a CV upload that generates a
+    personalized development plan. Empty for anyone not currently a
+    candidate for anything.
     """
 
     styles.hero(
         "Career Development",
-        "Skill Growth",
-        "Track skill development progress, goals, and completed growth paths.",
+        "Growth Opportunities",
+        "Your department's missing or under-covered experience titles "
+        "that your current role is closest to — upload your CV for a "
+        "personalized plan to grow into one.",
     )
 
-    me = st.session_state.get("me") or {}
-
-    role = me.get("role")
-    current_employee_id = me.get("employee_id")
-
-    if role in {"hr_manager", "admin"}:
-        employee_id = st.text_input(
-            "Employee ID",
-            value=current_employee_id or "",
-        )
-    else:
-        employee_id = current_employee_id
-
-
-    if not employee_id:
-        st.info("No employee selected.")
-        return
-
-
-    response = api.request(
-        "POST",
-        "/agent/query",
-        json={
-            "query": "Show my career development progress",
-        },
-    )
-
+    response = api.request("GET", "/growth/opportunities")
 
     try:
         data = api.raise_for_api(response)
-
     except RuntimeError as exc:
         st.error(str(exc))
         return
 
+    opportunities = (data or {}).get("opportunities") or []
 
-    if not isinstance(data, dict):
-        st.error("Unexpected Career response.")
-        return
-
-
-    career_data = (
-        data.get("response")
-        if isinstance(data.get("response"), dict)
-        else data
-    )
-
-
-    employee = career_data.get("employee") or {}
-
-
-    st.subheader(
-        employee.get("full_name")
-        or employee_id
-    )
-
-
-    st.caption(
-        " · ".join(
-            item
-            for item in (
-                employee.get("job_title"),
-                employee.get("department"),
-            )
-            if item
-        )
-    )
-
-
-    summary = career_data.get("summary") or {}
-
-
-    cols = st.columns(3)
-
-    cols[0].metric(
-        "Completed",
-        summary.get("completed", 0),
-    )
-
-    cols[1].metric(
-        "In Progress",
-        summary.get("in_progress", 0),
-    )
-
-    cols[2].metric(
-        "Recommended",
-        summary.get("recommended", 0),
-    )
-
-
-    st.subheader("Skill Development")
-
-
-    progress_items = (
-        career_data.get("skill_progress")
-        or []
-    )
-
-
-    if not progress_items:
+    if not opportunities:
         st.info(
-            "No skill development goals found."
+            "No development opportunities right now — check back as "
+            "your department's needs change."
         )
         return
 
+    for item in opportunities:
+        skill_id = item.get("skill_id")
+        skill_name = item.get("skill_name")
+        status_label = "Missing" if item.get("status") == "MISSING" else "Low coverage"
 
-    for item in progress_items:
-
-        skill_name = item.get(
-            "skill_name",
-            "Skill",
-        )
-
-        percentage = (
-            int(
-                item.get(
-                    "progress_percentage",
-                    0,
-                )
-            )
-            / 100
-        )
-
-
-        status = item.get(
-            "status",
-            "UNKNOWN",
-        )
-
-
-        with st.container():
-
-            st.markdown(
-                f"### {skill_name}"
-            )
-
-
-            st.progress(
-                percentage
-            )
-
+        with st.container(border=True):
+            st.subheader(skill_name)
 
             st.caption(
-                f"""
-                Progress:
-                {item.get('current_level', 0)}
-                /
-                {item.get('target_level', 0)}
-
-                Status:
-                {status}
-
-                Deadline:
-                {item.get('deadline') or '—'}
-                """
+                f"{status_label} in your department · "
+                f"{item.get('current_headcount')} of "
+                f"{item.get('required_headcount')} employees covered · "
+                f"you're a close fit from your current role as "
+                f"{item.get('current_job_title')}."
             )
 
+            existing_plan = item.get("plan")
 
-            recommendations = item.get(
-                "recommendations"
-            ) or {}
+            if existing_plan:
+                st.markdown(existing_plan.get("plan_text"))
+                st.caption(
+                    f"Generated from {existing_plan.get('cv_filename') or 'your CV'} "
+                    f"on {existing_plan.get('created_at')}."
+                )
+                upload_label = "Replace with a new CV"
+            else:
+                upload_label = "Upload your CV (PDF)"
 
+            cv_file = st.file_uploader(
+                upload_label,
+                type="pdf",
+                key=f"cv_upload_{skill_id}",
+            )
 
-            training = recommendations.get(
-                "training"
-            ) or []
-
-
-            certifications = recommendations.get(
-                "certifications"
-            ) or []
-
-
-            if training or certifications:
-
-                st.markdown(
-                    "**Recommended Development**"
+            if st.button(
+                "Generate my growth plan",
+                key=f"generate_plan_{skill_id}",
+                disabled=cv_file is None,
+            ):
+                upload_response = api.request(
+                    "POST",
+                    f"/growth/opportunities/{skill_id}/cv",
+                    files={
+                        "cv": (
+                            cv_file.name,
+                            cv_file.getvalue(),
+                            "application/pdf",
+                        )
+                    },
+                    timeout=120.0,
                 )
 
+                try:
+                    api.raise_for_api(upload_response)
+                except RuntimeError as exc:
+                    st.error(str(exc))
+                else:
+                    st.rerun()
 
-                if training:
-                    st.write("Training:")
-                    for course in training:
-                        st.write(
-                            f"- {course}"
-                        )
-
-
-                if certifications:
-                    st.write(
-                        "Certifications:"
-                    )
-
-                    for cert in certifications:
-                        st.write(
-                            f"- {cert}"
-                        )
 
 def page_approvals() -> None:
     styles.hero(

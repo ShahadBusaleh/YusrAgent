@@ -26,7 +26,7 @@ PAGES_BY_ROLE = {
     "employee": [
         "Ask Yusor",
         "My leave",
-        "Career Growth",
+        "Growth Opportunities",
     ],
 
     "hr_specialist": [
@@ -38,7 +38,6 @@ PAGES_BY_ROLE = {
         "Approvals",
         "Employees",
         "Team Insights",
-        "Career Growth",
         "Ask Yusor",
         "My leave",
     ],
@@ -50,7 +49,6 @@ PAGES_BY_ROLE = {
         "Users",
         "Audit log",
         "Team Insights",
-        "Career Growth",
     ],
 }
 
@@ -60,14 +58,12 @@ NAV_LABELS = {
         "Approvals": "Waiting on you",
         "Employees": "People",
         "Team Insights": "Team Insights",
-        "Career Growth": "Career Growth",
         "Ask Yusor": "Ask Yusor",
         "My leave": "My leave",
     },
 
     "admin": {
         "Team Insights": "Team Insights",
-        "Career Growth": "Career Growth",
     },
 }
 
@@ -284,9 +280,9 @@ def _shell() -> None:
         views.page_team_insights()
 
 
-    elif page == "Career Growth":
+    elif page == "Growth Opportunities":
 
-        views.page_career_growth()
+        views.page_growth_opportunities()
 
 
     elif page == "Approvals":
