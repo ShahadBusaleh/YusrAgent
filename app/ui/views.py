@@ -4,7 +4,7 @@ import html
 from datetime import date, datetime, timedelta
 
 import streamlit as st
-
+import re
 from app.ui import api_client as api
 from app.ui import styles
 
@@ -831,6 +831,7 @@ def page_approvals() -> None:
                         st.error(str(exc))
 
             # Show Decision Brief if it was requested
+                        # Show Decision Brief if it was requested
             brief = st.session_state.get(
                 f"approval_brief_{approval_id}"
             )
@@ -840,85 +841,88 @@ def page_approvals() -> None:
 
                 st.markdown("### Decision Brief")
 
-                st.caption(
-                    f"Action: {decision_brief.get('action_type') or '—'}"
+                # -----------------------------
+                # Request summary
+                # -----------------------------
+                action_type = str(
+                    decision_brief.get("action_type") or "—"
+                ).replace("_", " ").title()
+
+                risk = str(
+                    decision_brief.get("risk_level") or "—"
+                ).upper()
+
+                c1, c2 = st.columns(2)
+
+                with c1:
+                    st.markdown("**Action**")
+                    st.write(action_type)
+
+                with c2:
+                    st.markdown("**Risk**")
+                    st.write(risk)
+
+                st.divider()
+
+                # -----------------------------
+                # Employee
+                # -----------------------------
+                facts = decision_brief.get("facts") or {}
+
+                profile = facts.get("profile") or {}
+
+                employee_name = (
+                    profile.get("full_name")
+                    or person
+                    or employee_id
+                    or "Employee"
                 )
 
-                risk = decision_brief.get("risk_level")
-                if risk:
-                    st.caption(f"Risk level: {risk}")
+                job_title = profile.get("job_title")
+                department = profile.get("department_name")
 
+                st.markdown("**Employee**")
+                st.markdown(f"### {employee_name}")
+
+                employee_meta = " · ".join(
+                    str(value)
+                    for value in (job_title, department)
+                    if value
+                )
+
+                if employee_meta:
+                    st.caption(employee_meta)
+
+                # -----------------------------
                 # Historical precedent
+                # -----------------------------
                 precedent = decision_brief.get(
                     "historical_precedent"
                 )
 
-                if precedent:
+                if isinstance(precedent, dict):
                     st.markdown("**Historical precedent**")
-                    _kv_table(
-                        [
-                            (
-                                "Approved",
-                                precedent.get("approved_count", 0),
-                            ),
-                            (
-                                "Denied",
-                                precedent.get("denied_count", 0),
-                            ),
-                            (
-                                "Total",
-                                precedent.get("total_count", 0),
-                            ),
-                        ]
+
+                    c1, c2, c3 = st.columns(3)
+
+                    c1.metric(
+                        "Approved",
+                        precedent.get("approved_count", 0),
                     )
 
-                # Policy explanation
-                policy = decision_brief.get("policy") or {}
-
-                recommendation = str(
-                    policy.get("recommendation") or ""
-                ).strip()
-
-                if recommendation:
-                    st.markdown("**Policy**")
-                    st.write(recommendation)
-
-
-                sources = policy.get("sources") or []
-
-                if sources:
-                    show_sources = st.checkbox(
-                        "Show policy sources",
-                        key=f"policy_sources_{approval_id}",
+                    c2.metric(
+                        "Denied",
+                        precedent.get("denied_count", 0),
                     )
 
-                if show_sources:
-                    for source in sources:
-                        if isinstance(source, dict):
-                            sid = source.get("id") or "source"
-                            text = source.get("text") or ""
+                    c3.metric(
+                        "Total",
+                        precedent.get("total_count", 0),
+                    )
 
-                            article = ""
-                            title = ""
-
-                            for line in text.splitlines():
-                                if line.startswith("Article:"):
-                                    article = line.replace("Article:", "").strip()
-                                elif line.startswith("Title:"):
-                                    title = line.replace("Title:", "").strip()
-
-                            if article and title:
-                                st.markdown(
-                                    f"- **{sid} — Article {article}: {title}**"
-                                )
-                            elif title:
-                                st.markdown(
-                                    f"- **{sid} — {title}**"
-                                )
-                            else:
-                                st.markdown(f"- **{sid}**")
-                                
-                # Manager explanation
+                # -----------------------------
+                # AI Recommendation
+                # -----------------------------
                 manager = decision_brief.get("manager") or {}
 
                 manager_response = str(
@@ -926,15 +930,163 @@ def page_approvals() -> None:
                 ).strip()
 
                 if manager_response:
-                    st.markdown("**Manager assessment**")
-                    st.write(manager_response)
+                    st.markdown("**AI Recommendation**")
 
+                    # Try to extract the recommendation
+                    # from the manager response.
+                    recommendation = None
+
+                    for value in (
+                        "APPROVE",
+                        "REJECT",
+                        "MANAGER REVIEW",
+                    ):
+                        if value in manager_response.upper():
+                            recommendation = value
+                            break
+
+                    if recommendation:
+                        st.markdown(
+                            f"### {recommendation}"
+                        )
+
+                    # Remove the recommendation label from
+                    # the displayed explanation when possible.
+                    explanation = manager_response
+
+                    if recommendation:
+                        explanation = explanation.replace(
+                            recommendation,
+                            "",
+                        ).strip(" :-\n")
+
+                    if explanation:
+                        st.caption("Reason")
+                        st.write(explanation)
+
+
+
+                # -----------------------------
+                # Policy
+                # -----------------------------
+                policy = decision_brief.get("policy") or {}
+
+                policy_text = str(
+                    policy.get("recommendation") or ""
+                ).strip()
+
+                if policy_text:
+                    st.markdown("**Policy**")
+
+                    # -----------------------------
+                    # Build a clean policy summary
+                    # -----------------------------
+                clean = (
+                    policy_text
+                    .replace(r"\*\*", "")
+                    .replace("**", "")
+                )
+
+                lines = []
+
+                for line in clean.splitlines():
+                    line = line.strip()
+
+                    if not line:
+                        continue
+
+                    # Remove markdown headings
+                    line = re.sub(r"^#{1,6}\s*", "", line)
+
+                    # Stop at detailed sections
+                    if line.lower() in (
+                        "summary",
+                        "key points",
+                        "citations",
+                        "policy sources",
+                        "request details",
+                    ):
+                        break
+
+                    # Skip markdown tables
+                    if line.startswith("|"):
+                        continue
+
+                    # Skip source/reference lines
+                    if (
+                        line.startswith("[Source:")
+                        or line.startswith("- Reference:")
+                    ):
+                        continue
+
+                    # Skip subsection headings.
+                    # A heading followed by "Rule / Process / Conditions"
+                    # is considered a detailed subsection.
+                    if re.match(
+                        r"^[-•]?\s*[^:–—]+"
+                        r"\s*[-–—]\s*(Rule|Process|Conditions|Eligibility)",
+                        line,
+                        re.IGNORECASE,
+                    ):
+                        continue
+
+                    lines.append(line)
+
+                clean_policy = " ".join(lines)
+
+                # Keep complete sentences only
+                sentences = re.split(
+                    r"(?<=[.!?])\s+",
+                    clean_policy
+                )
+
+                summary_sentences = sentences[:4]
+
+                clean_policy = " ".join(
+                    sentence.strip()
+                    for sentence in summary_sentences
+                    if sentence.strip()
+                )
+
+                if clean_policy:
+                    st.write(clean_policy)
+
+
+
+
+                # -----------------------------
+                # Policy sources
+                # -----------------------------
+                # -----------------------------
+                # -----------------------------
+                # Policy sources
+                # -----------------------------
+                sources = policy.get("sources") or []
+
+                if sources:
+                    st.markdown("**Policy sources**")
+
+                    for source in sources:
+                        if not isinstance(source, dict):
+                            continue
+
+                        display_name = str(
+                            source.get("display_name") or ""
+                        ).strip()
+
+                        if display_name:
+                            st.markdown(
+                                f"- {display_name}"
+                            )
+                # -----------------------------
+                # Manager notes
+                # -----------------------------
                 reasons = manager.get("reasons") or []
 
                 if reasons:
-                    st.markdown("**Notes**")
-                    for reason in reasons:
-                        st.write(f"- {reason}")
+                    with st.expander("Additional notes"):
+                        for reason in reasons:
+                            st.write(f"- {reason}")
 
             proposal = proposals.get(row.get("proposal_id"))
             _render_proposal_details(proposal)
@@ -1112,13 +1264,7 @@ def page_approvals() -> None:
                             )
                             st.write(recommendation)
 
-                        sources = brief.get("sources")
-
-                        if sources:
-                            st.markdown(
-                                "**Policy / Law sources**"
-                            )
-                            st.write(sources)
+                        
 
                     with st.form(
                         f"grievance_decision_{grievance_id}"

@@ -489,9 +489,8 @@ def _build_sources(
     """
     Build source metadata.
 
-    Source text is intentionally included so the Manager
-    can validate that the Consultant response is grounded
-    in retrieved evidence.
+    Source IDs are kept internally for validation and linking.
+    A human-readable display name is also generated for the UI.
     """
 
     sources: list[dict] = []
@@ -512,28 +511,66 @@ def _build_sources(
 
         seen.add(source_key)
 
+        source_text = str(
+            chunk.get("text") or ""
+        ).strip()
+
+        # ---------------------------------
+        # Human-readable source name
+        # ---------------------------------
+        display_name = ""
+
+        # Saudi Labor Law
+        article_match = re.search(
+            r"Article:\s*([^\s]+).*?"
+            r"(?:Title|Name):\s*(.*?)(?=\s+(?:Section|Purpose|Rule|Conditions|$))",
+            source_text,
+            flags=re.IGNORECASE,
+        )
+
+        if article_match:
+            article = article_match.group(1).strip()
+            title = article_match.group(2).strip()
+
+            display_name = (
+                f"Saudi Labor Law — "
+                f"Article {article}: {title}"
+            )
+
+        # Internal company policy
+        if not display_name:
+            section_match = re.search(
+                r"Section:\s*([^\s]+).*?"
+                r"Policy Name:\s*(.*?)(?=\s+(?:Purpose|Rule|Conditions|$))",
+                source_text,
+                flags=re.IGNORECASE,
+            )
+
+            if section_match:
+                section = section_match.group(1).strip()
+                policy_name = section_match.group(2).strip()
+
+                display_name = (
+                    f"Internal Policy — "
+                    f"Section {section}: {policy_name}"
+                )
+
+        # Generic fallback
+        if not display_name:
+            display_name = (
+                chunk.get("filename")
+                or "Policy source"
+            )
+
+        
         sources.append(
             {
                 "id": source_id,
-
-                # Important for Manager validation.
-                "text": chunk.get(
-                    "text",
-                    "",
-                ),
-
-                "source_table": chunk.get(
-                    "source_table"
-                ),
-
-                "filename": chunk.get(
-                    "filename"
-                ),
-
-                "score": chunk.get(
-                    "score"
-                ),
-
+                "display_name": display_name,
+                "text": source_text,
+                "source_table": chunk.get("source_table"),
+                "filename": chunk.get("filename"),
+                "score": chunk.get("score"),
                 "relevance_score": chunk.get(
                     "consultant_relevance_score"
                 ),
@@ -541,7 +578,6 @@ def _build_sources(
         )
 
     return sources
-
 
 def _format_context(
     chunks: list[dict],

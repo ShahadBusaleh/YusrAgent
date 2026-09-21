@@ -93,48 +93,122 @@ def _action_summary(action_type: str, payload: dict) -> str:
         )
     return f"{action_type} for {payload.get('employee_id')}."
 
+def _get_ai_recommendation(
+    facts: dict,
+    consultant_result: dict,
+) -> str:
+    policy_text = str(
+        (consultant_result or {}).get("recommendation") or ""
+    ).lower()
+
+    review_terms = (
+        "subject to manager review",
+        "manager reviews",
+        "line manager",
+        "workload",
+        "business commitments",
+        "staffing requirements",
+        "depends on",
+        "based on",
+        "taken into account",
+    )
+
+    if any(term in policy_text for term in review_terms):
+        return "MANAGER REVIEW"
+
+    reject_terms = (
+        "not allowed",
+        "not permitted",
+        "prohibited",
+        "cannot be approved",
+        "should be rejected",
+        "ineligible",
+        "does not meet",
+        "not entitled",
+    )
+
+    if any(term in policy_text for term in reject_terms):
+        return "REJECT"
+
+    approve_terms = (
+        "can be approved",
+        "should be approved",
+        "eligible",
+        "meets the requirements",
+    )
+
+    if any(term in policy_text for term in approve_terms):
+        return "APPROVE"
+
+    return "MANAGER REVIEW"
 
 def _compose_decision_brief(facts: dict, consultant_result: dict) -> str:
-    """Plain-language Decision Brief: employee context + historical
-    precedent (from HR) plus the policy citation (from Consultant).
+    """Build a concise Decision Brief for human HR review."""
 
-    Reuses the same "assemble short factual sentences" approach as
-    _fallback_hr_summary. Only runs when hr_result.facts carries
-    historical_precedent, which the Orchestrator's explain_pending_approval
-    flow adds — a normal query never sets that key. Informational only:
-    it does not itself approve or deny anything.
-    """
     if not isinstance(facts, dict):
         return ""
 
     parts: list[str] = []
 
+    # Employee
     profile = facts.get("profile")
     if isinstance(profile, dict) and profile.get("full_name"):
-        bits = [b for b in (profile.get("job_title"), profile.get("department_name")) if b]
-        parts.append(f"{profile['full_name']}" + (f" — {', '.join(bits)}." if bits else "."))
+        employee_name = profile["full_name"]
 
+        role_parts = [
+            profile.get("job_title"),
+            profile.get("department_name"),
+        ]
+        role_parts = [str(x) for x in role_parts if x]
+
+        employee_text = employee_name
+        if role_parts:
+            employee_text += f" — {', '.join(role_parts)}"
+
+        parts.append(f"Employee: {employee_text}")
+
+    # Historical precedent
     precedent = facts.get("historical_precedent")
+
     if isinstance(precedent, dict):
         approved = precedent.get("approved_count") or 0
         denied = precedent.get("denied_count") or 0
-        total = precedent.get("total_count") or 0
-        if total:
-            parts.append(
-                f"Precedent: {approved} approved and {denied} denied prior "
-                "request(s) of this type for this employee."
-            )
-        else:
-            parts.append(
-                "Precedent: no prior requests of this type on record for this employee."
-            )
 
-    recommendation = str((consultant_result or {}).get("recommendation") or "").strip()
-    if recommendation:
-        parts.append(f"Policy: {recommendation}")
+        parts.append(
+            f"Historical precedent: "
+            f"{approved} approved, {denied} denied."
+        )
 
-    return " ".join(parts)
+    # AI recommendation
+    ai_recommendation = _get_ai_recommendation(
+        facts,
+        consultant_result,
+    )
 
+    parts.append(
+        f"AI Recommendation: {ai_recommendation}"
+    )
+
+    # Short reason
+    if ai_recommendation == "MANAGER REVIEW":
+        parts.append(
+            "Reason: Approval depends on workload, "
+            "business commitments, and staffing requirements."
+        )
+
+    elif ai_recommendation == "APPROVE":
+        parts.append(
+            "Reason: The request appears consistent "
+            "with the available policy evidence."
+        )
+
+    elif ai_recommendation == "REJECT":
+        parts.append(
+            "Reason: The request conflicts with "
+            "the available policy evidence."
+        )
+
+    return "\n".join(parts)
 
 def _submit_for_approval(
     employee_id: str, action_type: str, payload: dict, risk_level: str
