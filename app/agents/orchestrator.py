@@ -9,6 +9,11 @@ from app.agents.career_agent import CareerAgent
 
 from app.config import get_settings
 from app.security.governance import detect_prompt_injection
+from app.agents.translation import (
+    detect_language,
+    translate_to_arabic,
+    translate_to_english,
+)
 
 from app.db.connection import get_connection
 from app.db.approvals import list_pending_approvals
@@ -718,6 +723,45 @@ User request:
     # =========================================================
 
     def run(self, input: dict) -> dict:
+        """Language-translation edge around `_run`.
+
+        Detects Arabic vs. English on the raw prompt, translates Arabic
+        to English before `_run` (the unmodified pipeline) ever sees it,
+        then translates the pipeline's `response` string back to Arabic.
+        HR/Consultant/Manager, the DB, and the RAG index only ever see
+        English. English prompts skip both translation calls entirely.
+        """
+
+        original_query = str(input.get("query") or "")
+
+        language = detect_language(original_query)
+
+        translated_query = original_query
+
+        if language == "ar" and original_query.strip():
+            try:
+                translated_query = translate_to_english(original_query)
+            except Exception:
+                # Best-effort: fall back to the original text rather than
+                # failing the whole request if translation is unavailable.
+                translated_query = original_query
+
+        internal_input = dict(input)
+        internal_input["query"] = translated_query
+
+        result = self._run(internal_input)
+
+        if language == "ar":
+            response_text = result.get("response")
+            if isinstance(response_text, str) and response_text.strip():
+                try:
+                    result["response"] = translate_to_arabic(response_text)
+                except Exception:
+                    pass
+
+        return result
+
+    def _run(self, input: dict) -> dict:
         identity_visible = input.get("identity_visible")
         """
         Main orchestration workflow:

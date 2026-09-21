@@ -79,7 +79,7 @@ def find_cover_candidates(
         sql = f"""
             SELECT e.employee_id, e.full_name, e.job_title
             FROM employees e
-            WHERE e.{scope_column} = ? AND e.employee_id != ? AND e.employment_status = 'active'
+            WHERE e.{scope_column} = ? AND e.employee_id != ? AND LOWER(e.employment_status) = 'active'
               AND {overlap_clause}
             ORDER BY e.full_name LIMIT ?
         """
