@@ -36,7 +36,6 @@ PAGES_BY_ROLE = {
 
     "hr_manager": [
         "Approvals",
-        "Employees",
         "Team Insights",
         "Ask Yusor",
         "My leave",
@@ -56,7 +55,6 @@ PAGES_BY_ROLE = {
 NAV_LABELS = {
     "hr_manager": {
         "Approvals": "Waiting on you",
-        "Employees": "People",
         "Team Insights": "Team Insights",
         "Ask Yusor": "Ask Yusor",
         "My leave": "My leave",
@@ -268,11 +266,6 @@ def _shell() -> None:
     elif page == "My leave":
 
         views.page_leave()
-
-
-    elif page == "Employees":
-
-        views.page_employees()
 
 
     elif page == "Team Insights":
