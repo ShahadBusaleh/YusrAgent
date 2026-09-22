@@ -2,7 +2,7 @@
 Database helpers for the employee-facing Growth Opportunities feature.
 
 Built on top of Experience Gap (app/db/skills.py): an employee is a
-"candidate" for a department's MISSING/LOW experience title when their
+"candidate" for a department's MISSING experience title when their
 own job title is one of the "closest experience" titles Experience Gap
 already ranks for that gap. Candidates may upload a CV to receive an
 LLM-generated development plan; gaps with no internal candidate at all
@@ -118,7 +118,7 @@ def list_opportunities_for_employee(
     employee_id: str,
 ) -> list[dict]:
     """
-    MISSING/LOW department gaps this employee is a "closest experience"
+    MISSING department gaps this employee is a "closest experience"
     candidate for, each with any previously generated plan attached.
 
     Reuses the candidate list `get_department_experience_gap` already
@@ -138,7 +138,7 @@ def list_opportunities_for_employee(
     gap_items = [
         item
         for item in get_department_experience_gap(conn, department_id)
-        if item["status"] in ("MISSING", "LOW")
+        if item["status"] == "MISSING"
     ]
 
     opportunities = []
@@ -158,7 +158,6 @@ def list_opportunities_for_employee(
                 "skill_name": item["skill_name"],
                 "category": item["category"],
                 "status": item["status"],
-                "required_headcount": item["required_headcount"],
                 "current_headcount": item["current_headcount"],
                 "current_job_title": employee.get("job_title"),
                 "plan": plan,

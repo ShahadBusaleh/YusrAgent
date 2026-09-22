@@ -55,19 +55,30 @@ def _candidate_job_titles(
     conn: sqlite3.Connection,
     department_id: str,
     skill_id: str,
-    limit: int = 2,
 ) -> list[dict]:
     """
-    Job titles already present in the department that do not yet
-    cover the given skill, ranked by how many employees hold that
-    title (a bigger existing pool is a more realistic upskilling
-    target). Used only to build a suggestion, not to change status.
+    Job titles in the department that are the "closest experience" to
+    the given (missing) skill — titles that already carry some other
+    skill in the same category, ranked by how many employees hold
+    that title. Used only to build a suggestion, not to change status.
 
-    Returns [{"job_title": ..., "headcount": ...}, ...], capped at
-    `limit` rows. The headcount is only summed across these displayed
-    titles (not every non-matching title in the department) so the
-    "how many people could realistically be trained" figure matches
-    the roles actually named in the recommendation.
+    Plain "not already covering this exact skill" isn't a real
+    closeness signal on its own: when a skill has zero job-title
+    mappings anywhere (nobody, in any department, has ever been
+    tagged with it), that test matches every title in the department
+    and falsely claims the whole department is "close" to it — e.g.
+    CRM Management (Technology) would list every Sales title as a
+    natural fit, which it isn't. Requiring the candidate title to
+    already carry a sibling skill in the same category grounds
+    "closest" in real adjacency instead: Sales titles that already
+    handle another Sales-category skill are a real fit for a new
+    Sales-category gap, but they're never proposed for a Technology
+    gap they have no connection to.
+
+    Returns [{"job_title": ..., "headcount": ...}, ...] for every such
+    title, or an empty list when nothing in the department has any
+    same-category adjacency — the caller then falls back to a hiring
+    recommendation instead of naming an unrelated position.
     """
 
     rows = conn.execute(
@@ -75,14 +86,19 @@ def _candidate_job_titles(
         SELECT e.job_title, COUNT(*) AS headcount
         FROM employees e
         WHERE e.department_id = ?
-          AND e.job_title NOT IN (
-              SELECT job_title FROM skill_job_titles WHERE skill_id = ?
+          AND e.job_title IN (
+              SELECT DISTINCT sjt.job_title
+              FROM skill_job_titles sjt
+              JOIN skills s2 ON s2.skill_id = sjt.skill_id
+              WHERE s2.category = (
+                  SELECT category FROM skills WHERE skill_id = ?
+              )
+              AND sjt.skill_id != ?
           )
         GROUP BY e.job_title
         ORDER BY headcount DESC, e.job_title ASC
-        LIMIT ?
         """,
-        (department_id, skill_id, limit),
+        (department_id, skill_id, skill_id),
     ).fetchall()
 
     return [dict(row) for row in rows]
@@ -143,33 +159,31 @@ def _build_recommendation(
         item.get("category"), _DEFAULT_TRAINING_HINT
     )
 
-    if item["status"] == "MISSING":
-        lead = (
-            f"{skill_name} is an experience gap — no employee in "
-            f"this department currently holds a role built around it."
-        )
-    else:
-        lead = (
-            f"{skill_name} is under-represented — only "
-            f"{item['current_headcount']} of the "
-            f"{item['required_headcount']} employees the department "
-            f"is targeting currently have it."
-        )
+    lead = (
+        f"{skill_name} is an experience gap — no employee in "
+        f"this department currently holds a role built around it."
+    )
 
     pool_size = len(candidates)
 
-    titles_seen: list[str] = []
-    for c in candidates:
-        if c["job_title"] not in titles_seen:
-            titles_seen.append(c["job_title"])
-    titles = " or ".join(titles_seen)
-
     if candidates:
+        titles_seen: list[str] = []
+        for c in candidates:
+            if c["job_title"] not in titles_seen:
+                titles_seen.append(c["job_title"])
+
+        if len(titles_seen) == 1:
+            titles = titles_seen[0]
+        else:
+            titles = f"{', '.join(titles_seen[:-1])}, and {titles_seen[-1]}"
+
         develop = (
-            f" {pool_size} employees in roles such as {titles} are "
-            f"the most natural fit to grow into it — supporting them "
-            f"through {training_hint} builds a path to promotion "
-            f"into a {skill_name}-focused role."
+            f" {pool_size} employees across the existing "
+            f"{titles} position{'s' if len(titles_seen) > 1 else ''} "
+            f"in this department are the most natural fit to grow "
+            f"into it — supporting them through {training_hint} "
+            f"builds a path to promotion into a {skill_name}-focused "
+            f"role."
         )
     else:
         develop = (
@@ -186,10 +200,9 @@ def get_gap_candidate_employees(
     conn: sqlite3.Connection,
     department_id: str,
     skill_id: str,
-    title_limit: int = 2,
 ) -> list[dict]:
     """
-    Actual employees behind the "closest experience" job titles for a
+    Actual employees behind every "closest experience" job title for a
     gap skill — the same ranking `_candidate_job_titles` already uses
     to build the HR recommendation sentence, resolved to real
     employee rows instead of an aggregated headcount.
@@ -207,7 +220,6 @@ def get_gap_candidate_employees(
             conn,
             department_id,
             skill_id,
-            limit=title_limit,
         )
     ]
 
@@ -246,13 +258,13 @@ def get_department_experience_gap(
     toward a skill's current_headcount when their job_title is one
     of the titles mapped to that skill in skill_job_titles.
 
-    Status:
+    Status is derived purely from real employee data (no assumed
+    per-skill headcount target):
         MISSING -> current_headcount == 0
-        LOW     -> current_headcount < required_headcount
-        OK      -> current_headcount >= required_headcount
+        OK      -> current_headcount > 0
 
-    Each MISSING/LOW item also carries a "recommendation" string
-    (hire vs. upskill-from-role suggestion). OK items get None.
+    Each MISSING item also carries a "recommendation" string (hire
+    vs. upskill-from-role suggestion). OK items get None.
     """
 
     rows = conn.execute(
@@ -262,7 +274,6 @@ def get_department_experience_gap(
             dr.skill_id,
             s.skill_name,
             s.category,
-            dr.minimum_headcount AS required_headcount,
             dr.is_critical,
             COUNT(DISTINCT e.employee_id) AS current_headcount
         FROM department_requirements dr
@@ -279,7 +290,6 @@ def get_department_experience_gap(
             dr.skill_id,
             s.skill_name,
             s.category,
-            dr.minimum_headcount,
             dr.is_critical
         """,
         (department_id,),
@@ -291,17 +301,9 @@ def get_department_experience_gap(
         item = dict(row)
 
         current = int(item["current_headcount"] or 0)
-        required = int(item["required_headcount"] or 0)
-
-        if current == 0:
-            status = "MISSING"
-        elif current < required:
-            status = "LOW"
-        else:
-            status = "OK"
+        status = "MISSING" if current == 0 else "OK"
 
         item["current_headcount"] = current
-        item["required_headcount"] = required
         item["status"] = status
 
         if status == "OK":
@@ -329,8 +331,7 @@ def get_department_experience_gap(
 
     status_order = {
         "MISSING": 0,
-        "LOW": 1,
-        "OK": 2,
+        "OK": 1,
     }
 
     results.sort(

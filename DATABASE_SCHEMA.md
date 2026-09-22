@@ -87,7 +87,11 @@ plus 3 seed/placeholder tables added later for Experience Gap Insight (see below
   `department_id (FK), skill_id (FK), minimum_headcount, is_critical`. Tied
   to the department rather than to a `job_title`, so a skill nobody was ever
   hired for (e.g. Cyber Security in IT) still shows up as a gap instead of
-  having nothing to check against.
+  having nothing to check against. `minimum_headcount` is hand-curated
+  seed data, not a real staffing target, so the app no longer uses it to
+  compute status — coverage is MISSING/OK purely from real
+  `current_headcount` (0 vs. >0). The column is kept for schema history but
+  is otherwise unread.
 - **skill_job_titles** — which job titles plausibly carry a skill:
   `skill_id (FK), job_title`. A department's `current_headcount` for a skill
   is the count of its employees whose `job_title` appears here for that

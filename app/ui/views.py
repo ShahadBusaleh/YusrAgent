@@ -456,7 +456,7 @@ def _render_employee_profile(detail: dict) -> None:
             )
 
 def page_team_insights() -> None:
-    """Manager/Admin view for synthetic Experience Gap insights."""
+    """Manager/Admin view for Experience Gap insights, backed by live employee data."""
 
     role = (st.session_state.get("me") or {}).get("role")
 
@@ -467,8 +467,8 @@ def page_team_insights() -> None:
     styles.hero(
         "HR manager",
         "Team Insights",
-        "See which experience titles are missing or under-covered "
-        "across your teams.",
+        "See which experience titles have no employees today, "
+        "based on your teams' real headcount.",
     )
 
     dept_response = api.request("GET", "/experience-gap/departments")
@@ -504,7 +504,8 @@ def page_team_insights() -> None:
 
     st.caption(
         "Coverage is derived from job title, not an individual "
-        "employee assessment. Synthetic placeholder data for this demo."
+        "employee assessment. Headcount is counted live from current "
+        "employee records."
     )
 
     response = api.request(
@@ -533,21 +534,15 @@ def page_team_insights() -> None:
         if str(item.get("status") or "").upper() == "MISSING"
     ]
 
-    low = [
-        item for item in titles
-        if str(item.get("status") or "").upper() == "LOW"
-    ]
-
     ok = [
         item for item in titles
         if str(item.get("status") or "").upper() == "OK"
     ]
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2 = st.columns(2)
 
     c1.metric("Missing", len(missing))
-    c2.metric("Low coverage", len(low))
-    c3.metric("Covered", len(ok))
+    c2.metric("Covered", len(ok))
 
     if missing:
         st.subheader("🔴 Missing experience titles")
@@ -556,7 +551,6 @@ def page_team_insights() -> None:
             [
                 {
                     "Experience Title": item.get("skill_name"),
-                    "Required Employees": item.get("required_headcount"),
                     "Current Employees": item.get("current_headcount"),
                     "Critical": (
                         "Yes"
@@ -571,39 +565,6 @@ def page_team_insights() -> None:
         )
 
         for item in missing:
-            if item.get("recommendation"):
-                badge = "🛑 **Hire recommended** — " if item.get("hire_recommended") else ""
-                st.caption(
-                    f"{badge}**{item.get('skill_name')}:** "
-                    f"{item.get('recommendation')}"
-                )
-
-    if low:
-        st.subheader("🟡 Low coverage")
-
-        st.dataframe(
-            [
-                {
-                    "Experience Title": item.get("skill_name"),
-                    "Required Employees": item.get("required_headcount"),
-                    "Current Employees": item.get("current_headcount"),
-                    "Gap": (
-                        int(item.get("required_headcount") or 0)
-                        - int(item.get("current_headcount") or 0)
-                    ),
-                    "Critical": (
-                        "Yes"
-                        if item.get("is_critical")
-                        else "No"
-                    ),
-                }
-                for item in low
-            ],
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        for item in low:
             if item.get("recommendation"):
                 badge = "🛑 **Hire recommended** — " if item.get("hire_recommended") else ""
                 st.caption(
@@ -640,8 +601,8 @@ def page_growth_opportunities() -> None:
     styles.hero(
         "Career Development",
         "Growth Opportunities",
-        "Your department's missing or under-covered experience titles "
-        "that your current role is closest to — upload your CV for a "
+        "Your department's missing experience titles that your "
+        "current role is closest to — upload your CV for a "
         "personalized plan to grow into one.",
     )
 
@@ -665,17 +626,15 @@ def page_growth_opportunities() -> None:
     for item in opportunities:
         skill_id = item.get("skill_id")
         skill_name = item.get("skill_name")
-        status_label = "Missing" if item.get("status") == "MISSING" else "Low coverage"
 
         with st.container(border=True):
             st.subheader(skill_name)
 
             st.caption(
-                f"{status_label} in your department · "
-                f"{item.get('current_headcount')} of "
-                f"{item.get('required_headcount')} employees covered · "
-                f"you're a close fit from your current role as "
-                f"{item.get('current_job_title')}."
+                f"Missing in your department — "
+                f"{item.get('current_headcount')} employees currently "
+                f"hold this experience title · you're a close fit from "
+                f"your current role as {item.get('current_job_title')}."
             )
 
             existing_plan = item.get("plan")
