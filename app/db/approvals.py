@@ -4,14 +4,36 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from app.db.connection import next_id, row_to_dict, rows_to_dicts
+from app.db.attendance import add_leave_days
 from app.db.employees import get_employee
 from app.db.leave import create_leave_request
 from app.db.proposed_actions import get_proposed_action
 
 _LEAVE_BALANCE_COLUMNS = {"annual", "sick", "emergency"}
+
+
+def _days_by_month(start_date: str, end_date: str) -> list[tuple[str, int]]:
+    """Split a leave date range into (YYYY-MM, day_count) pairs so a leave
+    spanning a month boundary credits each attendance_leave_monthly row
+    correctly instead of only the start month."""
+    try:
+        start = date.fromisoformat(start_date)
+        end = date.fromisoformat(end_date)
+    except (TypeError, ValueError):
+        return []
+    if end < start:
+        return []
+
+    counts: dict[str, int] = {}
+    current = start
+    while current <= end:
+        key = current.strftime("%Y-%m")
+        counts[key] = counts.get(key, 0) + 1
+        current += timedelta(days=1)
+    return list(counts.items())
 
 
 
@@ -233,6 +255,18 @@ def _sync_leave_request(
             """,
             (days, days, proposal["employee_id"]),
         )
+
+    if status == "approved":
+        for period, day_count in _days_by_month(
+            payload.get("start_date"), payload.get("end_date")
+        ):
+            add_leave_days(
+                conn,
+                proposal["employee_id"],
+                period,
+                leave_type,
+                day_count,
+            )
 
 
 def _sync_personal_info_update(

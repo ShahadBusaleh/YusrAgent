@@ -590,6 +590,70 @@ def page_team_insights() -> None:
                 hide_index=True,
             )
 
+def page_payroll() -> None:
+    """HR manager/admin view: download the all-employee payroll report
+    for a chosen month as a PDF."""
+
+    role = (st.session_state.get("me") or {}).get("role")
+
+    if role not in {"hr_manager", "admin"}:
+        st.error("Payroll is available to HR managers and admins only.")
+        return
+
+    styles.hero(
+        "HR manager",
+        "Payroll",
+        "Download the payroll report for every employee in a given month.",
+    )
+
+    periods_response = api.request("GET", "/payroll/periods")
+
+    try:
+        periods_data = api.raise_for_api(periods_response)
+    except RuntimeError as exc:
+        st.error(str(exc))
+        return
+
+    periods = (periods_data or {}).get("periods") or []
+
+    if not periods:
+        st.info("No payroll records found.")
+        return
+
+    period = st.selectbox("Month", periods, index=0)
+
+    if st.button("Generate PDF", use_container_width=True):
+        pdf_response = api.request("GET", f"/payroll/monthly/{period}/pdf")
+
+        if pdf_response.status_code >= 400:
+            try:
+                detail = pdf_response.json().get("detail", pdf_response.text)
+            except Exception:
+                detail = pdf_response.text
+            st.error(f"{pdf_response.status_code}: {detail}")
+            st.session_state.pop("payroll_pdf", None)
+        else:
+            # Stored in session_state, not rendered inline, so the download
+            # button survives later reruns (e.g. touching the month
+            # selectbox again) instead of vanishing the moment this `if`
+            # block stops being the one that ran.
+            st.session_state["payroll_pdf"] = {
+                "period": period,
+                "bytes": pdf_response.content,
+            }
+
+    generated = st.session_state.get("payroll_pdf")
+
+    if generated:
+        st.download_button(
+            f"Download payroll_{generated['period']}.pdf",
+            data=generated["bytes"],
+            file_name=f"payroll_{generated['period']}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+        )
+
+
 def page_growth_opportunities() -> None:
     """
     Employee view: department experience gaps this employee is a

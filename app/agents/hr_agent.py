@@ -1,4 +1,6 @@
 import re
+from calendar import monthrange
+from datetime import datetime
 
 from app.agents.base import BaseAgent
 from app.agents.leave_intent import (
@@ -9,8 +11,8 @@ from app.agents.leave_intent import (
 from app.db.connection import get_connection
 from app.db.employees import find_cover_candidates, get_employee
 from app.db.leave import get_leave_balance, list_leave_requests
-from app.db.payroll import get_latest_payroll
-from app.db.attendance import get_latest_attendance
+from app.db.payroll import get_latest_payroll, get_payroll_for_period
+from app.db.attendance import get_attendance_for_period, get_latest_attendance
 from app.db.skills import get_department_experience_gap
 
 
@@ -75,6 +77,27 @@ def _contains_any(query: str, words: tuple[str, ...]) -> bool:
     return any(word in query_lower for word in words)
 
 
+def _is_leave_query(query: str) -> bool:
+    return _contains_any(
+        query,
+        (
+            "leave balance",
+            "remaining leave",
+            "leave days",
+            "how many leave",
+            "vacation balance",
+            "annual leave",
+            "sick leave",
+            "emergency leave",
+            "day off",
+            "days off",
+            "leave request",
+            "leave history",
+            "my leave",
+        ),
+    )
+
+
 def _is_payroll_query(query: str) -> bool:
     return _contains_any(
         query,
@@ -89,6 +112,147 @@ def _is_payroll_query(query: str) -> bool:
             "allowance",
             "deduction",
         ),
+    )
+
+
+_MONTH_NAMES = {
+    "january": 1, "jan": 1,
+    "february": 2, "feb": 2,
+    "march": 3, "mar": 3,
+    "april": 4, "apr": 4,
+    "may": 5,
+    "june": 6, "jun": 6,
+    "july": 7, "jul": 7,
+    "august": 8, "aug": 8,
+    "september": 9, "sep": 9, "sept": 9,
+    "october": 10, "oct": 10,
+    "november": 11, "nov": 11,
+    "december": 12, "dec": 12,
+}
+
+
+def _extract_period(query: str) -> str | None:
+    """Pull a "YYYY-MM" period out of a payroll/attendance question, e.g.
+    "June 2026" or "2026-06". Returns None when no specific month was
+    named, so the caller can fall back to the latest available period."""
+
+    match = re.search(r"\b(20\d{2})-(0[1-9]|1[0-2])\b", query)
+
+    if match:
+        return f"{match.group(1)}-{match.group(2)}"
+
+    month_pattern = "|".join(_MONTH_NAMES)
+
+    match = re.search(
+        rf"\b({month_pattern})\b\.?\s+(20\d{{2}})\b",
+        query,
+        re.IGNORECASE,
+    )
+
+    if match:
+        month = _MONTH_NAMES[match.group(1).lower()]
+        year = match.group(2)
+        return f"{year}-{month:02d}"
+
+    return None
+
+
+def _date_to_period(value: str | None) -> str | None:
+    """employees.hire_date/termination_date are stored DD-MM-YYYY;
+    leave_requests dates are YYYY-MM-DD. Accept either, return "YYYY-MM"."""
+
+    if not value:
+        return None
+
+    for fmt in ("%d-%m-%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(value, fmt).strftime("%Y-%m")
+        except ValueError:
+            continue
+
+    return None
+
+
+def _approved_leave_note(
+    conn, employee_id: str, period: str
+) -> str | None:
+    """An approved leave overlapping `period`, if any — extra context on a
+    missing-payroll answer, not claimed as the cause (payroll continues
+    through leave in this dataset; pre-hire/post-termination is the actual
+    cause of a missing row)."""
+
+    try:
+        year, month = (int(part) for part in period.split("-"))
+        month_end = f"{period}-{monthrange(year, month)[1]:02d}"
+    except (ValueError, TypeError):
+        return None
+
+    row = conn.execute(
+        """
+        SELECT leave_type, start_date, end_date FROM leave_requests
+        WHERE employee_id = ? AND status = 'approved'
+          AND start_date <= ? AND end_date >= ?
+        ORDER BY start_date
+        LIMIT 1
+        """,
+        (employee_id, month_end, f"{period}-01"),
+    ).fetchone()
+
+    if not row:
+        return None
+
+    return (
+        f"Note: approved {row['leave_type']} leave "
+        f"{row['start_date']} to {row['end_date']} overlaps this period."
+    )
+
+
+def _explain_missing_record(
+    conn,
+    employee: dict | None,
+    employee_id: str,
+    period: str | None,
+    subject: str,
+) -> str:
+    """Say *why* a payroll/attendance lookup came back empty instead of
+    just reporting the absence, and ask for a specific month when that's
+    genuinely the missing piece — an interactive answer, not a dead end."""
+
+    if period:
+        base = f"No {subject} found for {period}."
+    else:
+        # No month was named and even the latest record is missing — the
+        # default-to-latest path found nothing at all.
+        base = f"No {subject} on file yet."
+        period = datetime.now().strftime("%Y-%m")
+
+    if employee:
+        hire_period = _date_to_period(employee.get("hire_date"))
+
+        if hire_period and period < hire_period:
+            return (
+                f"{base} {employee.get('full_name') or 'This employee'} "
+                f"joined on {employee.get('hire_date')}, after this period. "
+                "Ask about a month from your hire date onward."
+            )
+
+        term_period = _date_to_period(employee.get("termination_date"))
+
+        if term_period and period > term_period:
+            return (
+                f"{base} Employment ended on "
+                f"{employee.get('termination_date')}, before this period."
+            )
+
+    leave_note = _approved_leave_note(conn, employee_id, period)
+
+    if leave_note:
+        return f"{base} {leave_note}"
+
+    topic = subject.replace(" record", "")
+    return (
+        f"{base} If you meant a specific month, name it "
+        f'(e.g. "what is my {topic} for June 2026?").'
     )
 
 
@@ -465,12 +629,18 @@ class HRAgent(BaseAgent):
             # Leave balance
             # -------------------------------------------------
 
+            # `leave_balance` itself is always fetched (cheap, single row) since
+            # the leave-submission branch below needs it regardless of query
+            # wording. Whether it's exposed in `facts` — and therefore shown
+            # by Manager's fallback summary — is gated on the query actually
+            # being about leave, so an unrelated question (e.g. payroll)
+            # doesn't always drag leave balance into the answer.
             leave_balance = get_leave_balance(
                 conn,
                 employee_id,
             )
 
-            if leave_balance:
+            if leave_balance and _is_leave_query(query):
                 facts["leave_balance"] = leave_balance
 
                 annual_remaining = leave_balance.get(
@@ -489,27 +659,36 @@ class HRAgent(BaseAgent):
             # Previous leave requests
             # -------------------------------------------------
 
-            requests = list_leave_requests(
-                conn,
-                employee_id,
-            )
-
-            if requests:
-                facts["leave_requests"] = requests
-
-                sources.append(
-                    f"leave_requests:{employee_id}"
-                )
-
-            # -------------------------------------------------
-            # Payroll query
-            # -------------------------------------------------
-
-            if _is_payroll_query(query):
-                payroll = get_latest_payroll(
+            if _is_leave_query(query):
+                requests = list_leave_requests(
                     conn,
                     employee_id,
                 )
+
+                if requests:
+                    facts["leave_requests"] = requests
+
+                    sources.append(
+                        f"leave_requests:{employee_id}"
+                    )
+
+            # -------------------------------------------------
+            # Payroll query — own record only (enforced above by
+            # _own_record_only, same as every other fact here). A named
+            # month ("June 2026") is looked up exactly; otherwise this
+            # falls back to the latest period on file. Bulk, all-employee
+            # payroll is a separate HR-manager-only PDF export, not chat.
+            # -------------------------------------------------
+
+            if _is_payroll_query(query):
+                period = _extract_period(query)
+
+                if period:
+                    payroll = get_payroll_for_period(
+                        conn, employee_id, period
+                    )
+                else:
+                    payroll = get_latest_payroll(conn, employee_id)
 
                 if payroll:
                     facts["payroll"] = payroll
@@ -517,22 +696,39 @@ class HRAgent(BaseAgent):
                     sources.append(
                         f"payroll_monthly:{employee_id}"
                     )
+                else:
+                    facts["payroll_notice"] = _explain_missing_record(
+                        conn, employee, employee_id, period, "payroll record"
+                    )
 
             # -------------------------------------------------
-            # Attendance query
+            # Attendance query — same shape as payroll: a named month is
+            # looked up exactly, otherwise this falls back to the latest
+            # period on file, and either way a miss gets a real reason
+            # instead of silence.
             # -------------------------------------------------
 
             if _is_attendance_query(query):
-                attendance = get_latest_attendance(
-                    conn,
-                    employee_id,
-                )
+                period = _extract_period(query)
+
+                if period:
+                    attendance = get_attendance_for_period(
+                        conn, employee_id, period
+                    )
+                else:
+                    attendance = get_latest_attendance(
+                        conn, employee_id
+                    )
 
                 if attendance:
                     facts["attendance"] = attendance
 
                     sources.append(
                         f"attendance_leave_monthly:{employee_id}"
+                    )
+                else:
+                    facts["attendance_notice"] = _explain_missing_record(
+                        conn, employee, employee_id, period, "attendance record"
                     )
 
             # -------------------------------------------------

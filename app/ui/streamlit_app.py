@@ -37,6 +37,7 @@ PAGES_BY_ROLE = {
     "hr_manager": [
         "Approvals",
         "Team Insights",
+        "Payroll",
         "Ask Yusor",
         "My leave",
     ],
@@ -48,6 +49,7 @@ PAGES_BY_ROLE = {
         "Users",
         "Audit log",
         "Team Insights",
+        "Payroll",
     ],
 }
 
@@ -56,12 +58,14 @@ NAV_LABELS = {
     "hr_manager": {
         "Approvals": "Waiting on you",
         "Team Insights": "Team Insights",
+        "Payroll": "Payroll",
         "Ask Yusor": "Ask Yusor",
         "My leave": "My leave",
     },
 
     "admin": {
         "Team Insights": "Team Insights",
+        "Payroll": "Payroll",
     },
 }
 
@@ -271,6 +275,11 @@ def _shell() -> None:
     elif page == "Team Insights":
 
         views.page_team_insights()
+
+
+    elif page == "Payroll":
+
+        views.page_payroll()
 
 
     elif page == "Growth Opportunities":

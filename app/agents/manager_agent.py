@@ -53,14 +53,61 @@ def _fallback_hr_summary(facts: dict) -> str:
     elif facts.get("remaining_balance") is not None:
         parts.append(f"Remaining leave balance: {facts['remaining_balance']} days.")
 
-    profile = facts.get("profile")
-    if isinstance(profile, dict) and profile.get("full_name"):
-        bits = [b for b in (profile.get("job_title"), profile.get("department_name")) if b]
-        parts.append(f"{profile['full_name']}" + (f" — {', '.join(bits)}." if bits else "."))
-
     requests = facts.get("leave_requests")
     if isinstance(requests, list) and requests:
         parts.append(f"You have {len(requests)} leave request(s) on record.")
+
+    payroll = facts.get("payroll")
+    if isinstance(payroll, dict) and payroll:
+        bits = [
+            f"{label} {payroll[key]:g} SAR"
+            if isinstance(payroll.get(key), (int, float))
+            else f"{label} {payroll.get(key)}"
+            for label, key in (
+                ("gross pay", "gross_pay_sar"),
+                ("total deductions", "total_deductions_sar"),
+                ("net pay", "net_pay_sar"),
+            )
+            if payroll.get(key) is not None
+        ]
+        period = payroll.get("pay_period")
+        prefix = f"Payroll ({period}): " if period else "Payroll: "
+        if bits:
+            parts.append(prefix + ", ".join(bits) + ".")
+    else:
+        payroll_notice = facts.get("payroll_notice")
+        if isinstance(payroll_notice, str) and payroll_notice:
+            parts.append(payroll_notice)
+
+    attendance = facts.get("attendance")
+    if isinstance(attendance, dict) and attendance:
+        bits = [
+            f"{label}: {attendance[key]:g}"
+            if isinstance(attendance.get(key), (int, float))
+            else f"{label}: {attendance.get(key)}"
+            for label, key in (
+                ("present", "days_present"),
+                ("absent", "days_absent"),
+                ("attendance rate", "attendance_rate_pct"),
+            )
+            if attendance.get(key) is not None
+        ]
+        period = attendance.get("attendance_month")
+        prefix = f"Attendance ({period}): " if period else "Attendance: "
+        if bits:
+            parts.append(prefix + ", ".join(bits) + ".")
+    else:
+        attendance_notice = facts.get("attendance_notice")
+        if isinstance(attendance_notice, str) and attendance_notice:
+            parts.append(attendance_notice)
+
+    # Identity is only useful as context alongside a specific answer above,
+    # or as a last-resort reply when nothing else matched the query — not
+    # appended to every response regardless of what was actually asked.
+    profile = facts.get("profile")
+    if not parts and isinstance(profile, dict) and profile.get("full_name"):
+        bits = [b for b in (profile.get("job_title"), profile.get("department_name")) if b]
+        parts.append(f"{profile['full_name']}" + (f" — {', '.join(bits)}." if bits else "."))
 
     return " ".join(parts)
 
