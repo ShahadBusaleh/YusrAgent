@@ -522,8 +522,8 @@ def _build_sources(
 
         # Saudi Labor Law
         article_match = re.search(
-            r"Article:\s*([^\s]+).*?"
-            r"(?:Title|Name):\s*(.*?)(?=\s+(?:Section|Purpose|Rule|Conditions|$))",
+            r"Article:\s*([^\n]+)\s*"
+            r"Title:\s*([^\n]+)",
             source_text,
             flags=re.IGNORECASE,
         )
@@ -538,27 +538,28 @@ def _build_sources(
             )
 
         # Internal company policy
+        # Internal company policy
         if not display_name:
-            section_match = re.search(
-                r"Section:\s*([^\s]+).*?"
-                r"Policy Name:\s*(.*?)(?=\s+(?:Purpose|Rule|Conditions|$))",
+            policy_match = re.search(
+                r"Policy Name:\s*([^\n]+)",
                 source_text,
                 flags=re.IGNORECASE,
             )
 
-            if section_match:
-                section = section_match.group(1).strip()
-                policy_name = section_match.group(2).strip()
+            if policy_match:
+                policy_name = policy_match.group(1).strip()
 
                 display_name = (
-                    f"Internal Policy — "
-                    f"Section {section}: {policy_name}"
+                    f"Company Policies — "
+                    f"{policy_name}"
                 )
 
         # Generic fallback
+        # Generic source name from RAG metadata
         if not display_name:
             display_name = (
-                chunk.get("filename")
+                chunk.get("source_name")
+                or chunk.get("filename")
                 or "Policy source"
             )
 
@@ -590,15 +591,11 @@ def _format_context(
 
     for chunk in chunks:
 
-        source_id = (
-            chunk.get("id")
-            or "UNKNOWN"
-        )
-
-        source_table = (
-            chunk.get("source_table")
-            or "unknown"
-        )
+        source_name = (
+        chunk.get("source_name")
+        or chunk.get("source_table")
+        or "Policy source"
+    )
 
         text = _safe_text(
             chunk.get(
@@ -608,8 +605,7 @@ def _format_context(
         )
 
         parts.append(
-            f"[Source: {source_id}]\n"
-            f"Source type: {source_table}\n"
+            f"Source: {source_name}\n"
             f"{text}"
         )
 
@@ -698,9 +694,8 @@ STRICT RULES:
     clearly say that the available policy evidence
     is insufficient.
 
-16. Cite relevant evidence using:
-
-    [Source: SOURCE_ID]
+16. Use human-readable source names only.
+17. Do not add citation tags such as [Source: ID].
 
 17. Keep the response concise and professional.
 
@@ -712,16 +707,17 @@ STRICT RULES:
 20. The Consultant must remain independent from
     the HR Agent.
 
-21. When the retrieved evidence contains a Law ID or Article number,
-    explicitly mention it in the answer.
+21. When the retrieved evidence contains an Article number,
+    you may mention the Article number when relevant.
 
-22. Prefer this format when applicable:
-    "According to Article X (Law ID: LAWXXX), ..."
+22. Never mention, expose, or reproduce internal source IDs,
+    Law IDs, record IDs, filenames, or source identifiers
+    in the user-facing response.
 
-23. Connect each policy rule to its corresponding Article or Law ID.
+23. Use human-readable source names instead of internal identifiers.
 
-24. Do not invent an Article number or Law ID.
-    Only mention identifiers explicitly present in the retrieved evidence.
+24. Internal identifiers may be used only for system validation,
+    source linking, and internal processing.
 
 GRIEVANCE HANDLING:
 
@@ -738,10 +734,11 @@ When the user request is a grievance or complaint:
 
 3. Identify the relevant:
    - Article
-   - Law ID
    - Company policy
    when available in the retrieved evidence.
 
+4. Never expose Law IDs or other internal source identifiers
+   to the user.
 4. Provide:
    - policy/legal analysis
    - supporting evidence
@@ -790,14 +787,13 @@ Explain the relevant:
 - Requirements
 - Exceptions
 
-For each relevant policy rule, include the corresponding
-Article number and Law ID when they are available in the evidence.
+For each relevant policy rule, mention the Article number
+when it is relevant and available.
 
-Use the format:
+Never mention Law IDs, internal source IDs, record IDs,
+filenames, or other internal identifiers.
 
-According to Article X (Law ID: LAWXXX), ...
-
-Do not invent or infer legal identifiers.
+Use human-readable source names only.
 
 Do NOT evaluate any specific employee.
 
@@ -807,9 +803,8 @@ Do NOT calculate leave balances.
 
 Do NOT determine eligibility.
 
-Cite relevant sources using:
-
-[Source: SOURCE_ID]
+Use human-readable source names only.
+Do not add citation tags such as [Source: ID].
 """.strip()
 
     response = client.chat.completions.create(

@@ -97,9 +97,11 @@ def translate_to_arabic(text: str) -> str:
     return _translate(
         text,
         "Translate the following HR assistant response into Modern "
-        "Standard Arabic. Preserve [Source: ID] citation tags, Law IDs, "
-        "Article numbers, dates, proposal/approval IDs, and bracketed "
-        "PII placeholders such as [IBAN], [EMAIL], [PHONE], "
-        "[NATIONAL_ID] exactly as written, untranslated. Return ONLY "
-        "the translated text, no notes, no quotes, no explanation.",
+        "Standard Arabic. Preserve Article numbers, dates, proposal/approval "
+        "IDs, and bracketed PII placeholders such as [IBAN], [EMAIL], "
+        "[PHONE], [NATIONAL_ID] exactly as written, untranslated. "
+        "Do not preserve or reproduce Law IDs, internal source IDs, "
+        "record IDs, filenames, or [Source: ID] citation tags. "
+        "Use human-readable source names only. Return ONLY the translated "
+        "text, no notes, no quotes, no explanation.",
     )
