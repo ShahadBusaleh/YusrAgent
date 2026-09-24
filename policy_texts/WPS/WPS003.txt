@@ -1,0 +1,7 @@
+id: WPS003
+category: Access
+topic: Platform
+rule: Wage Protection files and related compliance actions are handled through Mudad
+conditions: Registered establishments
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

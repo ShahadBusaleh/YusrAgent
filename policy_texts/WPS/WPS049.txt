@@ -1,0 +1,7 @@
+id: WPS049
+category: Registration
+topic: Establishment registration
+rule: The establishment must be registered and available in the relevant systems to use wage protection services
+conditions: Applicable establishments
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

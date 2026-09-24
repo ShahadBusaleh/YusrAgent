@@ -169,42 +169,49 @@ def page_chat() -> None:
     elif answer_text:
         st.markdown(answer_text)
 
-    source_ids: list[str] = []
+
+    source_names: list[str] = []
     source_texts: list[tuple[str, str]] = []
 
     for item in payload.get("sources") or []:
-        if isinstance(item, str):
-            if item.strip():
-                source_ids.append(item.strip())
-            continue
-
         if not isinstance(item, dict):
             continue
 
-        sid = item.get("id") or item.get("source_id")
-        sid = str(sid).strip() if sid else ""
+        display_name = str(
+            item.get("display_name")
+            or item.get("source_name")
+            or "Policy source"
+        ).strip()
 
-        if sid:
-            source_ids.append(sid)
+        if display_name and display_name not in source_names:
+            source_names.append(display_name)
 
         text = item.get("text")
 
         if isinstance(text, str) and text.strip():
-            source_texts.append(
-                (sid or "source", text.strip())
+            clean_text = re.sub(
+                r"\bid:\s*[A-Z0-9_-]+\s*",
+                "",
+                text.strip(),
+                flags=re.IGNORECASE,
             )
 
-    if source_ids:
+            source_texts.append(
+                (display_name, clean_text)
+            )
+
+    if source_names:
         st.markdown(
             "**Sources:** "
-            + " · ".join(f"`{sid}`" for sid in source_ids)
+            + " · ".join(source_names)
         )
 
     if source_texts:
         with st.expander("Source excerpts"):
-            for sid, text in source_texts:
-                st.caption(sid)
+            for display_name, text in source_texts:
+                st.caption(display_name)
                 st.write(text)
+
 
 def page_leave() -> None:
     styles.hero(
@@ -300,96 +307,6 @@ def page_leave() -> None:
     st.caption("Need to submit a new request? Ask Yusor in the chat.")
 
 
-def page_employees() -> None:
-    role = (st.session_state.get("me") or {}).get("role")
-    if role == "hr_manager":
-        styles.hero(
-            "Your team",
-            "People",
-            "Look someone up when a case needs context. You can still fix a phone number or email here.",
-        )
-    else:
-        styles.hero(
-            "HR specialist",
-            "Employee records",
-            "Search the directory, open a profile, and update low-risk contact fields.",
-        )
-    q = st.text_input("Search by name, id, or email", placeholder="EMP0001 or Sara")
-    listing = api.request("GET", "/employees", params={"q": q} if q else {})
-    try:
-        rows = api.raise_for_api(listing) or []
-    except RuntimeError as exc:
-        st.error(str(exc))
-        return
-    if not rows:
-        st.caption("No matching employees.")
-    else:
-        st.dataframe(
-            [
-                {
-                    "employee_id": r.get("employee_id"),
-                    "full_name": r.get("full_name"),
-                    "job_title": r.get("job_title"),
-                    "department_name": r.get("department_name"),
-                    "employment_status": str(r.get("employment_status") or "").title(),
-                    "email": r.get("email"),
-                    "mobile": r.get("mobile"),
-                }
-                for r in rows
-            ],
-            use_container_width=True,
-            hide_index=True,
-            column_order=[
-                "employee_id",
-                "full_name",
-                "job_title",
-                "department_name",
-                "employment_status",
-                "email",
-                "mobile",
-            ],
-            column_config={
-                "employee_id": st.column_config.TextColumn("ID"),
-                "full_name": st.column_config.TextColumn("Name"),
-                "job_title": st.column_config.TextColumn("Title"),
-                "department_name": st.column_config.TextColumn("Department"),
-                "employment_status": st.column_config.TextColumn("Status"),
-                "email": st.column_config.TextColumn("Email"),
-                "mobile": st.column_config.TextColumn("Mobile"),
-            },
-        )
-
-    employee_id = st.text_input("Employee ID to view / update")
-    if not employee_id:
-        return
-    detail_resp = api.request("GET", f"/employees/{employee_id}")
-    try:
-        detail = api.raise_for_api(detail_resp)
-    except RuntimeError as exc:
-        st.error(str(exc))
-        return
-    _render_employee_profile(detail)
-    with st.form("profile_update"):
-        c1, c2 = st.columns(2)
-        mobile = c1.text_input("Mobile", value=detail.get("mobile") or "")
-        email = c2.text_input("Email", value=detail.get("email") or "")
-        city = c1.text_input("City", value=detail.get("city") or "")
-        address = c2.text_input("Address", value=detail.get("address") or "")
-        save = st.form_submit_button("Save profile fields", type="primary")
-    if save:
-        resp = api.request(
-            "PATCH",
-            f"/employees/{employee_id}",
-            json={"mobile": mobile, "email": email, "city": city, "address": address},
-        )
-        try:
-            api.raise_for_api(resp)
-            st.success("Updated")
-            st.rerun()
-        except RuntimeError as exc:
-            st.error(str(exc))
-
-
 def _kv_table(pairs: list[tuple[str, object]]) -> None:
     rows = [
         {"Field": label, "Value": value if value not in (None, "") else "—"}
@@ -405,55 +322,6 @@ def _kv_table(pairs: list[tuple[str, object]]) -> None:
         },
     )
 
-
-def _render_employee_profile(detail: dict) -> None:
-    st.markdown(f"#### {detail.get('full_name') or detail.get('employee_id')}")
-    st.caption(
-        " · ".join(
-            part
-            for part in (
-                detail.get("job_title"),
-                detail.get("department_name"),
-                str(detail.get("employment_status") or "").title() or None,
-            )
-            if part
-        )
-    )
-
-    with st.expander("Profile details", expanded=True):
-        st.caption("Contact")
-        _kv_table(
-            [
-                ("Email", detail.get("email")),
-                ("Mobile", detail.get("mobile")),
-                ("City", detail.get("city")),
-                ("Address", detail.get("address")),
-            ]
-        )
-        st.caption("Employment")
-        _kv_table(
-            [
-                ("Employee ID", detail.get("employee_id")),
-                ("Hire date", _friendly_when(detail.get("hire_date")) or detail.get("hire_date")),
-                ("Manager", detail.get("manager_id")),
-                ("Nationality", detail.get("nationality")),
-                (
-                    "HR approver",
-                    "Yes" if detail.get("is_hr_approver") else "No",
-                ),
-            ]
-        )
-        if detail.get("bank_name") or detail.get("iban") or detail.get("basic_salary"):
-            st.caption("Compensation & banking")
-            _kv_table(
-                [
-                    ("Basic salary", detail.get("basic_salary")),
-                    ("Housing allowance", detail.get("housing_allowance")),
-                    ("Bank", detail.get("bank_name")),
-                    ("Bank code", detail.get("bank_code")),
-                    ("IBAN", detail.get("iban")),
-                ]
-            )
 
 def page_team_insights() -> None:
     """Manager/Admin view for Experience Gap insights, backed by live employee data."""
@@ -1148,9 +1016,9 @@ def page_approvals() -> None:
                 reasons = manager.get("reasons") or []
 
                 if reasons:
-                    with st.expander("Additional notes"):
-                        for reason in reasons:
-                            st.write(f"- {reason}")
+                    st.markdown("**Additional notes**")
+                    for reason in reasons:
+                        st.write(f"* {reason}")
 
             proposal = proposals.get(row.get("proposal_id"))
             _render_proposal_details(proposal)

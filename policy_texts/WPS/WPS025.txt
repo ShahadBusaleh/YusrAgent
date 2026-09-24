@@ -1,0 +1,7 @@
+id: WPS025
+category: Wage data
+topic: Payment details
+rule: The wage record contains the required payment information
+conditions: Required fields must be complete and valid
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

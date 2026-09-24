@@ -1,0 +1,7 @@
+id: WPS052
+category: Registration
+topic: Employee registration
+rule: Employee information must be available in the relevant records for wage processing and matching
+conditions: For covered employees
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

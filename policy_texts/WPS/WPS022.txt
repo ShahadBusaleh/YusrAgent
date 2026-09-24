@@ -1,0 +1,7 @@
+id: WPS022
+category: Wage data
+topic: Bank account
+rule: The wage record includes the employee bank account used for payment
+conditions: For employees receiving payment through a bank account
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

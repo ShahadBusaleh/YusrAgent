@@ -1,0 +1,7 @@
+id: WPS013
+category: File format
+topic: DEST-ID
+rule: The wage file contains the destination identifier required by the file format
+conditions: Required by the file specification
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

@@ -1,0 +1,7 @@
+id: WPS009
+category: File format
+topic: File type
+rule: The wage file must follow the required electronic format
+conditions: File must comply with the program requirements
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

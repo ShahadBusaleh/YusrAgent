@@ -1,0 +1,7 @@
+id: WPS040
+category: Alerts
+topic: Unreasonable basic wage
+rule: The system can flag basic wage values that do not meet applicable validation rules
+conditions: When the submitted value is inconsistent with the required rules
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

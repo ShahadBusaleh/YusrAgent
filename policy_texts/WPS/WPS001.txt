@@ -1,0 +1,7 @@
+id: WPS001
+category: General
+topic: Program purpose
+rule: The Wage Protection Program monitors wage payments and improves wage transparency
+conditions: Establishments subject to the program
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

@@ -1,0 +1,7 @@
+id: WPS038
+category: Alerts
+topic: Unregistered wage
+rule: The system can flag wage information that is not consistent with registered records
+conditions: When registered wage data differs from submitted data
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

@@ -1,0 +1,7 @@
+id: WPS041
+category: Alerts
+topic: No payment record
+rule: The system can identify an employee record without a corresponding payment record
+conditions: When payment information is missing
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

@@ -1,0 +1,7 @@
+id: WPS046
+category: Justifications
+topic: No response
+rule: A justification may remain without an employee response when the employee does not respond within the applicable period
+conditions: Applicable response period
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

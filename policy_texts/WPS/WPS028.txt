@@ -1,0 +1,7 @@
+id: WPS028
+category: Wage data
+topic: Other payments
+rule: Other wage-related payments may be recorded in the wage file
+conditions: When applicable
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

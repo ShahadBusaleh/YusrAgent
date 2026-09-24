@@ -1,0 +1,7 @@
+id: WPS058
+category: Upload workflow
+topic: Accept declaration
+rule: The user confirms the required declaration before submitting the wage file
+conditions: Required before final submission
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

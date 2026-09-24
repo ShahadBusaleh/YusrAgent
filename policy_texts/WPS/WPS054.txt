@@ -1,0 +1,7 @@
+id: WPS054
+category: Dashboard
+topic: Monthly details
+rule: The dashboard provides details related to wage compliance by wage period
+conditions: When monthly data is available
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

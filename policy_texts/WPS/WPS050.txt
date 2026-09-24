@@ -1,0 +1,7 @@
+id: WPS050
+category: Registration
+topic: Verification
+rule: Establishment information may be verified before access to relevant services
+conditions: Required establishment verification
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

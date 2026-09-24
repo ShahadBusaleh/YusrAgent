@@ -1,0 +1,7 @@
+id: WPS034
+category: Alerts
+topic: Wage below 50%
+rule: The system can identify cases where the paid wage is significantly below the registered wage
+conditions: Applicable program validation rules
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

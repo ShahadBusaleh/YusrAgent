@@ -1,0 +1,7 @@
+id: WPS007
+category: Compliance
+topic: Compliance rate
+rule: The system displays the establishment's wage protection compliance information
+conditions: After wage file processing
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

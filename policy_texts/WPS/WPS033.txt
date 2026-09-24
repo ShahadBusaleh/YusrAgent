@@ -1,0 +1,7 @@
+id: WPS033
+category: Processing
+topic: Program matching
+rule: Wage data is matched with the relevant establishment and employee information
+conditions: Required records must be available
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

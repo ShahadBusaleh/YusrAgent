@@ -1,0 +1,7 @@
+id: WPS042
+category: File correction
+topic: Basic wage entry
+rule: Employers can correct or update wage information when a file contains an incorrect basic wage
+conditions: Subject to system and program rules
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

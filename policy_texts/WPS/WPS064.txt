@@ -1,0 +1,7 @@
+id: WPS064
+category: Proactive justification
+topic: Future violations
+rule: The platform can support proactive justification for certain future wage protection observations
+conditions: Where the feature is available
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

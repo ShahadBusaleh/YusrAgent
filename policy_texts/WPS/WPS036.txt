@@ -1,0 +1,7 @@
+id: WPS036
+category: Alerts
+topic: Payment gap
+rule: The system can identify gaps or missing wage payments
+conditions: Based on available wage records
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad
