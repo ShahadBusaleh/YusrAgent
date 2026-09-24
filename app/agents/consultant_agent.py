@@ -218,6 +218,25 @@ def _safe_text(value: Any) -> str:
     return mask_pii(str(value))
 
 
+_HYPHEN_VARIANTS = "‐‑‒–—−"
+
+_POLICY_ID_ODD_HYPHENS_RE = re.compile(
+    rf"\bAAM[{_HYPHEN_VARIANTS}]POL[{_HYPHEN_VARIANTS}](\d{{3}})\b"
+)
+
+
+def _normalize_citations(text: str) -> str:
+    """
+    The model sometimes writes 【Source: X】 and non-breaking hyphens
+    (AAM‑POL‑015). Normalize to the [Source: ID] / AAM-POL-015 form the
+    UI, the Arabic translator, and the retrieved source ids all use.
+    """
+
+    text = text.replace("【", "[").replace("】", "]")
+
+    return _POLICY_ID_ODD_HYPHENS_RE.sub(r"AAM-POL-\1", text)
+
+
 def _extract_tokens(text: str) -> set[str]:
     """
     Tokenization used only for lexical relevance reranking.
@@ -338,7 +357,7 @@ def _filter_relevant_chunks(
     max_chunks: int = 3,
 ) -> list[dict]:
     """
-    Rank retrieved policy chunks and keep the strongest ones.
+    Keep the first retrieved chunks that pass a lexical relevance filter.
     """
 
     if not chunks:
@@ -361,13 +380,10 @@ def _filter_relevant_chunks(
 
         ranked_chunks.append(enriched_chunk)
 
-    ranked_chunks.sort(
-        key=lambda item: item[
-            "consultant_relevance_score"
-        ],
-        reverse=True,
-    )
-
+    # Keep the retriever's (hybrid dense + keyword) order and use the
+    # lexical score only as a filter. Sorting by it let generic words
+    # ("policy", "labor", "law") outrank the right article — e.g. the
+    # annual-leave policy beat LAW006 for an IBAN question.
     relevant_chunks = [
         chunk
         for chunk in ranked_chunks
@@ -376,9 +392,16 @@ def _filter_relevant_chunks(
         ] >= min_score
     ]
 
-    # Keep at least the strongest retrieved document.
+    # Keep at least the strongest retrieved document — but only if it
+    # shares any vocabulary with the question at all. A zero-overlap
+    # chunk is noise; returning [] lets the caller say the evidence is
+    # insufficient instead of stretching an unrelated rule.
     if not relevant_chunks:
-        return ranked_chunks[:1]
+        return [
+            chunk
+            for chunk in ranked_chunks[:1]
+            if chunk["consultant_relevance_score"] > 0
+        ]
 
     return relevant_chunks[:max_chunks]
 
@@ -836,7 +859,7 @@ Do not add citation tags such as [Source: ID].
         )
 
     return _safe_text(
-        recommendation
+        _normalize_citations(recommendation)
     )
 
 
@@ -887,9 +910,6 @@ class ConsultantAgent(BaseAgent):
                     ),
                 ),
                 trace=trace,
-                conflicts=[
-                    "invalid_input"
-                ],
             )
 
         raw_query = input.get("query", "")
@@ -925,9 +945,6 @@ class ConsultantAgent(BaseAgent):
                     ),
                 ),
                 trace=trace,
-                conflicts=[
-                    "missing_query"
-                ],
             )
 
         _add_trace(
@@ -988,9 +1005,6 @@ class ConsultantAgent(BaseAgent):
                     ),
                 ),
                 trace=trace,
-                conflicts=[
-                    "prompt_injection_detected"
-                ],
             )
 
         _add_trace(
@@ -1019,7 +1033,9 @@ class ConsultantAgent(BaseAgent):
 
             retrieved_chunks = retrieve(
                 query=query,
-                top_k=3,
+                # Over-fetch so the reranker below can actually choose
+                # the best 3; with top_k=3 it could only reorder.
+                top_k=8,
             )
 
         except Exception as exc:
@@ -1057,9 +1073,6 @@ class ConsultantAgent(BaseAgent):
                     retryable=True,
                 ),
                 trace=trace,
-                conflicts=[
-                    "retrieval_error"
-                ],
             )
 
         retrieval_duration = round(
@@ -1096,9 +1109,6 @@ class ConsultantAgent(BaseAgent):
                     ),
                 ),
                 trace=trace,
-                conflicts=[
-                    "no_matching_policy"
-                ],
             )
 
         _add_trace(
@@ -1158,9 +1168,6 @@ class ConsultantAgent(BaseAgent):
                     ),
                 ),
                 trace=trace,
-                conflicts=[
-                    "unsafe_retrieved_content"
-                ],
             )
 
         _add_trace(
@@ -1218,9 +1225,6 @@ class ConsultantAgent(BaseAgent):
                     ),
                 ),
                 trace=trace,
-                conflicts=[
-                    "no_relevant_policy"
-                ],
             )
 
         source_ids = [
@@ -1348,9 +1352,6 @@ class ConsultantAgent(BaseAgent):
                     retryable=True,
                 ),
                 trace=trace,
-                conflicts=[
-                    "generation_error"
-                ],
                 sources=sources,
                 policy_analysis=policy_analysis,
             )
@@ -1417,24 +1418,36 @@ class ConsultantAgent(BaseAgent):
                     ),
                 ),
                 trace=trace,
-                conflicts=[
-                    "consultant_output_validation_failed"
-                ],
                 sources=sources,
                 policy_analysis=policy_analysis,
             )
 
         if not output_is_valid:
 
-            conflicts.append(
-                "consultant_output_validation_failed"
-            )
-
             _add_trace(
                 trace,
                 phase="OBSERVE",
                 stage="OUTPUT_VALIDATION",
                 status=FAILED,
+            )
+
+            # An ungrounded answer is an error, not a policy conflict:
+            # `conflicts` is reserved for real law-vs-policy conflicts,
+            # and Manager reads `success`/`error` to decide whether to
+            # use the recommendation at all.
+            return _error_response(
+                recommendation=recommendation,
+                error=_build_error(
+                    error_type="ungrounded_output",
+                    stage="OUTPUT_VALIDATION",
+                    message=(
+                        "The generated Consultant output is not "
+                        "sufficiently supported by the retrieved evidence."
+                    ),
+                ),
+                trace=trace,
+                sources=sources,
+                policy_analysis=policy_analysis,
             )
 
         else:
