@@ -1,0 +1,7 @@
+id: WPS045
+category: Justifications
+topic: Employee response
+rule: The employee can review and respond to an employer justification
+conditions: When the employee is eligible to respond
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

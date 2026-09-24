@@ -1,0 +1,7 @@
+id: WPS055
+category: Upload workflow
+topic: Select establishment
+rule: The user selects the establishment for which the wage file will be uploaded
+conditions: User must have access to the establishment
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

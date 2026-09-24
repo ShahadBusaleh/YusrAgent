@@ -1,0 +1,7 @@
+id: WPS061
+category: Violations
+topic: Active violations
+rule: The platform can display active wage protection violations or observations
+conditions: When violations exist
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

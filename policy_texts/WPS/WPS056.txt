@@ -1,0 +1,7 @@
+id: WPS056
+category: Upload workflow
+topic: Select wage month
+rule: The user selects the wage month or relevant wage period
+conditions: Required before upload
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

@@ -1,0 +1,7 @@
+id: WPS057
+category: Upload workflow
+topic: Select wage type
+rule: The user selects the applicable wage type or payment classification
+conditions: According to the available options
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

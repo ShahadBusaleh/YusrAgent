@@ -1,0 +1,7 @@
+id: WPS016
+category: File format
+topic: Currency
+rule: The wage file identifies the currency used for wage amounts
+conditions: According to the supported file format
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

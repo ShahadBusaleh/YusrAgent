@@ -1,0 +1,7 @@
+id: WPS068
+category: Certificate
+topic: WPS certificate
+rule: The platform provides access to wage protection certificate services where applicable
+conditions: Eligible establishments
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

@@ -1,0 +1,7 @@
+id: WPS023
+category: Wage data
+topic: Employee name
+rule: The wage record identifies the employee
+conditions: For each wage record
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

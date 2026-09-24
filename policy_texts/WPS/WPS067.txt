@@ -1,0 +1,7 @@
+id: WPS067
+category: Roles
+topic: Branch employee
+rule: Authorized users may have access based on branch or establishment permissions
+conditions: Permissions must be assigned
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

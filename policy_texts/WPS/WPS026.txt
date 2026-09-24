@@ -1,0 +1,7 @@
+id: WPS026
+category: Wage data
+topic: Basic wage
+rule: The wage record includes the employee's basic wage
+conditions: For employees covered by wage protection
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

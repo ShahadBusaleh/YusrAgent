@@ -1,0 +1,7 @@
+id: WPS039
+category: Alerts
+topic: Basic wage missing
+rule: The system can flag records where the basic wage is missing or incomplete
+conditions: When required basic wage data is absent
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

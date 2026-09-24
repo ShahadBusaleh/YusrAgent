@@ -1,0 +1,7 @@
+id: WPS029
+category: Wage data
+topic: Total entitlements
+rule: The file records the employee's total wage entitlements
+conditions: Based on the applicable wage components
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

@@ -1,0 +1,7 @@
+id: WPS002
+category: General
+topic: Wage transparency
+rule: Wage records should reflect the actual amounts paid to employees
+conditions: Employees covered by the program
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

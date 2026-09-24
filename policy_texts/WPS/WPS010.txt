@@ -1,0 +1,7 @@
+id: WPS010
+category: File format
+topic: Wage period
+rule: The uploaded file is associated with a specific wage period
+conditions: Employer selects the relevant wage month or period
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

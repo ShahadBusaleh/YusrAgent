@@ -1,0 +1,7 @@
+id: WPS059
+category: Upload workflow
+topic: Submit file
+rule: The user uploads and submits the wage file for processing
+conditions: File must meet the required format
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad
