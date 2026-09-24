@@ -71,10 +71,52 @@ def _safe_profile(employee: dict) -> dict:
 
 
 def _contains_any(query: str, words: tuple[str, ...]) -> bool:
-    """Simple case-insensitive keyword matching."""
+    """Case-insensitive whole-word matching, so "late" doesn't fire on
+    "calculate" or "present" on "represent"."""
 
     query_lower = query.lower()
-    return any(word in query_lower for word in words)
+    return any(
+        re.search(rf"\b{re.escape(word)}\b", query_lower)
+        for word in words
+    )
+
+
+_EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
+_SAUDI_MOBILE_RE = re.compile(r"(?:05|\+9665|009665|9665)\d{8}")
+
+
+def _is_valid_email(value: str) -> bool:
+    return bool(_EMAIL_RE.fullmatch(value or ""))
+
+
+def _is_valid_saudi_mobile(value: str) -> bool:
+    return bool(_SAUDI_MOBILE_RE.fullmatch(value or ""))
+
+
+def _is_valid_saudi_iban(value: str) -> bool:
+    """SA + 22 digits with a valid ISO 13616 mod-97 checksum."""
+
+    if not re.fullmatch(r"SA\d{22}", value or ""):
+        return False
+
+    rearranged = value[4:] + value[:4]
+    numeric = "".join(
+        str(int(ch, 36)) for ch in rearranged
+    )
+    return int(numeric) % 97 == 1
+
+
+def _needs_information(
+    action_type: str,
+    missing: list[str],
+    note: str,
+) -> dict:
+    return {
+        "status": "NEEDS_INFORMATION",
+        "action_type": action_type,
+        "missing_information": missing,
+        "notes": [note],
+    }
 
 
 def _is_leave_query(query: str) -> bool:
@@ -343,14 +385,16 @@ def _extract_personal_info_new_value(
             return match.group(1)
 
     if field_name in {"address", "city"}:
+        # Anchor on the field word so "I want to update my address to X"
+        # captures X, not "update my address to X".
         match = re.search(
-            r"(?:to|as)\s+(.+)$",
+            rf"\b{field_name}\b.*?\b(?:to|as)\s+(.+)$",
             query,
             re.IGNORECASE,
         )
 
         if match:
-            return match.group(1).strip()
+            return match.group(1).strip().rstrip(".")
 
     return None
 
@@ -680,7 +724,9 @@ class HRAgent(BaseAgent):
             # payroll is a separate HR-manager-only PDF export, not chat.
             # -------------------------------------------------
 
-            if _is_payroll_query(query):
+            # "salary certificate" is a certificate request, not a payroll
+            # lookup.
+            if _is_payroll_query(query) and not _is_certificate_request(query):
                 period = _extract_period(query)
 
                 if period:
@@ -801,17 +847,49 @@ class HRAgent(BaseAgent):
                     query
                 )
 
+                field_label = {
+                    "mobile": "mobile number",
+                    "email": "email address",
+                    "address": "address",
+                    "city": "city",
+                }.get(field_name or "", "field")
+
+                new_value = (
+                    _extract_personal_info_new_value(query, field_name)
+                    if field_name
+                    else None
+                )
+
                 if field_name is None:
-                    facts["request_assessment"] = {
-                        "status": "NEEDS_INFORMATION",
-                        "missing_information": [
-                            "field_name"
-                        ],
-                        "notes": [
-                            "Specify whether you want to update "
-                            "your mobile, email, address, or city."
-                        ],
-                    }
+                    facts["request_assessment"] = _needs_information(
+                        "personal_info_update",
+                        ["field_name"],
+                        "Specify whether you want to update "
+                        "your mobile, email, address, or city.",
+                    )
+
+                elif not new_value:
+                    facts["request_assessment"] = _needs_information(
+                        "personal_info_update",
+                        ["new_value"],
+                        f"Please include your new {field_label} "
+                        f'(e.g. "update my {field_label} to ...").',
+                    )
+
+                elif field_name == "email" and not _is_valid_email(new_value):
+                    facts["request_assessment"] = _needs_information(
+                        "personal_info_update",
+                        ["new_value"],
+                        f'"{new_value}" is not a valid email address.',
+                    )
+
+                elif field_name == "mobile" and not _is_valid_saudi_mobile(new_value):
+                    facts["request_assessment"] = _needs_information(
+                        "personal_info_update",
+                        ["new_value"],
+                        "That is not a valid Saudi mobile number. "
+                        "Use the format 05XXXXXXXX or +9665XXXXXXXX.",
+                    )
 
                 else:
                     old_value = (
@@ -820,39 +898,22 @@ class HRAgent(BaseAgent):
                         else None
                     )
 
-                    new_value = _extract_personal_info_new_value(
-                        query,
-                        field_name,
-                    )
+                    facts["request_assessment"] = {
+                        "status": "READY_FOR_APPROVAL",
+                        "action_type": "personal_info_update",
+                        "missing_information": [],
+                        "notes": [],
+                    }
 
-                    if not new_value:
-                        facts["request_assessment"] = {
-                            "status": "NEEDS_INFORMATION",
-                            "missing_information": [
-                                "new_value"
-                            ],
-                            "notes": [
-                                f"Provide the new value for "
-                                f"{field_name}."
-                            ],
-                        }
-
-                    else:
-                        facts["request_assessment"] = {
-                            "status": "READY_FOR_APPROVAL",
-                            "missing_information": [],
-                            "notes": [],
-                        }
-
-                        proposed_action = {
-                            "action_type": "personal_info_update",
-                            "payload": {
-                                "employee_id": employee_id,
-                                "field_name": field_name,
-                                "old_value": old_value,
-                                "new_value": new_value,
-                            },
-                        }
+                    proposed_action = {
+                        "action_type": "personal_info_update",
+                        "payload": {
+                            "employee_id": employee_id,
+                            "field_name": field_name,
+                            "old_value": old_value,
+                            "new_value": new_value,
+                        },
+                    }
 
             # -------------------------------------------------
             # Bank / IBAN update
@@ -879,34 +940,29 @@ class HRAgent(BaseAgent):
 
                 new_iban = _extract_new_iban(query)
 
+                # No proposed_action until we have a real IBAN — an
+                # incomplete one used to be submitted as "None" -> "None".
                 if not new_iban:
-                    facts["request_assessment"] = {
-                        "status": "NEEDS_INFORMATION",
-                        "missing_information": [
-                            "new_iban"
-                        ],
-                        "notes": [
-                            "Provide a valid Saudi IBAN to prepare "
-                            "the bank-change request."
-                        ],
-                    }
+                    facts["request_assessment"] = _needs_information(
+                        "bank_update",
+                        ["new_iban"],
+                        "Please include your new Saudi IBAN "
+                        "(SA followed by 22 digits) to prepare "
+                        "the bank-change request.",
+                    )
 
-                    proposed_action = {
-                        "action_type": "bank_update",
-                        "payload": {
-                            "employee_id": employee_id,
-                            "change_type": "iban_update",
-                            "old_bank_code": old_bank_code,
-                            "old_iban": old_iban,
-                            "new_bank_code": None,
-                            "new_bank_name": None,
-                            "new_iban": None,
-                        },
-                    }
+                elif not _is_valid_saudi_iban(new_iban):
+                    facts["request_assessment"] = _needs_information(
+                        "bank_update",
+                        ["new_iban"],
+                        "That IBAN fails the checksum. Please "
+                        "double-check it and send it again.",
+                    )
 
                 else:
                     facts["request_assessment"] = {
                         "status": "READY_FOR_APPROVAL",
+                        "action_type": "bank_update",
                         "missing_information": [],
                         "notes": [],
                     }
@@ -944,6 +1000,7 @@ class HRAgent(BaseAgent):
 
                 facts["request_assessment"] = {
                     "status": "READY_FOR_APPROVAL",
+                    "action_type": "certificate_request",
                     "missing_information": [],
                     "notes": [],
                 }
@@ -967,15 +1024,13 @@ class HRAgent(BaseAgent):
                 ]
 
                 if missing:
-                    facts["request_assessment"] = {
-                        "status": "NEEDS_INFORMATION",
-                        "missing_information": missing,
-                        "notes": [
-                            "Provide the missing leave details "
-                            "(type, start date, end date) "
-                            "to submit the request."
-                        ],
-                    }
+                    facts["request_assessment"] = _needs_information(
+                        "leave_request",
+                        missing,
+                        "Provide the missing leave details "
+                        "(type, start date, end date) "
+                        "to submit the request.",
+                    )
 
                 else:
                     leave_type = extracted["leave_type"]
@@ -1033,6 +1088,13 @@ class HRAgent(BaseAgent):
 
         finally:
             conn.close()
+
+        # Never hand Manager an action while something is still missing
+        # (e.g. a certificate matched earlier, then a leave request in the
+        # same message lacked dates).
+        assessment = facts.get("request_assessment") or {}
+        if assessment.get("status") in {"NEEDS_INFORMATION", "NOT_AUTHORIZED"}:
+            proposed_action = None
 
         return {
             "facts": facts,
