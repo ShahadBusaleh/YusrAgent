@@ -1,0 +1,7 @@
+id: WPS043
+category: File correction
+topic: Allowances and deductions
+rule: Employers can correct applicable allowances or deductions in wage records
+conditions: Subject to applicable rules
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

@@ -2232,6 +2232,7 @@ def detail_card(pairs: list[tuple[str, object]]) -> None:
 
 _LAW_SOURCE_RE = re.compile(r"^Saudi Labor Law\s*—\s*Article\s+(\S+):\s*(.*)$")
 _POLICY_SOURCE_RE = re.compile(r"^Internal Policy\s*—\s*Section\s+(\S+):\s*(.*)$")
+_SOURCE_ID_RE = re.compile(r"\bid:\s*[A-Z0-9_-]+\s*", re.IGNORECASE)
 
 
 def _source_title(display_name: str) -> str:
@@ -2245,6 +2246,12 @@ def _source_title(display_name: str) -> str:
     return display_name or i18n.t("sources.generic_title")
 
 
+def _clean_source_text(text: str) -> str:
+    """Strip stray "id: XXX" fragments (raw record ids that sometimes leak
+    into agent-produced source text) before the text is shown to a user."""
+    return _SOURCE_ID_RE.sub("", text or "").strip()
+
+
 def _source_rule(text: str) -> str:
     for line in (text or "").splitlines():
         line = line.strip()
@@ -2256,9 +2263,10 @@ def _source_rule(text: str) -> str:
 def render_sources(sources: list, *, key: str = "src") -> None:
     """`sources` items are either a plain string (an HR-data reference like
     "leave_balances:EMP-0002" — no title/text to show, rendered as a small
-    id chip) or a dict from the agent (id/display_name/text/source_table/
-    filename/score/relevance_score — only display_name and text are ever
-    shown)."""
+    id chip) or a dict from the agent (id/display_name/source_name/text/
+    source_table/filename/score/relevance_score — only display_name (or
+    source_name as a fallback) and text are ever shown; any stray "id: XXX"
+    fragment is stripped from the text first)."""
     if not sources:
         return
 
@@ -2270,8 +2278,8 @@ def render_sources(sources: list, *, key: str = "src") -> None:
         st.markdown(f'<div class="yz-source-row">{chips}</div>', unsafe_allow_html=True)
 
     for i, source in enumerate(dict_sources):
-        text = str(source.get("text") or "")
-        title = _source_title(str(source.get("display_name") or ""))
+        text = _clean_source_text(str(source.get("text") or ""))
+        title = _source_title(str(source.get("display_name") or source.get("source_name") or ""))
         rule = _source_rule(text)
         rule_html = (
             f'<div class="dt-source-rule">'

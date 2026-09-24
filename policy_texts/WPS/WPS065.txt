@@ -1,0 +1,7 @@
+id: WPS065
+category: Proactive justification
+topic: Employee selection
+rule: The employer can select the relevant employee when providing a proactive justification
+conditions: Where applicable
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

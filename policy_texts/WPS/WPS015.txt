@@ -1,0 +1,7 @@
+id: WPS015
+category: File format
+topic: BANK-ACC
+rule: The wage file contains the relevant bank account information
+conditions: Required according to the file format
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

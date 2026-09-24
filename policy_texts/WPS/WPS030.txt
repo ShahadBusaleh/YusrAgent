@@ -1,0 +1,7 @@
+id: WPS030
+category: Wage data
+topic: Employee ID
+rule: The wage record contains the employee identifier
+conditions: For each covered employee
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

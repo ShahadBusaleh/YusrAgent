@@ -574,13 +574,74 @@ def _render_approval_review(row: dict, names: dict, proposals: dict) -> None:
                 _decide(approval_id, "reject", note, person, cover_employee_id)
 
 
+_POLICY_HEADING_STOP_WORDS = {"summary", "key points", "citations", "policy sources", "request details"}
+_POLICY_SUBSECTION_RE = re.compile(
+    r"^[-•]?\s*[^:–—]+\s*[-–—]\s*(Rule|Process|Conditions|Eligibility)",
+    re.IGNORECASE,
+)
+_POLICY_HEADING_RE = re.compile(r"^#{1,6}\s*")
+_MANAGER_RECOMMENDATION_KEYWORDS = ("MANAGER REVIEW", "APPROVE", "REJECT")
+_MANAGER_RECOMMENDATION_RE = re.compile(
+    r"\b(" + "|".join(_MANAGER_RECOMMENDATION_KEYWORDS) + r")\b", re.IGNORECASE
+)
+
+
+def _clean_policy_summary(policy_text: str, max_sentences: int = 4) -> str:
+    """Trim a real LLM-generated policy recommendation to a short, clean
+    summary — strips markdown bold/headings, tables, source-reference
+    lines, and per-clause "Rule/Process/Conditions" subsection lines, then
+    keeps only the first few complete sentences. Merged in from a
+    teammate's fix on main (real LLM prose can run long and noisy); the
+    raw text is still fully available via styles.render_sources()'s "Show
+    full text" expander for the policy sources themselves — this only
+    trims the one-line recommendation summary."""
+    clean = policy_text.replace(r"\*\*", "").replace("**", "")
+    lines: list[str] = []
+    for line in clean.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        line = _POLICY_HEADING_RE.sub("", line)
+        if line.lower() in _POLICY_HEADING_STOP_WORDS:
+            break
+        if line.startswith("|"):
+            continue
+        if line.startswith("[Source:") or line.startswith("- Reference:"):
+            continue
+        if _POLICY_SUBSECTION_RE.match(line):
+            continue
+        lines.append(line)
+    clean_policy = " ".join(lines)
+    sentences = re.split(r"(?<=[.!?])\s+", clean_policy)
+    return " ".join(s.strip() for s in sentences[:max_sentences] if s.strip())
+
+
+def _extract_manager_recommendation(manager_response: str) -> tuple[str | None, str]:
+    """Pull an APPROVE/REJECT/MANAGER REVIEW keyword out of the manager
+    agent's free-text response for a prominent heading, returning it
+    alongside the remaining explanation with that keyword stripped.
+    Merged in from a teammate's fix on main — reworked from a plain
+    substring check to a word-boundary regex, since the original matched
+    "APPROVE" inside "0 approved, 2 denied" (a real historical-precedent
+    line) and misreported a MANAGER REVIEW case as APPROVE."""
+    match = _MANAGER_RECOMMENDATION_RE.search(manager_response)
+    if not match:
+        return None, manager_response
+    recommendation = match.group(1).upper()
+    explanation = (manager_response[: match.start()] + manager_response[match.end() :]).strip(" :-\n")
+    return recommendation, explanation
+
+
 def _render_decision_brief(decision_brief: dict, approval_id: str) -> None:
     st.markdown(f"### {i18n.t('inbox.decision_brief')}")
-    st.caption(f"Action: {decision_brief.get('action_type') or '—'}")
 
-    risk = decision_brief.get("risk_level")
-    if risk:
-        st.caption(f"Risk level: {risk}")
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown(f"**{i18n.t('inbox.action')}**")
+        st.write(str(decision_brief.get("action_type") or "—").replace("_", " ").title())
+    with col_b:
+        st.markdown(f"**{i18n.t('inbox.risk')}**")
+        st.write(str(decision_brief.get("risk_level") or "—").upper())
 
     precedent = decision_brief.get("historical_precedent")
     if precedent:
@@ -597,15 +658,20 @@ def _render_decision_brief(decision_brief: dict, approval_id: str) -> None:
     recommendation = str(policy.get("recommendation") or "").strip()
     if recommendation:
         st.markdown(f"**{i18n.t('inbox.policy')}**")
-        st.write(recommendation)
+        st.write(_clean_policy_summary(recommendation))
 
     styles.render_sources(policy.get("sources") or [], key=f"brief_{approval_id}")
 
     manager = decision_brief.get("manager") or {}
     manager_response = str(manager.get("response") or "").strip()
     if manager_response:
-        st.markdown(f"**{i18n.t('inbox.manager_assessment')}**")
-        st.write(manager_response)
+        st.markdown(f"**{i18n.t('inbox.ai_recommendation')}**")
+        keyword, explanation = _extract_manager_recommendation(manager_response)
+        if keyword:
+            st.markdown(f"#### {keyword}")
+        if explanation:
+            st.caption(i18n.t("inbox.reason"))
+            st.write(explanation)
 
     reasons = manager.get("reasons") or []
     if reasons:
@@ -1161,136 +1227,6 @@ def page_audit() -> None:
         key="audit",
         empty_message=i18n.t("audit.empty"),
     )
-
-
-def page_employees() -> None:
-    """HR manager: look someone up, open a profile, fix low-risk contact
-    fields. Restored per the most recent PAGES_BY_ROLE that had it
-    (`git show 20ffe15^:app/ui/streamlit_app.py` — hr_manager only, before
-    "Remove employees page"); real GET /employees, GET/PATCH
-    /employees/{id}, unchanged — only the UI chrome (data_table instead of
-    st.dataframe, detail_card instead of the old Field/Value table) is new.
-    """
-    st.markdown(
-        f"""
-        <div class="yz-chat-header">
-          <div class="yz-chat-title">{html.escape(i18n.t("employees.title"))}</div>
-          <div class="yz-chat-subtitle">{html.escape(i18n.t("employees.subtitle"))}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    q = st.text_input(i18n.t("employees.search_label"), placeholder=i18n.t("employees.search_placeholder"))
-    try:
-        rows = api.raise_for_api(api.request("GET", "/employees", params={"q": q} if q else {})) or []
-    except RuntimeError as exc:
-        st.error(str(exc))
-        return
-
-    styles.data_table(
-        [
-            {
-                "employee_id": r.get("employee_id") or "—",
-                "full_name": r.get("full_name") or "—",
-                "job_title": r.get("job_title") or "—",
-                "department_name": r.get("department_name") or "—",
-                "employment_status": str(r.get("employment_status") or "").title() or "—",
-                "email": r.get("email") or "—",
-                "mobile": r.get("mobile") or "—",
-            }
-            for r in rows
-        ],
-        [
-            ("employee_id", i18n.t("employees.col_id")),
-            ("full_name", i18n.t("employees.col_name")),
-            ("job_title", i18n.t("employees.col_title")),
-            ("department_name", i18n.t("employees.col_department")),
-            ("employment_status", i18n.t("employees.col_status")),
-            ("email", i18n.t("employees.col_email")),
-            ("mobile", i18n.t("employees.col_mobile")),
-        ],
-        key="employees",
-        empty_message=i18n.t("employees.empty"),
-    )
-
-    employee_id = st.text_input(i18n.t("employees.view_label"))
-    if not employee_id:
-        return
-    try:
-        detail = api.raise_for_api(api.request("GET", f"/employees/{employee_id}"))
-    except RuntimeError as exc:
-        st.error(str(exc))
-        return
-    if not isinstance(detail, dict):
-        return
-
-    st.markdown(f"#### {html.escape(str(detail.get('full_name') or detail.get('employee_id') or ''))}")
-    st.caption(
-        " · ".join(
-            part
-            for part in (
-                detail.get("job_title"),
-                detail.get("department_name"),
-                str(detail.get("employment_status") or "").title() or None,
-            )
-            if part
-        )
-    )
-
-    with st.expander(i18n.t("employees.profile_details"), expanded=True):
-        st.caption(i18n.t("employees.contact_section"))
-        styles.detail_card(
-            [
-                (i18n.t("employees.field_email"), detail.get("email")),
-                (i18n.t("employees.field_mobile"), detail.get("mobile")),
-                (i18n.t("employees.field_city"), detail.get("city")),
-                (i18n.t("employees.field_address"), detail.get("address")),
-            ]
-        )
-        st.caption(i18n.t("employees.employment_section"))
-        yes = i18n.t("common.yes")
-        no = i18n.t("common.no")
-        styles.detail_card(
-            [
-                (i18n.t("employees.field_employee_id"), detail.get("employee_id")),
-                (i18n.t("employees.field_hire_date"), _friendly_when(detail.get("hire_date")) or detail.get("hire_date")),
-                (i18n.t("employees.field_manager"), detail.get("manager_id")),
-                (i18n.t("employees.field_nationality"), detail.get("nationality")),
-                (i18n.t("employees.field_hr_approver"), yes if detail.get("is_hr_approver") else no),
-            ]
-        )
-        if detail.get("bank_name") or detail.get("iban") or detail.get("basic_salary"):
-            st.caption(i18n.t("employees.compensation_section"))
-            styles.detail_card(
-                [
-                    (i18n.t("employees.field_basic_salary"), detail.get("basic_salary")),
-                    (i18n.t("employees.field_housing"), detail.get("housing_allowance")),
-                    (i18n.t("employees.field_bank"), detail.get("bank_name")),
-                    (i18n.t("employees.field_bank_code"), detail.get("bank_code")),
-                    (i18n.t("employees.field_iban"), detail.get("iban")),
-                ]
-            )
-
-    with st.form("profile_update"):
-        c1, c2 = st.columns(2)
-        mobile = c1.text_input(i18n.t("employees.field_mobile"), value=detail.get("mobile") or "")
-        email = c2.text_input(i18n.t("employees.field_email"), value=detail.get("email") or "")
-        city = c1.text_input(i18n.t("employees.field_city"), value=detail.get("city") or "")
-        address = c2.text_input(i18n.t("employees.field_address"), value=detail.get("address") or "")
-        save = st.form_submit_button(i18n.t("employees.save_button"), type="primary")
-    if save:
-        resp = api.request(
-            "PATCH",
-            f"/employees/{employee_id}",
-            json={"mobile": mobile, "email": email, "city": city, "address": address},
-        )
-        try:
-            api.raise_for_api(resp)
-            st.success(i18n.t("employees.saved"))
-            st.rerun()
-        except RuntimeError as exc:
-            st.error(str(exc))
 
 
 def page_payroll() -> None:

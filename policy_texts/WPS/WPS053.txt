@@ -1,0 +1,7 @@
+id: WPS053
+category: Dashboard
+topic: Compliance information
+rule: The dashboard displays wage protection compliance information for the establishment
+conditions: After relevant wage data is processed
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

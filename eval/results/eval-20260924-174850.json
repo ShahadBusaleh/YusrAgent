@@ -1,0 +1,50 @@
+[
+  {
+    "id": "m-04",
+    "owner": "manager",
+    "target": "manager",
+    "query": "I want to take annual leave from 2026-12-20 to 2026-12-22",
+    "outcome": "PASS",
+    "known_issue": null,
+    "failures": [],
+    "error": null,
+    "latency_ms": 46.2,
+    "output": {
+      "decision": "PASS",
+      "reasons": [],
+      "response": "Remaining leave balance: 17 days.\n\nLeave request for EMP-0002: annual 2026-12-20→2026-12-22 (3.0 days). Cover: none suggested.\n\nYour request has been submitted for approval (proposal PA00017)."
+    }
+  },
+  {
+    "id": "m-05",
+    "owner": "manager",
+    "target": "manager",
+    "query": "Please change my IBAN",
+    "outcome": "FIXED",
+    "known_issue": "M4",
+    "failures": [],
+    "error": null,
+    "latency_ms": 0.1,
+    "output": {
+      "decision": "PASS",
+      "reasons": [],
+      "response": "I need a bit more information to prepare this request. Please include your new IBAN."
+    }
+  },
+  {
+    "id": "m-06",
+    "owner": "manager",
+    "target": "manager",
+    "query": "Update my email to rana.new@example.com",
+    "outcome": "FIXED",
+    "known_issue": "M1",
+    "failures": [],
+    "error": null,
+    "latency_ms": 5.8,
+    "output": {
+      "decision": "PASS",
+      "reasons": [],
+      "response": "Personal info update for EMP-0002: email \"None\" → \"[EMAIL]\".\n\nYour change has been recorded and auto-approved as a low-risk update (proposal PA00017)."
+    }
+  }
+]

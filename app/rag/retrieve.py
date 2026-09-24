@@ -12,14 +12,15 @@ from app.rag.embeddings import embed_text
 def _hit_to_chunk(hit) -> dict:
     payload = hit.payload or {}
 
-    return {
-        "id": payload.get("id"),
-        "source_table": payload.get("source_table"),
-        "filename": payload.get("filename"),
-        "text": payload.get("text"),
-        "score": float(getattr(hit, "score", 0.0) or 0.0),
-    }
 
+    return {
+    "id": payload.get("id"),
+    "source_table": payload.get("source_table"),
+    "source_name": payload.get("source_name"),
+    "filename": payload.get("filename"),
+    "text": payload.get("text"),
+    "score": float(getattr(hit, "score", 0.0) or 0.0),
+}
 
 def retrieve(query: str, top_k: int = 5) -> list[dict]:
     """Hybrid-ish search: dense vectors plus keyword search."""

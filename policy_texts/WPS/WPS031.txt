@@ -1,0 +1,7 @@
+id: WPS031
+category: Processing
+topic: File validation
+rule: Uploaded files are validated against the required file format and data rules
+conditions: After upload
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

@@ -1,0 +1,7 @@
+id: WPS017
+category: File format
+topic: Value date
+rule: The file records the value date associated with the wage transaction
+conditions: Required according to the file specification
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

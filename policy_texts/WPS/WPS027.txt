@@ -1,0 +1,7 @@
+id: WPS027
+category: Wage data
+topic: Housing allowance
+rule: Housing allowance may be included as part of the employee's wage components
+conditions: When applicable to the employee
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

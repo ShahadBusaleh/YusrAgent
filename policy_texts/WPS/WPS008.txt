@@ -1,0 +1,7 @@
+id: WPS008
+category: Compliance
+topic: Excluded workers
+rule: Certain workers may be excluded from wage protection calculations according to program rules
+conditions: Only workers meeting the applicable exclusion conditions
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

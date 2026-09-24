@@ -1,0 +1,7 @@
+id: WPS037
+category: Alerts
+topic: Late wage history
+rule: The system can identify records indicating delayed wage payments
+conditions: Based on wage payment history
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

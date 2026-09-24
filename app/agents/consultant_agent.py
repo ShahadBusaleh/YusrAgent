@@ -218,6 +218,25 @@ def _safe_text(value: Any) -> str:
     return mask_pii(str(value))
 
 
+_HYPHEN_VARIANTS = "‐‑‒–—−"
+
+_POLICY_ID_ODD_HYPHENS_RE = re.compile(
+    rf"\bAAM[{_HYPHEN_VARIANTS}]POL[{_HYPHEN_VARIANTS}](\d{{3}})\b"
+)
+
+
+def _normalize_citations(text: str) -> str:
+    """
+    The model sometimes writes 【Source: X】 and non-breaking hyphens
+    (AAM‑POL‑015). Normalize to the [Source: ID] / AAM-POL-015 form the
+    UI, the Arabic translator, and the retrieved source ids all use.
+    """
+
+    text = text.replace("【", "[").replace("】", "]")
+
+    return _POLICY_ID_ODD_HYPHENS_RE.sub(r"AAM-POL-\1", text)
+
+
 def _extract_tokens(text: str) -> set[str]:
     """
     Tokenization used only for lexical relevance reranking.
@@ -338,7 +357,7 @@ def _filter_relevant_chunks(
     max_chunks: int = 3,
 ) -> list[dict]:
     """
-    Rank retrieved policy chunks and keep the strongest ones.
+    Keep the first retrieved chunks that pass a lexical relevance filter.
     """
 
     if not chunks:
@@ -361,13 +380,10 @@ def _filter_relevant_chunks(
 
         ranked_chunks.append(enriched_chunk)
 
-    ranked_chunks.sort(
-        key=lambda item: item[
-            "consultant_relevance_score"
-        ],
-        reverse=True,
-    )
-
+    # Keep the retriever's (hybrid dense + keyword) order and use the
+    # lexical score only as a filter. Sorting by it let generic words
+    # ("policy", "labor", "law") outrank the right article — e.g. the
+    # annual-leave policy beat LAW006 for an IBAN question.
     relevant_chunks = [
         chunk
         for chunk in ranked_chunks
@@ -376,9 +392,16 @@ def _filter_relevant_chunks(
         ] >= min_score
     ]
 
-    # Keep at least the strongest retrieved document.
+    # Keep at least the strongest retrieved document — but only if it
+    # shares any vocabulary with the question at all. A zero-overlap
+    # chunk is noise; returning [] lets the caller say the evidence is
+    # insufficient instead of stretching an unrelated rule.
     if not relevant_chunks:
-        return ranked_chunks[:1]
+        return [
+            chunk
+            for chunk in ranked_chunks[:1]
+            if chunk["consultant_relevance_score"] > 0
+        ]
 
     return relevant_chunks[:max_chunks]
 
@@ -522,8 +545,8 @@ def _build_sources(
 
         # Saudi Labor Law
         article_match = re.search(
-            r"Article:\s*([^\s]+).*?"
-            r"(?:Title|Name):\s*(.*?)(?=\s+(?:Section|Purpose|Rule|Conditions|$))",
+            r"Article:\s*([^\n]+)\s*"
+            r"Title:\s*([^\n]+)",
             source_text,
             flags=re.IGNORECASE,
         )
@@ -538,27 +561,28 @@ def _build_sources(
             )
 
         # Internal company policy
+        # Internal company policy
         if not display_name:
-            section_match = re.search(
-                r"Section:\s*([^\s]+).*?"
-                r"Policy Name:\s*(.*?)(?=\s+(?:Purpose|Rule|Conditions|$))",
+            policy_match = re.search(
+                r"Policy Name:\s*([^\n]+)",
                 source_text,
                 flags=re.IGNORECASE,
             )
 
-            if section_match:
-                section = section_match.group(1).strip()
-                policy_name = section_match.group(2).strip()
+            if policy_match:
+                policy_name = policy_match.group(1).strip()
 
                 display_name = (
-                    f"Internal Policy — "
-                    f"Section {section}: {policy_name}"
+                    f"Company Policies — "
+                    f"{policy_name}"
                 )
 
         # Generic fallback
+        # Generic source name from RAG metadata
         if not display_name:
             display_name = (
-                chunk.get("filename")
+                chunk.get("source_name")
+                or chunk.get("filename")
                 or "Policy source"
             )
 
@@ -590,15 +614,11 @@ def _format_context(
 
     for chunk in chunks:
 
-        source_id = (
-            chunk.get("id")
-            or "UNKNOWN"
-        )
-
-        source_table = (
-            chunk.get("source_table")
-            or "unknown"
-        )
+        source_name = (
+        chunk.get("source_name")
+        or chunk.get("source_table")
+        or "Policy source"
+    )
 
         text = _safe_text(
             chunk.get(
@@ -608,8 +628,7 @@ def _format_context(
         )
 
         parts.append(
-            f"[Source: {source_id}]\n"
-            f"Source type: {source_table}\n"
+            f"Source: {source_name}\n"
             f"{text}"
         )
 
@@ -698,9 +717,8 @@ STRICT RULES:
     clearly say that the available policy evidence
     is insufficient.
 
-16. Cite relevant evidence using:
-
-    [Source: SOURCE_ID]
+16. Use human-readable source names only.
+17. Do not add citation tags such as [Source: ID].
 
 17. Keep the response concise and professional.
 
@@ -712,16 +730,17 @@ STRICT RULES:
 20. The Consultant must remain independent from
     the HR Agent.
 
-21. When the retrieved evidence contains a Law ID or Article number,
-    explicitly mention it in the answer.
+21. When the retrieved evidence contains an Article number,
+    you may mention the Article number when relevant.
 
-22. Prefer this format when applicable:
-    "According to Article X (Law ID: LAWXXX), ..."
+22. Never mention, expose, or reproduce internal source IDs,
+    Law IDs, record IDs, filenames, or source identifiers
+    in the user-facing response.
 
-23. Connect each policy rule to its corresponding Article or Law ID.
+23. Use human-readable source names instead of internal identifiers.
 
-24. Do not invent an Article number or Law ID.
-    Only mention identifiers explicitly present in the retrieved evidence.
+24. Internal identifiers may be used only for system validation,
+    source linking, and internal processing.
 
 GRIEVANCE HANDLING:
 
@@ -738,10 +757,11 @@ When the user request is a grievance or complaint:
 
 3. Identify the relevant:
    - Article
-   - Law ID
    - Company policy
    when available in the retrieved evidence.
 
+4. Never expose Law IDs or other internal source identifiers
+   to the user.
 4. Provide:
    - policy/legal analysis
    - supporting evidence
@@ -790,14 +810,13 @@ Explain the relevant:
 - Requirements
 - Exceptions
 
-For each relevant policy rule, include the corresponding
-Article number and Law ID when they are available in the evidence.
+For each relevant policy rule, mention the Article number
+when it is relevant and available.
 
-Use the format:
+Never mention Law IDs, internal source IDs, record IDs,
+filenames, or other internal identifiers.
 
-According to Article X (Law ID: LAWXXX), ...
-
-Do not invent or infer legal identifiers.
+Use human-readable source names only.
 
 Do NOT evaluate any specific employee.
 
@@ -807,9 +826,8 @@ Do NOT calculate leave balances.
 
 Do NOT determine eligibility.
 
-Cite relevant sources using:
-
-[Source: SOURCE_ID]
+Use human-readable source names only.
+Do not add citation tags such as [Source: ID].
 """.strip()
 
     response = client.chat.completions.create(
@@ -841,7 +859,7 @@ Cite relevant sources using:
         )
 
     return _safe_text(
-        recommendation
+        _normalize_citations(recommendation)
     )
 
 
@@ -892,9 +910,6 @@ class ConsultantAgent(BaseAgent):
                     ),
                 ),
                 trace=trace,
-                conflicts=[
-                    "invalid_input"
-                ],
             )
 
         raw_query = input.get("query", "")
@@ -930,9 +945,6 @@ class ConsultantAgent(BaseAgent):
                     ),
                 ),
                 trace=trace,
-                conflicts=[
-                    "missing_query"
-                ],
             )
 
         _add_trace(
@@ -993,9 +1005,6 @@ class ConsultantAgent(BaseAgent):
                     ),
                 ),
                 trace=trace,
-                conflicts=[
-                    "prompt_injection_detected"
-                ],
             )
 
         _add_trace(
@@ -1024,7 +1033,9 @@ class ConsultantAgent(BaseAgent):
 
             retrieved_chunks = retrieve(
                 query=query,
-                top_k=3,
+                # Over-fetch so the reranker below can actually choose
+                # the best 3; with top_k=3 it could only reorder.
+                top_k=8,
             )
 
         except Exception as exc:
@@ -1062,9 +1073,6 @@ class ConsultantAgent(BaseAgent):
                     retryable=True,
                 ),
                 trace=trace,
-                conflicts=[
-                    "retrieval_error"
-                ],
             )
 
         retrieval_duration = round(
@@ -1101,9 +1109,6 @@ class ConsultantAgent(BaseAgent):
                     ),
                 ),
                 trace=trace,
-                conflicts=[
-                    "no_matching_policy"
-                ],
             )
 
         _add_trace(
@@ -1163,9 +1168,6 @@ class ConsultantAgent(BaseAgent):
                     ),
                 ),
                 trace=trace,
-                conflicts=[
-                    "unsafe_retrieved_content"
-                ],
             )
 
         _add_trace(
@@ -1223,9 +1225,6 @@ class ConsultantAgent(BaseAgent):
                     ),
                 ),
                 trace=trace,
-                conflicts=[
-                    "no_relevant_policy"
-                ],
             )
 
         source_ids = [
@@ -1353,9 +1352,6 @@ class ConsultantAgent(BaseAgent):
                     retryable=True,
                 ),
                 trace=trace,
-                conflicts=[
-                    "generation_error"
-                ],
                 sources=sources,
                 policy_analysis=policy_analysis,
             )
@@ -1422,24 +1418,36 @@ class ConsultantAgent(BaseAgent):
                     ),
                 ),
                 trace=trace,
-                conflicts=[
-                    "consultant_output_validation_failed"
-                ],
                 sources=sources,
                 policy_analysis=policy_analysis,
             )
 
         if not output_is_valid:
 
-            conflicts.append(
-                "consultant_output_validation_failed"
-            )
-
             _add_trace(
                 trace,
                 phase="OBSERVE",
                 stage="OUTPUT_VALIDATION",
                 status=FAILED,
+            )
+
+            # An ungrounded answer is an error, not a policy conflict:
+            # `conflicts` is reserved for real law-vs-policy conflicts,
+            # and Manager reads `success`/`error` to decide whether to
+            # use the recommendation at all.
+            return _error_response(
+                recommendation=recommendation,
+                error=_build_error(
+                    error_type="ungrounded_output",
+                    stage="OUTPUT_VALIDATION",
+                    message=(
+                        "The generated Consultant output is not "
+                        "sufficiently supported by the retrieved evidence."
+                    ),
+                ),
+                trace=trace,
+                sources=sources,
+                policy_analysis=policy_analysis,
             )
 
         else:

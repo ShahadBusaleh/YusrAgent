@@ -1,0 +1,7 @@
+id: WPS044
+category: Justifications
+topic: Employer justification
+rule: The employer can provide a justification for certain wage protection observations or violations
+conditions: When the system allows justification
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

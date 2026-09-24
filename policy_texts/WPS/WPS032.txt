@@ -1,0 +1,7 @@
+id: WPS032
+category: Processing
+topic: Invalid data
+rule: Invalid or incomplete wage data may cause the file or record to be rejected or flagged
+conditions: Data does not meet validation requirements
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

@@ -1,0 +1,7 @@
+id: WPS062
+category: Violations
+topic: Violation details
+rule: The user can view details associated with a wage protection violation
+conditions: Authorized users
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

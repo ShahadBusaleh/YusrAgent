@@ -15,8 +15,13 @@ POLICY_ROOT = ROOT / "policy_texts"
 SOURCE_DIRS = {
     "company_policies": POLICY_ROOT / "company_policies",
     "saudi_labor_law": POLICY_ROOT / "saudi_labor_law",
+    "wps": POLICY_ROOT / "WPS",
 }
-
+SOURCE_NAMES = {
+    "company_policies": "Company Policies",
+    "saudi_labor_law": "Saudi Labor Law",
+    "wps": "Wage Protection System (WPS) / Mudad",
+}
 
 def _point_id(source_table: str, source_id: str) -> str:
     return str(uuid5(NAMESPACE_URL, f"{source_table}:{source_id}"))
@@ -84,6 +89,10 @@ def ingest() -> int:
                 payload={
                     "id": chunk["id"],
                     "source_table": chunk["source_table"],
+                    "source_name": SOURCE_NAMES.get(
+                        chunk["source_table"],
+                        chunk["source_table"],
+                    ),
                     "filename": chunk["filename"],
                     "text": chunk["text"],
                 },

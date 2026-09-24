@@ -30,13 +30,10 @@ styles.inject()
 # Restored against real git history — `main` (== commit 354eb95, "Payroll
 # feature", the last commit before UI-owner work started) for Payroll and
 # Growth Opportunities, which were live nav items silently dropped
-# somewhere in this redesign. "Employees" is a different case: it was
-# already absent from every role in `main` itself — removed one commit
-# earlier still, by "Remove employees page" (20ffe15) / "Comment out
-# 'Employees' in HR roles" (69fccd5). The most recent PAGES_BY_ROLE that
-# *did* include it (`git show 20ffe15^:app/ui/streamlit_app.py`) had it
-# for hr_manager only — never admin, hr_specialist, or employee — so
-# that's the scoping restored here.
+# somewhere in this redesign. "Employees" was removed by team decision
+# (it was already absent from every role in `main` itself — dropped one
+# commit earlier still, by "Remove employees page" (20ffe15) / "Comment
+# out 'Employees' in HR roles" (69fccd5)) — not restored here.
 PAGES_BY_ROLE = {
     "employee": ["Dashboard", "Ask Yusor", "Growth Opportunities", "My Requests"],
     # hr_specialist gets "Approvals" (the "Waiting on you" inbox) too, not
@@ -54,7 +51,6 @@ PAGES_BY_ROLE = {
         "Approvals",
         "Team Insights",
         "Payroll",
-        "Employees",
         "Grievances",
         "My Requests",
     ],
@@ -79,7 +75,6 @@ NAV_ICONS = {
     "Approvals": "pending_actions",
     "Team Insights": "insights",
     "Payroll": "payments",
-    "Employees": "badge",
     "Grievances": "feedback",
     "Growth Opportunities": "trending_up",
     "My Requests": "assignment",
@@ -97,7 +92,6 @@ def _nav_labels() -> dict[str, str]:
         "Grievances": i18n.t("nav.grievances"),
         "My Requests": i18n.t("nav.my_requests"),
         "Payroll": i18n.t("nav.payroll"),
-        "Employees": i18n.t("nav.employees"),
         "Growth Opportunities": i18n.t("nav.growth"),
         "Users": i18n.t("nav.users"),
         "Audit log": i18n.t("nav.audit_log"),
@@ -749,8 +743,6 @@ def _render(page: str) -> None:
         _team_insights_v2()
     elif page == "Payroll":
         views.page_payroll()
-    elif page == "Employees":
-        views.page_employees()
     elif page == "Growth Opportunities":
         views.page_growth_opportunities()
     elif page == "Grievances":

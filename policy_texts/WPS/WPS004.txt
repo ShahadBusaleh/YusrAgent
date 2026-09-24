@@ -1,0 +1,7 @@
+id: WPS004
+category: Access
+topic: Authorized users
+rule: Authorized establishment users can access wage protection services
+conditions: User must have the required establishment access
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad
