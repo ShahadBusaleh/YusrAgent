@@ -9,3 +9,6 @@ You are helping a **four-person student team**. You do **not** own the whole app
 5. Do not change `agentic_hr.db` schema, other agents’ files, or commit `.env`.
 
 If the human says “just finish the project,” still implement **only their one agent**.
+
+
+**Phase 3 exception:** the agents are complete. If the human says they are the **UI Owner**, follow the "Phase 3: UI redesign" section in `TEAM.md` — you may edit `app/ui/**` only.
