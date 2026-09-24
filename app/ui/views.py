@@ -1063,10 +1063,14 @@ def _render_generic_proposal_details(payload: dict) -> None:
 
 
 def page_users() -> None:
-    styles.hero(
-        i18n.t("role.admin"),
-        i18n.t("users.title"),
-        i18n.t("users.subtitle"),
+    st.markdown(
+        f"""
+        <div class="yz-chat-header">
+          <div class="yz-chat-title">{html.escape(i18n.t("users.title"))}</div>
+          <div class="yz-chat-subtitle">{html.escape(i18n.t("users.subtitle"))}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
     try:
         users = api.raise_for_api(api.request("GET", "/users"))
@@ -1100,11 +1104,11 @@ def page_users() -> None:
         key="users",
         empty_message=i18n.t("users.empty"),
     )
-    st.caption("Roles: " + ", ".join(r["role_name"] for r in (roles or [])))
+    st.caption(i18n.t("users.roles_caption", roles=", ".join(r["role_name"] for r in (roles or []))))
     c1, c2, c3 = st.columns(3)
-    user_id = c1.text_input("User ID")
-    role = c2.selectbox("Role", ["employee", "hr_specialist", "hr_manager", "admin"])
-    active = c3.checkbox("Active", value=True)
+    user_id = c1.text_input(i18n.t("users.field_user_id"))
+    role = c2.selectbox(i18n.t("users.field_role"), ["employee", "hr_specialist", "hr_manager", "admin"])
+    active = c3.checkbox(i18n.t("users.field_active"), value=True)
     if st.button(i18n.t("users.update_button"), type="primary") and user_id:
         resp = api.request(
             "PATCH",
@@ -1113,17 +1117,21 @@ def page_users() -> None:
         )
         try:
             api.raise_for_api(resp)
-            st.success("Saved")
+            st.success(i18n.t("users.saved"))
             st.rerun()
         except RuntimeError as exc:
             st.error(str(exc))
 
 
 def page_audit() -> None:
-    styles.hero(
-        i18n.t("role.admin"),
-        i18n.t("audit.title"),
-        i18n.t("audit.subtitle"),
+    st.markdown(
+        f"""
+        <div class="yz-chat-header">
+          <div class="yz-chat-title">{html.escape(i18n.t("audit.title"))}</div>
+          <div class="yz-chat-subtitle">{html.escape(i18n.t("audit.subtitle"))}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
     try:
         entries = api.raise_for_api(api.request("GET", "/audit"))
@@ -1153,6 +1161,136 @@ def page_audit() -> None:
         key="audit",
         empty_message=i18n.t("audit.empty"),
     )
+
+
+def page_employees() -> None:
+    """HR manager: look someone up, open a profile, fix low-risk contact
+    fields. Restored per the most recent PAGES_BY_ROLE that had it
+    (`git show 20ffe15^:app/ui/streamlit_app.py` — hr_manager only, before
+    "Remove employees page"); real GET /employees, GET/PATCH
+    /employees/{id}, unchanged — only the UI chrome (data_table instead of
+    st.dataframe, detail_card instead of the old Field/Value table) is new.
+    """
+    st.markdown(
+        f"""
+        <div class="yz-chat-header">
+          <div class="yz-chat-title">{html.escape(i18n.t("employees.title"))}</div>
+          <div class="yz-chat-subtitle">{html.escape(i18n.t("employees.subtitle"))}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    q = st.text_input(i18n.t("employees.search_label"), placeholder=i18n.t("employees.search_placeholder"))
+    try:
+        rows = api.raise_for_api(api.request("GET", "/employees", params={"q": q} if q else {})) or []
+    except RuntimeError as exc:
+        st.error(str(exc))
+        return
+
+    styles.data_table(
+        [
+            {
+                "employee_id": r.get("employee_id") or "—",
+                "full_name": r.get("full_name") or "—",
+                "job_title": r.get("job_title") or "—",
+                "department_name": r.get("department_name") or "—",
+                "employment_status": str(r.get("employment_status") or "").title() or "—",
+                "email": r.get("email") or "—",
+                "mobile": r.get("mobile") or "—",
+            }
+            for r in rows
+        ],
+        [
+            ("employee_id", i18n.t("employees.col_id")),
+            ("full_name", i18n.t("employees.col_name")),
+            ("job_title", i18n.t("employees.col_title")),
+            ("department_name", i18n.t("employees.col_department")),
+            ("employment_status", i18n.t("employees.col_status")),
+            ("email", i18n.t("employees.col_email")),
+            ("mobile", i18n.t("employees.col_mobile")),
+        ],
+        key="employees",
+        empty_message=i18n.t("employees.empty"),
+    )
+
+    employee_id = st.text_input(i18n.t("employees.view_label"))
+    if not employee_id:
+        return
+    try:
+        detail = api.raise_for_api(api.request("GET", f"/employees/{employee_id}"))
+    except RuntimeError as exc:
+        st.error(str(exc))
+        return
+    if not isinstance(detail, dict):
+        return
+
+    st.markdown(f"#### {html.escape(str(detail.get('full_name') or detail.get('employee_id') or ''))}")
+    st.caption(
+        " · ".join(
+            part
+            for part in (
+                detail.get("job_title"),
+                detail.get("department_name"),
+                str(detail.get("employment_status") or "").title() or None,
+            )
+            if part
+        )
+    )
+
+    with st.expander(i18n.t("employees.profile_details"), expanded=True):
+        st.caption(i18n.t("employees.contact_section"))
+        styles.detail_card(
+            [
+                (i18n.t("employees.field_email"), detail.get("email")),
+                (i18n.t("employees.field_mobile"), detail.get("mobile")),
+                (i18n.t("employees.field_city"), detail.get("city")),
+                (i18n.t("employees.field_address"), detail.get("address")),
+            ]
+        )
+        st.caption(i18n.t("employees.employment_section"))
+        yes = i18n.t("common.yes")
+        no = i18n.t("common.no")
+        styles.detail_card(
+            [
+                (i18n.t("employees.field_employee_id"), detail.get("employee_id")),
+                (i18n.t("employees.field_hire_date"), _friendly_when(detail.get("hire_date")) or detail.get("hire_date")),
+                (i18n.t("employees.field_manager"), detail.get("manager_id")),
+                (i18n.t("employees.field_nationality"), detail.get("nationality")),
+                (i18n.t("employees.field_hr_approver"), yes if detail.get("is_hr_approver") else no),
+            ]
+        )
+        if detail.get("bank_name") or detail.get("iban") or detail.get("basic_salary"):
+            st.caption(i18n.t("employees.compensation_section"))
+            styles.detail_card(
+                [
+                    (i18n.t("employees.field_basic_salary"), detail.get("basic_salary")),
+                    (i18n.t("employees.field_housing"), detail.get("housing_allowance")),
+                    (i18n.t("employees.field_bank"), detail.get("bank_name")),
+                    (i18n.t("employees.field_bank_code"), detail.get("bank_code")),
+                    (i18n.t("employees.field_iban"), detail.get("iban")),
+                ]
+            )
+
+    with st.form("profile_update"):
+        c1, c2 = st.columns(2)
+        mobile = c1.text_input(i18n.t("employees.field_mobile"), value=detail.get("mobile") or "")
+        email = c2.text_input(i18n.t("employees.field_email"), value=detail.get("email") or "")
+        city = c1.text_input(i18n.t("employees.field_city"), value=detail.get("city") or "")
+        address = c2.text_input(i18n.t("employees.field_address"), value=detail.get("address") or "")
+        save = st.form_submit_button(i18n.t("employees.save_button"), type="primary")
+    if save:
+        resp = api.request(
+            "PATCH",
+            f"/employees/{employee_id}",
+            json={"mobile": mobile, "email": email, "city": city, "address": address},
+        )
+        try:
+            api.raise_for_api(resp)
+            st.success(i18n.t("employees.saved"))
+            st.rerun()
+        except RuntimeError as exc:
+            st.error(str(exc))
 
 
 def page_payroll() -> None:

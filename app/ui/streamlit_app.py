@@ -27,16 +27,16 @@ st.set_page_config(
 styles.inject()
 
 
-# Restored against the real pre-Phase-3 PAGES_BY_ROLE (commit 354eb95,
-# "Payroll feature" — the last commit before UI-owner work started; see
-# `git show 354eb95:app/ui/streamlit_app.py`). "Payroll" and "Growth
-# Opportunities" really were live nav items that got silently dropped
-# somewhere in this redesign — restored here with their original role
-# scoping intact. "Employees" is deliberately NOT restored: it was
-# already absent from every role's list at that same commit (removed
-# earlier still, by "Remove employees page" / "Comment out 'Employees'
-# in HR roles") — there is no "original" nav state where any role saw
-# it, so there's nothing to restore there.
+# Restored against real git history — `main` (== commit 354eb95, "Payroll
+# feature", the last commit before UI-owner work started) for Payroll and
+# Growth Opportunities, which were live nav items silently dropped
+# somewhere in this redesign. "Employees" is a different case: it was
+# already absent from every role in `main` itself — removed one commit
+# earlier still, by "Remove employees page" (20ffe15) / "Comment out
+# 'Employees' in HR roles" (69fccd5). The most recent PAGES_BY_ROLE that
+# *did* include it (`git show 20ffe15^:app/ui/streamlit_app.py`) had it
+# for hr_manager only — never admin, hr_specialist, or employee — so
+# that's the scoping restored here.
 PAGES_BY_ROLE = {
     "employee": ["Dashboard", "Ask Yusor", "Growth Opportunities", "My Requests"],
     # hr_specialist gets "Approvals" (the "Waiting on you" inbox) too, not
@@ -54,6 +54,7 @@ PAGES_BY_ROLE = {
         "Approvals",
         "Team Insights",
         "Payroll",
+        "Employees",
         "Grievances",
         "My Requests",
     ],
@@ -78,6 +79,7 @@ NAV_ICONS = {
     "Approvals": "pending_actions",
     "Team Insights": "insights",
     "Payroll": "payments",
+    "Employees": "badge",
     "Grievances": "feedback",
     "Growth Opportunities": "trending_up",
     "My Requests": "assignment",
@@ -95,6 +97,7 @@ def _nav_labels() -> dict[str, str]:
         "Grievances": i18n.t("nav.grievances"),
         "My Requests": i18n.t("nav.my_requests"),
         "Payroll": i18n.t("nav.payroll"),
+        "Employees": i18n.t("nav.employees"),
         "Growth Opportunities": i18n.t("nav.growth"),
         "Users": i18n.t("nav.users"),
         "Audit log": i18n.t("nav.audit_log"),
@@ -269,7 +272,7 @@ def _sidebar(me: dict, pending_count: int = 0) -> str:
     with st.sidebar:
         # 1. Brand — app/ui/assets/yusor_mark_light.png, 150px, with a
         # separately-coded "Y U S O R" wordmark line beneath it.
-        st.markdown(styles.brand_logo_html("light", size=150), unsafe_allow_html=True)
+        st.markdown(styles.brand_logo("light", size=150), unsafe_allow_html=True)
         st.markdown(
             f'<div class="yz-sidebar-tagline">{i18n.t("app.tagline")}</div>',
             unsafe_allow_html=True,
@@ -552,27 +555,125 @@ def _team_readiness_data(token: str) -> dict | None:
     return {"critical": critical, "other": other, "covered": covered}
 
 
+@st.cache_data(ttl=20, show_spinner=False)
+def _latest_own_request(token: str, employee_id: str) -> dict | None:
+    """Most recent leave request of any status (pending/approved/rejected)
+    for the signed-in employee — the Dashboard's "your latest request"
+    card. Distinct from _latest_request_update(), which only looks at
+    *decided* requests for the welcome-bar nudge."""
+    try:
+        reqs = api.raise_for_api(api.request("GET", "/leave/requests")) or []
+    except RuntimeError:
+        return None
+    if not isinstance(reqs, list) or not reqs:
+        return None
+    reqs = sorted(reqs, key=lambda r: str(r.get("submitted_at") or ""), reverse=True)
+    return reqs[0]
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _open_grievances_count(token: str) -> int:
+    try:
+        grievances = api.raise_for_api(api.request("GET", "/grievances")) or []
+    except RuntimeError:
+        return 0
+    if not isinstance(grievances, list):
+        return 0
+    return sum(1 for g in grievances if str(g.get("status") or "").upper() == "PENDING_HR_REVIEW")
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _pending_approvals_only_count(token: str) -> int:
+    """Pending /approvals only — separate from _pending_decisions_count()
+    (which combines approvals + grievances for the sidebar badge/welcome
+    line), since the Dashboard shows "Pending items" and "Open grievances"
+    as two distinct real numbers."""
+    try:
+        approvals = api.raise_for_api(api.request("GET", "/approvals")) or []
+    except RuntimeError:
+        return 0
+    if not isinstance(approvals, list):
+        return 0
+    return sum(1 for r in approvals if str(r.get("status") or "").lower() == "pending")
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _active_users_count(token: str) -> int:
+    try:
+        users = api.raise_for_api(api.request("GET", "/users")) or []
+    except RuntimeError:
+        return 0
+    if not isinstance(users, list):
+        return 0
+    return sum(1 for u in users if u.get("is_active"))
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _recent_audit_events(token: str, limit: int = 5) -> list[dict]:
+    try:
+        entries = api.raise_for_api(api.request("GET", "/audit")) or []
+    except RuntimeError:
+        return []
+    if not isinstance(entries, list):
+        return []
+    entries = sorted(entries, key=lambda e: str(e.get("timestamp") or ""), reverse=True)
+    return entries[:limit]
+
+
 def _page_dashboard(me: dict) -> None:
     role = me.get("role", "employee")
     token = st.session_state.get("access_token", "")
 
-    with st.container(key="yz_dashboard_ask_card"):
+    # ---- Role-scoped real content, per the redesign spec ----
+    if role == "employee":
+        latest = _latest_own_request(token, str(me.get("employee_id") or ""))
+        if latest:
+            leave_type_key = {
+                "annual": "leave.type_annual",
+                "sick": "leave.type_sick",
+                "emergency": "leave.type_emergency",
+            }.get(str(latest.get("leave_type") or "").lower())
+            leave_type = (
+                i18n.t(leave_type_key) if leave_type_key else str(latest.get("leave_type") or "").title()
+            )
+            start = _short_day_month(latest.get("start_date"))
+            end = _short_day_month(latest.get("end_date"))
+            dates = f"{start}–{end}" if start and end else (start or end or "")
+            request_line = f"{leave_type} · {dates}" if dates else leave_type
+
+            st.markdown(
+                f'<div class="v2-section-title">{html.escape(i18n.t("dashboard.latest_request_title"))}</div>',
+                unsafe_allow_html=True,
+            )
+            styles.detail_card(
+                [
+                    (i18n.t("dashboard.latest_request_label"), request_line),
+                    (
+                        i18n.t("detail.status"),
+                        styles.raw(
+                            styles.status_pill_html(
+                                str(latest.get("status") or "pending").lower(), styles.status_pills()
+                            )
+                        ),
+                    ),
+                ]
+            )
+
+    elif role == "hr_specialist":
         st.markdown(
-            '<div class="yz-ask-card">'
-            f'{styles.leaf_icon_html("yz-ask-card-leaf")}'
-            "<div>"
-            f'<div class="yz-ask-card-title">{html.escape(i18n.t("chat.title"))}</div>'
-            f'<div class="yz-ask-card-sub">{html.escape(i18n.t("chat.subtitle"))}</div>'
-            "</div>"
-            "</div>",
+            styles.stat_tiles_html([(i18n.t("dashboard.open_grievances"), _open_grievances_count(token))]),
             unsafe_allow_html=True,
         )
-        with st.container(key="yz_dashboard_open_chat"):
-            if st.button(i18n.t("dashboard.open_chat")):
-                st.session_state["_yz_pending_nav"] = "Ask Yusor"
-                st.rerun()
 
-    if role in {"hr_manager", "admin"}:
+    elif role in {"hr_manager", "admin"}:
+        tiles = [
+            (i18n.t("dashboard.pending_items"), _pending_approvals_only_count(token)),
+            (i18n.t("dashboard.open_grievances"), _open_grievances_count(token)),
+        ]
+        if role == "admin":
+            tiles.append((i18n.t("dashboard.active_users"), _active_users_count(token)))
+        st.markdown(styles.stat_tiles_html(tiles), unsafe_allow_html=True)
+
         readiness = _team_readiness_data(token)
         if readiness:
             st.markdown(
@@ -590,6 +691,49 @@ def _page_dashboard(me: dict) -> None:
                     st.session_state["_yz_pending_nav"] = "Team Insights"
                     st.rerun()
 
+        if role == "admin":
+            recent = _recent_audit_events(token, limit=5)
+            st.markdown(
+                f'<div class="v2-section-title">{html.escape(i18n.t("dashboard.recent_audit_title"))}</div>',
+                unsafe_allow_html=True,
+            )
+            styles.data_table(
+                [
+                    {
+                        "timestamp": views._friendly_when(e.get("timestamp")) or e.get("timestamp") or "—",
+                        "actor": e.get("actor") or "—",
+                        "event_type": str(e.get("event_type") or "").replace("_", " ").title() or "—",
+                        "details": e.get("details") or "—",
+                    }
+                    for e in recent
+                ],
+                [
+                    ("timestamp", i18n.t("audit.col_time")),
+                    ("actor", i18n.t("audit.col_user")),
+                    ("event_type", i18n.t("audit.col_event")),
+                    ("details", i18n.t("audit.col_details")),
+                ],
+                key="dashboard_audit",
+                empty_message=i18n.t("audit.empty"),
+            )
+
+    # ---- Ask Yusor card — last, for every role ----
+    with st.container(key="yz_dashboard_ask_card"):
+        st.markdown(
+            '<div class="yz-ask-card">'
+            f'{styles.leaf_icon_html("yz-ask-card-leaf")}'
+            "<div>"
+            f'<div class="yz-ask-card-title">{html.escape(i18n.t("chat.title"))}</div>'
+            f'<div class="yz-ask-card-sub">{html.escape(i18n.t("chat.subtitle"))}</div>'
+            "</div>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        with st.container(key="yz_dashboard_open_chat"):
+            if st.button(i18n.t("dashboard.open_chat")):
+                st.session_state["_yz_pending_nav"] = "Ask Yusor"
+                st.rerun()
+
 
 def _render(page: str) -> None:
     if page == "Dashboard":
@@ -605,6 +749,8 @@ def _render(page: str) -> None:
         _team_insights_v2()
     elif page == "Payroll":
         views.page_payroll()
+    elif page == "Employees":
+        views.page_employees()
     elif page == "Growth Opportunities":
         views.page_growth_opportunities()
     elif page == "Grievances":

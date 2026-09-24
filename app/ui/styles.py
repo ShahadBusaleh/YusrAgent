@@ -30,7 +30,7 @@ def _brand_mark_data_uri(variant: str) -> str | None:
     return f"data:image/png;base64,{data}"
 
 
-def brand_logo_html(variant: str, *, size: int = 150, wordmark_class: str = "yz-brand-wordmark") -> str:
+def brand_logo(variant: str, *, size: int = 150, wordmark_class: str = "yz-brand-wordmark") -> str:
     """Renders app/ui/assets/yusor_mark_{variant}.png (the "يُسر" wordmark
     icon) at `size` px, with a separately-coded, letter-spaced "Y U S O R"
     line beneath it — not baked into the image, so it can take the right
@@ -1040,6 +1040,34 @@ section[data-testid="stSidebar"] .stButton > button:hover {
   color: #1D1512;
 }
 
+/* ---------- Dashboard stat tiles (role-scoped real counts) ---------- */
+.yz-dash-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: .8rem;
+  margin-bottom: 1rem;
+}
+.yz-dash-tile {
+  background: rgba(255,252,247,0.78);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--yz-glass-border);
+  border-radius: 16px;
+  padding: 1.1rem 1.2rem;
+}
+.yz-dash-tile-value {
+  font-family: var(--yz-font-display);
+  font-weight: 800;
+  font-size: 1.9rem;
+  color: #1D1512;
+  line-height: 1;
+}
+.yz-dash-tile-label {
+  color: #7A6D60;
+  font-size: .85rem;
+  margin-top: .35rem;
+}
+
 /* ---------- Detail card (glass label/value grid) ---------- */
 .dt-detail-card {
   background: rgba(255,252,247,0.78);
@@ -1687,7 +1715,7 @@ def login_page_style() -> None:
         </style>
 
         <div class="yz-login-brand">
-          {brand_logo_html("brown", size=170, wordmark_class="yz-login-brand-en")}
+          {brand_logo("brown", size=180, wordmark_class="yz-login-brand-en")}
           <div class="yz-login-brand-tagline">People. Processes.<br>A Smarter Tomorrow.</div>
         </div>
         """,
@@ -1840,6 +1868,22 @@ def page_header(
                 if st.button(action_text):
                     st.session_state["_yz_pending_nav"] = action_page
                     st.rerun()
+
+
+def stat_tiles_html(items: list[tuple[str, object]]) -> str:
+    """A row of simple glass stat tiles for the role-scoped Dashboard —
+    label above, big real number below. `items` is caller-computed from
+    real API data (pending items, open grievances, active users, ...)."""
+    if not items:
+        return ""
+    cells = "".join(
+        '<div class="yz-dash-tile">'
+        f'<div class="yz-dash-tile-value">{html.escape(str(value))}</div>'
+        f'<div class="yz-dash-tile-label">{html.escape(str(label))}</div>'
+        "</div>"
+        for label, value in items
+    )
+    return f'<div class="yz-dash-tiles">{cells}</div>'
 
 
 def readiness_ring_html(critical: int, other: int, covered: int) -> str:
