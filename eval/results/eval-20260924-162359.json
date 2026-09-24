@@ -1,0 +1,21 @@
+[
+  {
+    "id": "m-07",
+    "owner": "manager",
+    "target": "manager",
+    "query": "How many annual leave days do I have remaining, and can I carry them forward?",
+    "outcome": "KNOWN",
+    "known_issue": "C1/M3",
+    "failures": [
+      "response missing '17'"
+    ],
+    "error": null,
+    "latency_ms": 46.2,
+    "output": {
+      "decision": "FAIL",
+      "reasons": [
+        "Response is empty, unsupported, or missing sources."
+      ]
+    }
+  }
+]
