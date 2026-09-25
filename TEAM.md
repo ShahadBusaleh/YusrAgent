@@ -134,3 +134,14 @@ Rules:
 - Adding new labor-law articles is allowed: new rows in `saudi_labor_law` + new files in `policy_texts/saudi_labor_law/` (same format as existing LAW files), then re-index with the existing ingest helpers. Existing articles are not edited or deleted.
 
 - `app/agents/orchestrator.py` may also get ONE read-only call inside `explain_pending_approval` that adds `brief["termination_profile"]` (computed by a read-only function in `hr_agent.py`). No other orchestrator logic changes.
+
+- CV upload in onboarding is allowed: new module `app/agents/cv_parser.py` (reuses `extract_pdf_text` from growth_plan.py without modifying it), new router `app/api/routers/onboarding.py` (+ one include line in `app/api/main.py`), and a new table `employee_cvs`. The Growth page integration stays with the Growth owner.
+
+- Terminations never delete rows. On approval, if termination_date is in the future, keep
+  employment_status='Active' and users.is_active=1, and set termination_date (the UI shows
+  "Notice period until <date>"). When termination_date is reached, set the final status
+  (resignation → Resigned, retirement → Retired, end_of_contract → End of Contract,
+  all others → Terminated) and users.is_active=0. Art. 80, or a date that is today or
+  earlier, applies immediately.
+- The date check lives in a new app/db/separations.py (finalize_due_separations). It runs on
+  API startup and daily from app/api/routers/onboarding.py. No change to auth.py.

@@ -11,6 +11,7 @@ from app.db.attendance import add_leave_days
 from app.db.employees import get_employee
 from app.db.leave import create_leave_request
 from app.db.proposed_actions import get_proposed_action
+from app.db.separations import apply_final_separation, is_due
 from app.security.passwords import hash_password
 from app.seed_leave_balances import (
     ANNUAL_BASE_DAYS,
@@ -181,8 +182,8 @@ def decide_approval(
             decided_at=now,
             decided_by=decided_by,
         )
-        _sync_new_hire(conn, proposal_id, status=status)
-        _sync_termination(conn, proposal_id, status=status)
+        _sync_new_hire(conn, proposal_id, status=status, decided_at=now, decided_by=decided_by)
+        _sync_termination(conn, proposal_id, status=status, decided_at=now, decided_by=decided_by)
     return get_approval(conn, approval_id)
 
 
@@ -382,15 +383,6 @@ def _sync_sensitive_change(
 # Demo project only — replace before any real use.
 _NEW_HIRE_DEFAULT_PASSWORD = "ChangeMe123!"
 
-# employment_status by termination type (TEAM.md Phase 4); values match the
-# statuses already in the seeded data. Anything else -> 'Terminated'.
-_TERMINATION_STATUS = {
-    "resignation": "Resigned",
-    "retirement": "Retired",
-    "end_of_contract": "End of Contract",
-}
-
-
 def _next_employee_id(conn: sqlite3.Connection) -> str:
     """EMP-#### in the seeded 4-digit format (next_id would pad to 5)."""
     row = conn.execute(
@@ -403,23 +395,154 @@ def _next_employee_id(conn: sqlite3.Connection) -> str:
     return f"EMP-{(row[0] or 0) + 1:04d}"
 
 
+def _record_decision(
+    conn: sqlite3.Connection,
+    proposal_id: str,
+    payload: dict,
+    *,
+    status: str,
+    decided_at: str,
+    decided_by: str | None,
+) -> dict:
+    """Copy the decision (approver, date, note) into the proposal payload so
+    the requester can see it — hr_specialist has no /approvals access.
+    Only the proposal record is written; no target table."""
+    row = conn.execute(
+        "SELECT decision_note FROM pending_approvals WHERE proposal_id = ?",
+        (proposal_id,),
+    ).fetchone()
+    payload = dict(payload)
+    payload["decision"] = {
+        "status": status,
+        "decided_by": decided_by,
+        "decided_at": decided_at,
+        "note": row[0] if row else None,
+    }
+    conn.execute(
+        "UPDATE proposed_actions SET payload_json = ? WHERE proposal_id = ?",
+        (json.dumps(payload), proposal_id),
+    )
+    return payload
+
+
+def _final_settlement(profile: dict, frozen_at: str) -> dict:
+    """The termination profile's figures, frozen at approval. Built from
+    hr_agent.get_termination_profile only — no second calculation."""
+    if profile.get("error"):
+        return {"frozen_at": frozen_at, "error": profile["error"]}
+
+    wage = profile["monthly_wage"]
+    award = profile["end_of_service_award"]
+    notice = profile["notice"]
+    leave = profile["unused_leave"]
+    components = {
+        key: wage.get(key)
+        for key in ("basic_salary_sar", "housing_allowance_sar", "transport_allowance_sar")
+    }
+    cited = [
+        profile["service"],
+        wage,
+        award["full_award_law"],
+        award["ratio_law"],
+        notice,
+        leave,
+        profile["settlement"],
+    ]
+    articles = sorted(
+        {(c["law_id"], c["article"]) for c in cited if c.get("law_id")},
+        key=lambda item: item[0],
+    )
+    return {
+        "frozen_at": frozen_at,
+        "termination_type": profile.get("termination_type"),
+        "hire_date": profile.get("hire_date"),
+        "termination_date": profile.get("termination_date"),
+        "service": {
+            key: profile["service"].get(key)
+            for key in ("years", "months", "days", "total_days", "law_id", "article")
+        },
+        "wage_basis": {
+            "monthly_wage": wage.get("value"),
+            "components": components,
+            "included": [key for key, value in components.items() if value],
+            "law_id": wage.get("law_id"),
+            "article": wage.get("article"),
+        },
+        "end_of_service": {
+            "full_award": award.get("full_award"),
+            "full_award_law": award.get("full_award_law"),
+            "fraction": award.get("ratio"),
+            "fraction_law": award.get("ratio_law"),
+            "amount": award.get("value"),
+        },
+        "unused_leave": {
+            "days": leave.get("annual_remaining_days"),
+            "daily_wage": leave.get("daily_wage"),
+            "amount": leave.get("value"),
+            "law_id": leave.get("law_id"),
+            "article": leave.get("article"),
+        },
+        "notice": {
+            key: notice.get(key)
+            for key in (
+                "required_days",
+                "days_given",
+                "notice_given_on",
+                "shortfall_days",
+                "payer",
+                "adjustment",
+                "waived",
+                "waiver_note",
+                "law_id",
+                "article",
+            )
+        },
+        "settlement_deadline": profile.get("settlement"),
+        "total": (profile.get("total") or {}).get("value"),
+        "articles": [{"law_id": law_id, "article": article} for law_id, article in articles],
+        "disclaimer": profile.get("disclaimer"),
+    }
+
+
+def _ensure_employee_cvs_table(conn: sqlite3.Connection) -> None:
+    """New additive table (TEAM.md Phase 4). Existing tables are untouched."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS employee_cvs (
+            employee_id TEXT NOT NULL REFERENCES employees(employee_id),
+            filename TEXT,
+            cv_text TEXT NOT NULL,
+            uploaded_at TEXT NOT NULL,
+            source TEXT NOT NULL
+        )
+        """
+    )
+
+
 def _sync_new_hire(
     conn: sqlite3.Connection,
     proposal_id: str,
     *,
     status: str,
+    decided_at: str,
+    decided_by: str | None,
 ) -> None:
     """If an approved proposal is a new_hire, create the employees row,
-    its login in users, and its leave_balances row. Rejected: no write."""
+    its login in users, its leave_balances row, and (when a CV was attached
+    to the request) its employee_cvs row. Rejected: only the decision is
+    recorded on the proposal."""
     proposal = get_proposed_action(conn, proposal_id)
     if not proposal or proposal.get("action_type") != "new_hire":
-        return
-    if status != "approved":
         return
 
     try:
         payload = json.loads(proposal.get("payload_json") or "{}")
     except (TypeError, ValueError):
+        return
+    payload = _record_decision(
+        conn, proposal_id, payload, status=status, decided_at=decided_at, decided_by=decided_by
+    )
+    if status != "approved":
         return
     hire = payload.get("new_employee") or {}
 
@@ -519,6 +642,21 @@ def _sync_new_hire(
         ),
     )
 
+    if payload.get("cv_text"):
+        _ensure_employee_cvs_table(conn)
+        conn.execute(
+            """
+            INSERT INTO employee_cvs (employee_id, filename, cv_text, uploaded_at, source)
+            VALUES (?, ?, ?, ?, 'onboarding')
+            """,
+            (
+                employee_id,
+                payload.get("cv_filename"),
+                payload["cv_text"],
+                payload.get("cv_uploaded_at") or now,
+            ),
+        )
+
     conn.execute(
         "UPDATE proposed_actions SET related_request_id = ? WHERE proposal_id = ?",
         (employee_id, proposal_id),
@@ -530,40 +668,59 @@ def _sync_termination(
     proposal_id: str,
     *,
     status: str,
+    decided_at: str,
+    decided_by: str | None,
 ) -> None:
-    """If an approved proposal is a termination, set the employee's
-    status for the termination type and deactivate their login. Never deletes rows, and does
-    not reassign direct reports or pending requests. Rejected: no write."""
+    """If an approved proposal is a termination, freeze the final settlement
+    into the proposal payload and set termination_date. The employee stays
+    Active with an active login through the notice period; the final status
+    and deactivation happen when termination_date is reached (immediately for
+    Art. 80 or a date that is today or earlier). Never deletes rows, and does
+    not reassign direct reports or pending requests. Rejected: only the
+    decision is recorded on the proposal."""
+    # Lazy import: the settlement comes from the same read-only function the
+    # Decision Brief uses, so there is one calculation.
+    from app.agents.hr_agent import get_termination_profile
+
     proposal = get_proposed_action(conn, proposal_id)
     if not proposal or proposal.get("action_type") != "termination":
-        return
-    if status != "approved":
         return
 
     try:
         payload = json.loads(proposal.get("payload_json") or "{}")
     except (TypeError, ValueError):
         return
+    if status == "approved":
+        payload["final_settlement"] = _final_settlement(
+            get_termination_profile(conn, proposal), decided_at
+        )
+    payload = _record_decision(
+        conn, proposal_id, payload, status=status, decided_at=decided_at, decided_by=decided_by
+    )
+    if status != "approved":
+        return
     employee_id = payload.get("employee_id")
     if not employee_id:
         return
 
-    conn.execute(
-        """
-        UPDATE employees
-        SET employment_status = ?, termination_date = ?
-        WHERE employee_id = ?
-        """,
-        (
-            _TERMINATION_STATUS.get(payload.get("termination_type"), "Terminated"),
-            payload.get("termination_date"),
-            employee_id,
-        ),
-    )
-    conn.execute(
-        "UPDATE users SET is_active = 0 WHERE employee_id = ?",
-        (employee_id,),
-    )
+    termination_type = payload.get("termination_type")
+    termination_date = payload.get("termination_date")
+    if is_due(termination_type, termination_date):
+        # Art. 80, or a last working day that is today or earlier: final now.
+        apply_final_separation(conn, employee_id, termination_type, termination_date)
+        payload["finalized_at"] = decided_at
+        conn.execute(
+            "UPDATE proposed_actions SET payload_json = ? WHERE proposal_id = ?",
+            (json.dumps(payload), proposal_id),
+        )
+    else:
+        # Notice period: still employed (Active, login active) until
+        # termination_date; app/db/separations.finalize_due_separations
+        # applies the final status then.
+        conn.execute(
+            "UPDATE employees SET termination_date = ? WHERE employee_id = ?",
+            (termination_date, employee_id),
+        )
     conn.execute(
         "UPDATE proposed_actions SET related_request_id = ? WHERE proposal_id = ?",
         (employee_id, proposal_id),

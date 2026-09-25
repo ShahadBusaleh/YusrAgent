@@ -756,6 +756,8 @@ _TERMINATION_FIELDS = (
     "termination_type",
     "termination_date",
     "reason",
+    "notice_waived",
+    "notice_waiver_note",
 )
 
 # Structured "key: value" pairs separated by ";" or new lines — the shape
@@ -854,6 +856,31 @@ def _to_amount(value: str | None) -> float | None:
     return amount if amount >= 0 else None
 
 
+def _open_termination(conn, employee_id: str) -> dict | None:
+    """The employee's termination that is still in progress: pending
+    approval, or approved but not yet finalized (notice period)."""
+    rows = conn.execute(
+        """
+        SELECT proposal_id, status, payload_json FROM proposed_actions
+        WHERE action_type = 'termination' AND status IN ('pending_approval', 'approved')
+        ORDER BY created_at DESC
+        """
+    ).fetchall()
+    for proposal_id, status, payload_json in rows:
+        try:
+            payload = json.loads(payload_json or "{}")
+        except (TypeError, ValueError):
+            continue
+        if payload.get("employee_id") != employee_id or payload.get("finalized_at"):
+            continue
+        return {
+            "proposal_id": proposal_id,
+            "status": status,
+            "termination_date": payload.get("termination_date"),
+        }
+    return None
+
+
 def _staffing_result(
     requester_id: str,
     action_type: str,
@@ -922,10 +949,19 @@ def _new_hire_request(conn, requester_id: str, query: str) -> dict:
         problems.append("hire_date must be a date in DD-MM-YYYY format.")
 
     manager_id = (fields.get("manager_id") or "").upper() or None
+    manager_notice = None
     if manager_id:
         manager = get_employee(conn, manager_id)
         if not manager or manager.get("employment_status") != "Active":
             problems.append(f"Manager {manager_id} is not an active employee.")
+        else:
+            leaving = _open_termination(conn, manager_id)
+            if leaving and leaving["status"] == "approved":
+                # Warning only: the hire can still go ahead.
+                manager_notice = (
+                    f"Manager {manager_id} is in their notice period until "
+                    f"{leaving['termination_date']}."
+                )
 
     email = fields.get("email")
     if email:
@@ -994,7 +1030,8 @@ def _new_hire_request(conn, requester_id: str, query: str) -> dict:
             f"New hire {new_employee['full_name']} as {new_employee['job_title']} "
             f"in {new_employee['department_name']}, starting "
             f"{new_employee['hire_date']}. The employee record and login are "
-            "created only after an HR manager approves."
+            "created only after an HR manager approves.",
+            *([manager_notice] if manager_notice else []),
         ],
         sources,
         proposed_action={
@@ -1074,15 +1111,62 @@ def _termination_request(conn, requester_id: str, query: str) -> dict:
         problems.append(
             f"Employee {target_id} is already {employee.get('employment_status')}."
         )
+    else:
+        existing = _open_termination(conn, target_id)
+        if existing:
+            # One termination at a time: point to the one already in progress.
+            if existing["status"] == "pending_approval":
+                problems.append(
+                    f"Employee {target_id} already has a termination request waiting "
+                    f"for approval ({existing['proposal_id']}, last working day "
+                    f"{existing['termination_date']})."
+                )
+            else:
+                problems.append(
+                    f"Employee {target_id} already has an approved termination "
+                    f"({existing['proposal_id']}) and is in the notice period until "
+                    f"{existing['termination_date']}."
+                )
 
     notes: list[str] = []
-    if fields.get("termination_date"):
+    today = date.today()
+    notice_days = _NOTICE_DAYS.get(termination_type, (0, None))[0]
+    notice_waived = str(fields.get("notice_waived") or "").strip().lower() in {"yes", "true", "1"}
+    waiver_note = (fields.get("notice_waiver_note") or "").strip()
+
+    if termination_type == "article_80":
+        # Art. 80: effective immediately, no notice period.
+        termination_date = today
+        if fields.get("termination_date") and _parse_day(fields["termination_date"]) != today:
+            notes.append("Article 80 dismissal takes effect immediately, so today's date is used.")
+        notice_waived, waiver_note = False, ""
+    elif fields.get("termination_date"):
         termination_date = _parse_day(fields["termination_date"])
         if termination_date is None:
             problems.append("termination_date must be a date in DD-MM-YYYY format.")
+    elif notice_days:
+        # Last working day defaults to the end of the Art. 75 notice period.
+        termination_date = today + timedelta(days=notice_days)
+        notes.append(
+            f"Last working day set to the end of the {notice_days}-day notice period (Art. 75)."
+        )
     else:
-        termination_date = date.today()
+        termination_date = today
         notes.append("termination_date was not given, so today's date is used.")
+
+    if notice_days and termination_date and termination_date < today + timedelta(days=notice_days):
+        if not notice_waived:
+            problems.append(
+                f"The last working day must be at least {notice_days} days from today "
+                f"({_format_day(today + timedelta(days=notice_days))}, Art. 75). For an "
+                "earlier date, mark the notice as waived (notice_waived: yes) and add "
+                "a notice_waiver_note."
+            )
+        elif not waiver_note:
+            problems.append("A notice_waiver_note is required when the notice is waived.")
+    elif notice_waived:
+        # Nothing to waive: the date already covers the full notice period.
+        notice_waived, waiver_note = False, ""
 
     hire_date = _parse_day((employee or {}).get("hire_date"))
     if termination_date and hire_date and termination_date < hire_date:
@@ -1114,6 +1198,9 @@ def _termination_request(conn, requester_id: str, query: str) -> dict:
                 "termination_date": _format_day(termination_date),
                 "reason": fields["reason"],
                 "requested_by": requester_id,
+                "notice_days_required": notice_days,
+                "notice_waived": notice_waived,
+                "notice_waiver_note": waiver_note or None,
             },
         },
     )
@@ -1246,18 +1333,39 @@ def get_termination_profile(conn, proposal: dict) -> dict:
     warnings: list[dict] = []
     notice: dict = {"notice_given_on": _format_day(notice_date), "days_given": days_given}
     if termination_type == "article_80":
-        notice.update(required_days=0, **_cite(_LAW_ARTICLE_80))
+        notice.update(required_days=0, adjustment=0.0, waived=False, **_cite(_LAW_ARTICLE_80))
     elif termination_type in _NOTICE_DAYS:
         required, payer = _NOTICE_DAYS[termination_type]
         shortfall = max(required - days_given, 0)
+        # Art. 76 applies "unless they agree otherwise": a notice waived by
+        # agreement (with its note) carries no compensation.
+        waived = bool(payload.get("notice_waived")) and shortfall > 0
+        compensation = 0.0 if waived else round(daily_wage * shortfall, 2)
         notice.update(
             required_days=required,
             shortfall_days=shortfall,
             payer=payer,
-            compensation=round(daily_wage * shortfall, 2),
+            compensation=compensation,
+            # Owed to the employee when the employer is short, deducted
+            # when the employee is.
+            adjustment=(compensation if payer == "employer" else -compensation) if compensation else 0.0,
+            waived=waived,
+            waiver_note=payload.get("notice_waiver_note") if waived else None,
             **_cite(_LAW_NOTICE),
         )
-        if shortfall:
+        if waived:
+            warnings.append(
+                {
+                    "code": "notice_waived",
+                    "text": (
+                        f"Notice waived by agreement: {days_given} of {required} "
+                        f"days given, no Article 76 compensation. Note: "
+                        f"{payload.get('notice_waiver_note')}"
+                    ),
+                    **_cite(_LAW_NOTICE_COMPENSATION),
+                }
+            )
+        elif shortfall:
             warnings.append(
                 {
                     "code": "notice_shortfall",
@@ -1273,7 +1381,7 @@ def get_termination_profile(conn, proposal: dict) -> dict:
                 }
             )
     else:
-        notice.update(required_days=None, **_cite(_LAW_NOTICE))
+        notice.update(required_days=None, adjustment=0.0, waived=False, **_cite(_LAW_NOTICE))
 
     if termination_type == "article_80":
         warnings.append(
@@ -1303,6 +1411,11 @@ def get_termination_profile(conn, proposal: dict) -> dict:
     # --- Unused annual leave (Art. 111) ---
     balance = get_leave_balance(conn, employee_id) or {}
     annual_remaining = float(balance.get("annual_remaining") or 0)
+
+    # --- Total: award + unused leave + notice adjustment ---
+    award_value = round(full_award * ratio, 2)
+    leave_value = round(daily_wage * annual_remaining, 2)
+    total = round(award_value + leave_value + notice.get("adjustment", 0.0), 2)
 
     # --- Settlement deadline (Art. 88) ---
     settlement_days = 14 if termination_type == "resignation" else 7
@@ -1357,15 +1470,16 @@ def get_termination_profile(conn, proposal: dict) -> dict:
             "full_award_law": _cite(_LAW_AWARD),
             "ratio": round(ratio, 4),
             "ratio_law": _cite(ratio_law),
-            "value": round(full_award * ratio, 2),
+            "value": award_value,
         },
         "notice": notice,
         "unused_leave": {
             "annual_remaining_days": annual_remaining,
             "daily_wage": round(daily_wage, 2),
-            "value": round(daily_wage * annual_remaining, 2),
+            "value": leave_value,
             **_cite(_LAW_UNUSED_LEAVE),
         },
+        "total": {"value": total},
         "settlement": {
             "within_days": settlement_days,
             "deadline": _format_day(end_date + timedelta(days=settlement_days)),

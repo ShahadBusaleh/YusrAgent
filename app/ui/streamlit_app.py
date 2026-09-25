@@ -629,6 +629,11 @@ def _page_dashboard(me: dict) -> None:
     role = me.get("role", "employee")
     token = st.session_state.get("access_token", "")
 
+    # Approved termination, still employed: Active + a future last working day.
+    until = views.notice_period_until(me.get("employee_id"))
+    if until:
+        st.info(i18n.t("notice.until", date=until))
+
     # ---- Role-scoped real content, per the redesign spec ----
     if role == "employee":
         latest = _latest_own_request(token, str(me.get("employee_id") or ""))

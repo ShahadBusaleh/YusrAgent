@@ -4,6 +4,7 @@ import html
 import re
 from datetime import date, datetime, timedelta
 from fractions import Fraction
+from typing import Callable
 
 import httpx
 import streamlit as st
@@ -248,9 +249,14 @@ def _reset_staff_form(prefix: str) -> None:
             st.session_state.pop(key, None)
 
 
-def _submit_staffing(query: str, prefix: str) -> None:
+def _submit_staffing(
+    query: str,
+    prefix: str,
+    after_submit: Callable[[str], str | None] | None = None,
+) -> None:
     """Send through the same _call_agent -> POST /agent/query path as Ask
-    Yusor, then show the outcome on this page (flash survives the rerun)."""
+    Yusor, then show the outcome on this page (flash survives the rerun).
+    `after_submit(proposal_id)` runs on success and may return a warning."""
     history = st.session_state.setdefault("chat_history", [])
     before = len(history)
     payload = _call_agent(query)
@@ -260,18 +266,24 @@ def _submit_staffing(query: str, prefix: str) -> None:
         failures = history[before:]
         del history[before:]
         detail = failures[-1]["content"] if failures else "Request failed."
-        st.session_state["staff_flash"] = ("error", detail)
+        st.session_state["staff_flash"] = [("error", detail)]
     else:
         response = _format_agent_text(payload)
         submitted = _SUBMITTED_RE.search(response)
         if payload.get("status") == "PASS" and submitted:
-            st.session_state["staff_flash"] = (
-                "success",
-                i18n.t("staffing.submitted", inbox=i18n.t("nav.approvals"), proposal=submitted.group(1)),
-            )
+            flash = [
+                (
+                    "success",
+                    i18n.t("staffing.submitted", inbox=i18n.t("nav.approvals"), proposal=submitted.group(1)),
+                )
+            ]
+            warning = after_submit(submitted.group(1)) if after_submit else None
+            if warning:
+                flash.append(("warning", warning))
+            st.session_state["staff_flash"] = flash
             _reset_staff_form(prefix)
         else:
-            st.session_state["staff_flash"] = ("warning", response)
+            st.session_state["staff_flash"] = [("warning", response)]
     st.rerun()
 
 
@@ -298,6 +310,47 @@ def _load_departments() -> list[dict] | None:
     return st.session_state["staff_departments"]
 
 
+def _open_terminations() -> dict[str, dict]:
+    """employee_id -> the termination still in progress (pending approval, or
+    approved and not yet finalized), from GET /proposed-actions. This is the
+    UI's source for "Notice period until <date>": the employee API doesn't
+    return termination_date, and the approved proposal carries the same date
+    _sync_termination writes to employees.termination_date while the
+    employee stays Active."""
+    try:
+        items = api.raise_for_api(api.request("GET", "/proposed-actions")) or []
+    except RuntimeError:
+        return {}
+    open_terms: dict[str, dict] = {}
+    for item in items if isinstance(items, list) else []:  # newest first
+        payload = item.get("payload_json")
+        payload = payload if isinstance(payload, dict) else {}
+        if (
+            item.get("action_type") != "termination"
+            or item.get("status") not in ("pending_approval", "approved")
+            or payload.get("finalized_at")
+        ):
+            continue
+        employee_id = payload.get("employee_id")
+        if employee_id and employee_id not in open_terms:
+            open_terms[employee_id] = {
+                "proposal_id": item.get("proposal_id"),
+                "status": item.get("status"),
+                "termination_date": payload.get("termination_date"),
+            }
+    return open_terms
+
+
+def _notice_until(open_terms: dict, employee_id: str | None) -> str | None:
+    term = open_terms.get(employee_id or "")
+    return term["termination_date"] if term and term["status"] == "approved" else None
+
+
+def notice_period_until(employee_id: str | None) -> str | None:
+    """Last working day if this employee is in an approved notice period."""
+    return _notice_until(_open_terminations(), employee_id)
+
+
 def _employee_picker(
     label: str,
     key: str,
@@ -305,6 +358,7 @@ def _employee_picker(
     department_id: str | None = None,
     optional: bool = False,
     exclude_id: str | None = None,
+    open_terms: dict | None = None,
 ) -> dict | None:
     """Search active employees through GET /employees (max 50 per call)."""
     search = st.text_input(i18n.t("staff.search"), key=f"{key}_q")
@@ -331,14 +385,15 @@ def _employee_picker(
         return None
     by_id = {r["employee_id"]: r for r in rows}
     options = ([None] if optional else []) + list(by_id)
-    chosen = st.selectbox(
-        label,
-        options,
-        key=f"{key}_pick",
-        format_func=lambda eid: i18n.t("staff.none")
-        if eid is None
-        else f"{eid} — {by_id[eid].get('full_name') or ''} — {by_id[eid].get('job_title') or ''}",
-    )
+
+    def _label(eid: str | None) -> str:
+        if eid is None:
+            return i18n.t("staff.none")
+        text = f"{eid} — {by_id[eid].get('full_name') or ''} — {by_id[eid].get('job_title') or ''}"
+        until = _notice_until(open_terms or {}, eid)
+        return f"{text} · {i18n.t('notice.until', date=until)}" if until else text
+
+    chosen = st.selectbox(label, options, key=f"{key}_pick", format_func=_label)
     return by_id.get(chosen)
 
 
@@ -352,13 +407,98 @@ def _english_only_error(fields: list[tuple[str, str]]) -> bool:
     return False
 
 
-def _render_new_hire_form() -> None:
+# parse-cv field -> new-hire form widget key. Salary, department, manager and
+# hire date are never taken from a CV.
+_CV_FORM_KEYS = {
+    "full_name": "hire_full_name",
+    "suggested_job_title": "hire_job_title",
+    "gender": "hire_gender",
+    "nationality": "hire_nationality",
+    "email": "hire_email",
+    "mobile": "hire_mobile",
+}
+
+
+def _render_cv_prefill() -> None:
+    """Upload a CV PDF -> POST /onboarding/parse-cv -> pre-fill the form.
+    Runs before the form's widgets, so their session_state can be set."""
+    uploaded = st.file_uploader(i18n.t("cv.upload_label"), type="pdf", key="hire_cv_upload")
+    if uploaded is None:
+        for key in ("hire_cv_file_id", "hire_cv_bytes", "hire_cv_name", "hire_cv_notice"):
+            st.session_state.pop(key, None)
+        return
+
+    if uploaded.file_id != st.session_state.get("hire_cv_file_id"):
+        st.session_state["hire_cv_file_id"] = uploaded.file_id
+        data = uploaded.getvalue()
+        with st.spinner(i18n.t("cv.reading")):
+            try:
+                response = api.request(
+                    "POST",
+                    "/onboarding/parse-cv",
+                    files={"cv": (uploaded.name, data, "application/pdf")},
+                    timeout=120.0,
+                )
+            except httpx.HTTPError:
+                response = None
+
+        if response is not None and response.status_code == 200:
+            fields = (response.json() or {}).get("fields") or {}
+            for field, form_key in _CV_FORM_KEYS.items():
+                value = fields.get(field)
+                if value and (field != "gender" or value in ("Female", "Male")):
+                    st.session_state[form_key] = value
+            st.session_state["hire_cv_notice"] = ("info", i18n.t("cv.filled"))
+        elif response is not None and response.status_code == 422:
+            st.session_state["hire_cv_notice"] = ("warning", i18n.t("cv.unreadable"))
+        else:
+            try:
+                detail = api.raise_for_api(response) if response is not None else None
+            except RuntimeError as exc:
+                detail = str(exc)
+            st.session_state["hire_cv_notice"] = ("error", str(detail or i18n.t("cv.unavailable")))
+
+        # Keep the file to attach to the request after it is submitted —
+        # only when it has readable text.
+        readable = response is not None and response.status_code in (200, 502, 503)
+        st.session_state["hire_cv_bytes"] = data if readable else None
+        st.session_state["hire_cv_name"] = uploaded.name if readable else None
+
+    notice = st.session_state.get("hire_cv_notice")
+    if notice:
+        kind, text = notice
+        {"info": st.info, "warning": st.warning}.get(kind, st.error)(text)
+
+
+def _attach_cv(proposal_id: str) -> str | None:
+    """Attach the uploaded CV's text to the just-submitted new_hire request
+    (POST /onboarding/proposals/{id}/cv). Returns a warning on failure."""
+    data = st.session_state.get("hire_cv_bytes")
+    if not data:
+        return None
+    try:
+        api.raise_for_api(
+            api.request(
+                "POST",
+                f"/onboarding/proposals/{proposal_id}/cv",
+                files={"cv": (st.session_state.get("hire_cv_name") or "cv.pdf", data, "application/pdf")},
+                timeout=60.0,
+            )
+        )
+    except (RuntimeError, httpx.HTTPError) as exc:
+        return i18n.t("cv.attach_failed", detail=str(exc))
+    return None
+
+
+def _render_new_hire_form(open_terms: dict) -> None:
     with st.container(key="staff_card_hire"):
+        _render_cv_prefill()
+        st.session_state.setdefault("hire_nationality", "Saudi")
         c1, c2 = st.columns(2)
         full_name = c1.text_input(i18n.t("staff.full_name"), key="hire_full_name")
         job_title = c2.text_input(i18n.t("staff.job_title"), key="hire_job_title")
         gender = c1.selectbox(i18n.t("staff.gender"), ["Female", "Male"], key="hire_gender")
-        nationality = c2.text_input(i18n.t("staff.nationality"), value="Saudi", key="hire_nationality")
+        nationality = c2.text_input(i18n.t("staff.nationality"), key="hire_nationality")
         email = c1.text_input(i18n.t("staff.email"), key="hire_email")
         mobile = c2.text_input(i18n.t("staff.mobile"), key="hire_mobile")
 
@@ -377,9 +517,10 @@ def _render_new_hire_form() -> None:
                 "hire_manager",
                 department_id=department_id,
                 optional=True,
+                open_terms=open_terms,
             )
         else:
-            manager = _employee_picker(i18n.t("staff.manager"), "hire_manager")
+            manager = _employee_picker(i18n.t("staff.manager"), "hire_manager", open_terms=open_terms)
             if manager:
                 department_id = manager.get("department_id")
                 st.caption(
@@ -388,6 +529,9 @@ def _render_new_hire_form() -> None:
                         department=f"{manager.get('department_name')} ({department_id})",
                     )
                 )
+        manager_until = _notice_until(open_terms, (manager or {}).get("employee_id"))
+        if manager_until:
+            st.warning(i18n.t("notice.manager_warning", date=manager_until))
 
         c3, c4 = st.columns(2)
         employment_type = c3.selectbox(
@@ -446,15 +590,37 @@ def _render_new_hire_form() -> None:
             ("transport_allowance", f"{transport:g}"),
         ],
     )
-    _submit_staffing(query, "hire_")
+    _submit_staffing(query, "hire_", after_submit=_attach_cv)
 
 
-def _render_termination_form() -> None:
+# Art. 75 notice for a monthly-paid employee — same values as
+# app.agents.hr_agent._NOTICE_DAYS, which re-checks them on submit.
+_NOTICE_DAYS = {"resignation": 30, "termination_by_employer": 60}
+
+
+def _render_termination_form(open_terms: dict) -> None:
     me = st.session_state.get("me") or {}
+    today = date.today()
+    waived, waiver_note = False, ""
     with st.container(key="staff_card_term"):
         employee = _employee_picker(
-            i18n.t("staff.employee"), "term_employee", exclude_id=me.get("employee_id")
+            i18n.t("staff.employee"),
+            "term_employee",
+            exclude_id=me.get("employee_id"),
+            open_terms=open_terms,
         )
+        existing = open_terms.get((employee or {}).get("employee_id") or "")
+        if existing:
+            # One termination at a time — show the one already in progress.
+            key = "notice.existing_pending" if existing["status"] == "pending_approval" else "notice.existing_approved"
+            st.info(
+                i18n.t(
+                    key,
+                    employee=(employee or {}).get("employee_id"),
+                    proposal=existing["proposal_id"],
+                    date=existing["termination_date"] or "—",
+                )
+            )
         c1, c2 = st.columns(2)
         termination_type = c1.selectbox(
             i18n.t("staff.termination_type"),
@@ -462,12 +628,33 @@ def _render_termination_form() -> None:
             key="term_type",
             format_func=lambda v: "—" if v is None else i18n.t(f"term.{v}"),
         )
+        notice_days = _NOTICE_DAYS.get(termination_type, 0)
+        earliest = today + timedelta(days=notice_days)
+        # Re-default the last working day whenever the type changes: end of
+        # the notice period for notice types, today otherwise.
+        if "term_date" not in st.session_state or st.session_state.get("term_date_type") != termination_type:
+            st.session_state["term_date_type"] = termination_type
+            st.session_state["term_date"] = earliest
+        if termination_type == "article_80":
+            st.session_state["term_date"] = today
         termination_date = c2.date_input(
-            i18n.t("staff.termination_date"), value=date.today(), format="DD-MM-YYYY", key="term_date"
+            i18n.t("staff.termination_date"),
+            format="DD-MM-YYYY",
+            key="term_date",
+            disabled=termination_type == "article_80",
         )
+        if termination_type == "article_80":
+            st.caption(i18n.t("notice.art80_immediate"))
+        elif notice_days:
+            st.caption(i18n.t("notice.required", days=notice_days, date=earliest.strftime("%d-%m-%Y")))
+            waived = st.checkbox(i18n.t("notice.waived"), key="term_notice_waived")
+            if waived:
+                waiver_note = st.text_area(i18n.t("notice.waiver_note"), key="term_waiver_note")
         reason = st.text_area(i18n.t("staff.reason"), key="term_reason")
 
-        submit = st.button(i18n.t("staff.submit"), type="primary", key="term_submit")
+        submit = st.button(
+            i18n.t("staff.submit"), type="primary", key="term_submit", disabled=bool(existing)
+        )
 
     if not submit:
         return
@@ -484,7 +671,16 @@ def _render_termination_form() -> None:
     if missing:
         st.error(i18n.t("staff.required", fields=", ".join(missing)))
         return
-    if _english_only_error([(i18n.t("staff.reason"), reason)]):
+    early = bool(notice_days) and termination_date < earliest
+    if early and not waived:
+        st.error(i18n.t("notice.too_early", days=notice_days, date=earliest.strftime("%d-%m-%Y")))
+        return
+    if early and not waiver_note.strip():
+        st.error(i18n.t("notice.note_required"))
+        return
+    if _english_only_error(
+        [(i18n.t("staff.reason"), reason), (i18n.t("notice.waiver_note"), waiver_note)]
+    ):
         return
 
     query = _staffing_query(
@@ -494,6 +690,8 @@ def _render_termination_form() -> None:
             ("termination_type", termination_type),
             ("termination_date", termination_date.strftime("%d-%m-%Y")),
             ("reason", reason.strip()),
+            ("notice_waived", "yes" if early else None),
+            ("notice_waiver_note", waiver_note.strip() if early else None),
         ],
     )
     _submit_staffing(query, "term_")
@@ -502,7 +700,7 @@ def _render_termination_form() -> None:
 def _render_my_staffing_requests() -> None:
     """New-hire / termination requests this user submitted, from the real
     GET /proposed-actions (staff roles get every proposal; payload.requested_by
-    identifies the submitter)."""
+    identifies the submitter). A row's View button opens its details below."""
     me_id = (st.session_state.get("me") or {}).get("employee_id")
     try:
         items = api.raise_for_api(api.request("GET", "/proposed-actions")) or []
@@ -519,6 +717,8 @@ def _render_my_staffing_requests() -> None:
 
     names = _employee_names(
         [payload.get("employee_id") for item, payload in mine if item.get("action_type") == "termination"]
+        + [(payload.get("decision") or {}).get("decided_by") for _, payload in mine]
+        + [(payload.get("new_employee") or {}).get("manager_id") for _, payload in mine]
     )
     rows = []
     for item, payload in mine:
@@ -531,6 +731,7 @@ def _render_my_staffing_requests() -> None:
             person = f"{names.get(eid) or eid} ({eid})" if eid else None
         rows.append(
             {
+                "id": item.get("proposal_id"),
                 "type": kind,
                 "employee": person,
                 "date": _friendly_when(item.get("created_at")),
@@ -538,20 +739,258 @@ def _render_my_staffing_requests() -> None:
             }
         )
 
+    def _open(row: dict) -> None:
+        st.session_state["staff_open_request"] = row.get("id")
+
+    with st.container(key="staff_requests_card"):
+        styles.data_table(
+            rows,
+            [
+                ("type", i18n.t("staffing.col_type")),
+                ("employee", i18n.t("staffing.col_employee")),
+                ("date", i18n.t("staffing.col_date")),
+                ("status", i18n.t("staffing.col_status")),
+            ],
+            status_key="status",
+            # proposed_actions uses "pending_approval" until decided.
+            status_styles={"pending_approval": styles.status_pills()["pending"]},
+            on_view=_open,
+            view_label=i18n.t("staffing.view"),
+            key="staffing_requests",
+            empty_message=i18n.t("staffing.empty"),
+        )
+
+        opened = st.session_state.get("staff_open_request")
+        match = next(((item, payload) for item, payload in mine if item.get("proposal_id") == opened), None)
+        if match:
+            st.divider()
+            _render_staffing_request_details(*match, names)
+
+
+def _decision_caption(decision: dict, names: dict) -> None:
+    if not decision.get("decided_by") and not decision.get("decided_at"):
+        return
+    who = decision.get("decided_by") or ""
+    st.caption(
+        i18n.t(
+            "details.decided",
+            who=f"{names.get(who) or who} ({who})" if who else "—",
+            when=_friendly_when(decision.get("decided_at")) or "—",
+        )
+    )
+
+
+def _render_staffing_request_details(item: dict, payload: dict, names: dict) -> None:
+    status = str(item.get("status") or "")
+    decision = payload.get("decision") or {}
+    top_l, top_r = st.columns([5, 1])
+    with top_l:
+        st.markdown(f"**{html.escape(_staffing_label(item))}**")
+        st.markdown(
+            styles.status_pill_html(
+                status, {**styles.status_pills(), "pending_approval": styles.status_pills()["pending"]}
+            ),
+            unsafe_allow_html=True,
+        )
+    with top_r:
+        if st.button(i18n.t("inbox.close"), key="staff_close_request", use_container_width=True):
+            st.session_state.pop("staff_open_request", None)
+            st.rerun()
+
+    if status == "pending_approval":
+        st.caption(i18n.t("details.pending"))
+    elif status == "rejected":
+        st.markdown(f"**{i18n.t('details.sent_back_note')}**")
+        st.write(decision.get("note") or i18n.t("details.no_note"))
+        _decision_caption(decision, names)
+        return
+
+    if item.get("action_type") == "termination":
+        if status == "approved":
+            if payload.get("finalized_at"):
+                st.caption(i18n.t("notice.finalized", date=_friendly_when(payload["finalized_at"]) or "—"))
+            else:
+                st.info(i18n.t("notice.until", date=payload.get("termination_date") or "—"))
+            settlement = payload.get("final_settlement")
+            if settlement:
+                _render_final_settlement(settlement)
+            else:
+                st.info(i18n.t("settlement.not_recorded"))
+            _decision_caption(decision, names)
+        else:
+            _render_termination_details(payload)
+        return
+
+    hire = payload.get("new_employee") or {}
+    if status == "approved":
+        manager_id = hire.get("manager_id")
+        salary = [hire.get(k) or 0 for k in ("basic_salary", "housing_allowance", "transport_allowance")]
+        styles.detail_card(
+            [
+                (i18n.t("details.employee_id_created"), item.get("related_request_id")),
+                (i18n.t("staff.department"), f"{hire.get('department_name') or ''} ({hire.get('department_id')})"),
+                (
+                    i18n.t("staff.manager"),
+                    f"{names.get(manager_id) or manager_id} ({manager_id})" if manager_id else None,
+                ),
+                (
+                    i18n.t("details.salary"),
+                    i18n.t(
+                        "details.salary_value",
+                        basic=_money(salary[0]),
+                        housing=_money(salary[1]),
+                        transport=_money(salary[2]),
+                        total=_money(sum(salary)),
+                    ),
+                ),
+            ]
+        )
+        _decision_caption(decision, names)
+    else:
+        _render_new_hire_details(payload)
+
+
+def _render_final_settlement(settlement: dict) -> None:
+    """Breakdown of the settlement frozen by _sync_termination at approval."""
+    st.markdown(f"**{i18n.t('settlement.title')}**")
+    if settlement.get("error"):
+        st.warning(settlement["error"])
+        return
+
+    service = settlement.get("service") or {}
+    wage = settlement.get("wage_basis") or {}
+    eos = settlement.get("end_of_service") or {}
+    leave = settlement.get("unused_leave") or {}
+    notice = settlement.get("notice") or {}
+    components = wage.get("components") or {}
+    component_labels = {
+        "basic_salary_sar": i18n.t("settlement.basic"),
+        "housing_allowance_sar": i18n.t("settlement.housing"),
+        "transport_allowance_sar": i18n.t("settlement.transport"),
+    }
+
+    required = notice.get("required_days")
+    if required is None:
+        notice_basis = i18n.t("profile.notice_by_agreement")
+    elif required == 0:
+        notice_basis = i18n.t("profile.notice_na")
+    elif notice.get("waived"):
+        notice_basis = i18n.t(
+            "settlement.notice_waived",
+            given=notice.get("days_given"),
+            required=required,
+            note=notice.get("waiver_note") or "—",
+        )
+    else:
+        notice_basis = i18n.t("profile.notice_value", required=required, given=notice.get("days_given"))
+
+    rows = [
+        {
+            "item": i18n.t("profile.service"),
+            "basis": i18n.t(
+                "profile.service_value",
+                y=service.get("years"),
+                m=service.get("months"),
+                d=service.get("days"),
+                total=service.get("total_days"),
+            ),
+            "amount": "",
+            "article": _cite(service),
+        },
+        {
+            "item": i18n.t("settlement.wage_basis"),
+            "basis": " + ".join(
+                f"{component_labels[key]} {_money(value)}"
+                for key, value in components.items()
+                if key in (wage.get("included") or [])
+            ),
+            "amount": _money(wage.get("monthly_wage")),
+            "article": _cite(wage),
+        },
+        {
+            "item": i18n.t("settlement.full_award"),
+            "basis": i18n.t("settlement.full_award_basis"),
+            "amount": _money(eos.get("full_award")),
+            "article": _cite(eos.get("full_award_law")),
+        },
+        {
+            "item": i18n.t("settlement.fraction"),
+            "basis": i18n.t(f"term.{settlement.get('termination_type')}"),
+            "amount": "× " + _ratio_text(eos.get("fraction")),
+            "article": _cite(eos.get("fraction_law")),
+        },
+        {
+            "item": i18n.t("settlement.eos_amount"),
+            "basis": "",
+            "amount": _money(eos.get("amount")),
+            "article": _cite(eos.get("fraction_law")),
+        },
+        {
+            "item": i18n.t("profile.unused_leave"),
+            "basis": i18n.t(
+                "settlement.leave_basis",
+                days=f"{float(leave.get('days') or 0):g}",
+                daily=_money(leave.get("daily_wage")),
+            ),
+            "amount": _money(leave.get("amount")),
+            "article": _cite(leave),
+        },
+        {
+            "item": i18n.t("profile.notice"),
+            "basis": notice_basis,
+            "amount": _money(notice.get("adjustment")),
+            "article": _cite(notice),
+        },
+        {
+            "item": i18n.t("settlement.total"),
+            "basis": "",
+            "amount": _money(settlement.get("total")),
+            "article": "",
+        },
+    ]
     styles.data_table(
         rows,
         [
-            ("type", i18n.t("staffing.col_type")),
-            ("employee", i18n.t("staffing.col_employee")),
-            ("date", i18n.t("staffing.col_date")),
-            ("status", i18n.t("staffing.col_status")),
+            ("item", i18n.t("settlement.col_item")),
+            ("basis", i18n.t("settlement.col_basis")),
+            ("amount", i18n.t("settlement.col_amount")),
+            ("article", i18n.t("settlement.col_article")),
         ],
-        status_key="status",
-        # proposed_actions uses "pending_approval" until decided.
-        status_styles={"pending_approval": styles.status_pills()["pending"]},
-        key="staffing_requests",
-        empty_message=i18n.t("staffing.empty"),
+        key=f"settlement_{settlement.get('frozen_at')}",
     )
+    deadline = settlement.get("settlement_deadline") or {}
+    st.caption(
+        i18n.t(
+            "settlement.meta",
+            last_day=settlement.get("termination_date") or "—",
+            deadline=deadline.get("deadline") or "—",
+            deadline_cite=_cite(deadline),
+            articles=", ".join(_cite(a) for a in settlement.get("articles") or []),
+        )
+    )
+    st.caption(i18n.t("profile.disclaimer"))
+
+
+_STAFFING_VIEWS = (("new_hire", "staffing.tab_hire"), ("termination", "staffing.tab_term"))
+
+
+def _staffing_switcher() -> str:
+    """Horizontal New hire / Termination switcher. The choice lives in
+    session_state, so it survives the rerun after a submit (st.tabs in this
+    Streamlit version always reopens on the first tab). Selected = primary
+    button, the other = the project's secondary outline button."""
+    current = st.session_state.get("staffing_view", "new_hire")
+    cols = st.columns([1, 1, 3])
+    for col, (view, label_key) in zip(cols, _STAFFING_VIEWS):
+        with col:
+            if view == current:
+                st.button(i18n.t(label_key), key=f"staffing_view_{view}", type="primary", use_container_width=True)
+            else:
+                with st.container(key=f"yz_btn_secondary_staffing_{view}"):
+                    if st.button(i18n.t(label_key), key=f"staffing_view_{view}", use_container_width=True):
+                        st.session_state["staffing_view"] = view
+                        st.rerun()
+    return current
 
 
 def page_staffing() -> None:
@@ -568,16 +1007,15 @@ def page_staffing() -> None:
         st.error(i18n.t("staffing.not_allowed"))
         return
 
-    flash = st.session_state.pop("staff_flash", None)
-    if flash:
-        kind, text = flash
+    for kind, text in st.session_state.pop("staff_flash", None) or []:
         {"success": st.success, "warning": st.warning}.get(kind, st.error)(text)
 
-    tab_hire, tab_term = st.tabs([i18n.t("staffing.tab_hire"), i18n.t("staffing.tab_term")])
-    with tab_hire:
-        _render_new_hire_form()
-    with tab_term:
-        _render_termination_form()
+    view = _staffing_switcher()
+    open_terms = _open_terminations()
+    if view == "termination":
+        _render_termination_form(open_terms)
+    else:
+        _render_new_hire_form(open_terms)
 
     st.markdown(f"#### {html.escape(i18n.t('staffing.my_requests'))}")
     _render_my_staffing_requests()
@@ -748,6 +1186,7 @@ def page_inbox() -> None:
     )
 
     pending_approvals: list[dict] = []
+    approvals: list[dict] = []
     proposals: dict = {}
     if can_approvals:
         try:
@@ -779,9 +1218,21 @@ def page_inbox() -> None:
 
     leave_items = [r for r in pending_approvals if _action_type(r) == "leave_request"]
     other_approval_items = [r for r in pending_approvals if _action_type(r) != "leave_request"]
+    # Decided hires/terminations, newest first — where the approver finds
+    # the saved final settlement after approving.
+    history_items = sorted(
+        (
+            r
+            for r in approvals
+            if (r.get("status") or "").lower() != "pending"
+            and _action_type(r) in {"new_hire", "termination"}
+        ),
+        key=lambda r: str(r.get("decided_at") or ""),
+        reverse=True,
+    )
 
     names = _employee_names(
-        [r.get("employee_id") for r in pending_approvals]
+        [r.get("employee_id") for r in pending_approvals + history_items]
         + [g.get("employee_id") for g in pending_grievances if g.get("identity_visible")]
     )
 
@@ -826,12 +1277,22 @@ def page_inbox() -> None:
         "grievance": [_grievance_row(g) for g in pending_grievances],
     }
     rows_by_tab["all"] = rows_by_tab["leave"] + rows_by_tab["approval"] + rows_by_tab["grievance"]
+    rows_by_tab["history"] = [
+        {
+            **_approval_row(r),
+            "date": _friendly_when(r.get("decided_at")) or "—",
+            "status": (r.get("status") or "").lower(),
+        }
+        for r in history_items
+    ]
 
     tabs = [("all", i18n.t("inbox.tab_all"))]
     if can_approvals:
         tabs += [("leave", i18n.t("inbox.tab_leave")), ("approval", i18n.t("inbox.tab_approval"))]
     if can_grievances:
         tabs.append(("grievance", i18n.t("inbox.tab_grievance")))
+    if can_approvals:
+        tabs.append(("history", i18n.t("inbox.tab_history")))
 
     tab_full_labels = [f"{label} ({len(rows_by_tab[key])})" for key, label in tabs]
     chosen_full_label = st.radio(
@@ -866,7 +1327,7 @@ def page_inbox() -> None:
         st.divider()
         if kind == "approval":
             row = next(
-                (r for r in pending_approvals if str(r.get("approval_id") or "") == item_id), None
+                (r for r in approvals if str(r.get("approval_id") or "") == item_id), None
             )
             if row:
                 _render_approval_review(row, names, proposals)
@@ -1683,6 +2144,7 @@ def _render_new_hire_details(payload: dict) -> None:
             (i18n.t("staff.transport_allowance"), hire.get("transport_allowance")),
             (i18n.t("staff.email"), hire.get("email")),
             (i18n.t("staff.mobile"), hire.get("mobile")),
+            (i18n.t("detail.cv"), payload.get("cv_filename")),
             (i18n.t("detail.requested_by"), payload.get("requested_by")),
         ]
     )
@@ -1699,9 +2161,21 @@ def _render_termination_details(payload: dict) -> None:
             ),
             (i18n.t("staff.termination_date"), payload.get("termination_date")),
             (i18n.t("detail.reason"), payload.get("reason")),
+            (
+                i18n.t("profile.notice"),
+                i18n.t("notice.waived_detail", note=payload.get("notice_waiver_note") or "—")
+                if payload.get("notice_waived")
+                else (
+                    i18n.t("notice.days", days=payload.get("notice_days_required"))
+                    if payload.get("notice_days_required")
+                    else None
+                ),
+            ),
             (i18n.t("detail.requested_by"), payload.get("requested_by")),
         ]
     )
+    if payload.get("final_settlement"):
+        _render_final_settlement(payload["final_settlement"])
 
 
 def _render_generic_proposal_details(payload: dict) -> None:

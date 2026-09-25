@@ -896,16 +896,6 @@ section[data-testid="stSidebar"] .stButton > button:hover {
    Audit log — one visual language for every list in the app, built from
    real st.columns rows so a per-row View button can run real Python,
    never a plain st.dataframe grid). ---------- */
-.dt-card {
-  background: rgba(255,252,247,0.78);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 1px solid var(--yz-glass-border);
-  border-radius: 18px;
-  padding: .5rem .6rem .15rem;
-  margin-bottom: 1rem;
-}
-
 .dt-head-cell {
   background: #F3EADF;
   color: #6B5A4A;
@@ -1025,7 +1015,8 @@ section[data-testid="stSidebar"] .stButton > button:hover {
 
 /* ---------- Onboarding & Offboarding forms ---------- */
 .st-key-staff_card_hire,
-.st-key-staff_card_term {
+.st-key-staff_card_term,
+.st-key-staff_requests_card {
   background: rgba(255,252,247,0.78);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -1034,6 +1025,19 @@ section[data-testid="stSidebar"] .stButton > button:hover {
   padding: 1.2rem 1.4rem;
   max-width: 820px;
   margin-bottom: 1rem;
+}
+/* Streamlit sizes full-width elements (file uploader, a lone text input,
+   the table) from the page width, not the card's 820px cap, so they poked
+   out past the card's right edge. Fill the card's content box instead —
+   the same inner width the paired inputs in st.columns already get. */
+.st-key-staff_card_hire [data-testid="stElementContainer"],
+.st-key-staff_card_term [data-testid="stElementContainer"],
+.st-key-staff_requests_card [data-testid="stElementContainer"],
+.st-key-staff_card_hire [data-testid="stElementContainer"] > *,
+.st-key-staff_card_term [data-testid="stElementContainer"] > *,
+.st-key-staff_requests_card [data-testid="stElementContainer"] > * {
+  width: 100% !important;
+  max-width: 100%;
 }
 
 /* ---------- Growth Opportunities ---------- */
@@ -2155,8 +2159,6 @@ def data_table(
     view_label = view_label or i18n.t("grievances.col_view")
     weights = [1.0] * len(columns) + ([0.65] if on_view else [])
 
-    st.markdown('<div class="dt-card">', unsafe_allow_html=True)
-
     header_cols = st.columns(weights)
     for col, (_, label) in zip(header_cols, columns):
         col.markdown(f'<div class="dt-head-cell">{html.escape(label)}</div>', unsafe_allow_html=True)
@@ -2165,7 +2167,6 @@ def data_table(
 
     if not rows:
         st.markdown(f'<div class="dt-empty">{html.escape(empty_message)}</div>', unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
         return
 
     for i, row in enumerate(rows):
@@ -2188,8 +2189,6 @@ def data_table(
                 with cols[-1]:
                     if st.button(view_label, key=f"dtviewbtn_{key}_{i}", use_container_width=True):
                         on_view(row)
-
-    st.markdown("</div>", unsafe_allow_html=True)
 
 
 # =============================================================

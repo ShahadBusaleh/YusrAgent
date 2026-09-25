@@ -14,6 +14,7 @@ from app.api.routers import (
     grievances,
     growth,
     leave,
+    onboarding,
     payroll,
     proposed_actions,
     users,
@@ -58,3 +59,4 @@ app.include_router(audit.router)
 app.include_router(users.router)
 app.include_router(agent.router)
 app.include_router(payroll.router)
+app.include_router(onboarding.router)
