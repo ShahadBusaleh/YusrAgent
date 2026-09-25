@@ -70,6 +70,76 @@ def _safe_profile(employee: dict) -> dict:
     }
 
 
+def _profile_fields_for_query(query: str) -> tuple[str, ...]:
+    """Return only profile fields relevant to the query."""
+
+    if _is_payroll_query(query):
+        return (
+            "salary",
+            "basic_salary",
+        )
+
+    if _contains_any(
+        query,
+        (
+            "iban",
+            "bank",
+            "bank account",
+            "bank details",
+            "bank information",
+        ),
+    ):
+        return (
+            "bank_code",
+            "bank_name",
+            "iban",
+            "bank_iban",
+        )
+
+    if _contains_any(
+        query,
+        (
+            "phone",
+            "mobile",
+            "email",
+            "address",
+            "city",
+            "contact",
+        ),
+    ):
+        return (
+            "mobile",
+            "email",
+            "address",
+            "city",
+        )
+
+    if _contains_any(
+        query,
+        (
+            "job title",
+            "position",
+            "department",
+            "hire date",
+            "hired",
+            "employment status",
+            "manager",
+        ),
+    ):
+        return (
+            "job_title",
+            "department_id",
+            "department_name",
+            "hire_date",
+            "employment_status",
+            "manager_id",
+        )
+
+    return (
+        "employee_id",
+        "full_name",
+    )
+
 def _contains_any(query: str, words: tuple[str, ...]) -> bool:
     """Case-insensitive whole-word matching, so "late" doesn't fire on
     "calculate" or "present" on "represent"."""
@@ -423,6 +493,24 @@ def _is_bank_update(query: str) -> bool:
         )
     )
 
+def _detect_write_actions(query: str) -> list[str]:
+    """Detect write actions requested in the same query."""
+
+    actions: list[str] = []
+
+    if _is_personal_info_update(query):
+        actions.append("personal_info_update")
+
+    if _is_bank_update(query):
+        actions.append("bank_update")
+
+    if _is_certificate_request(query):
+        actions.append("certificate_request")
+
+    if detects_leave_submission_intent(query):
+        actions.append("leave_request")
+
+    return actions
 
 def _extract_new_iban(query: str) -> str | None:
     """Extract a Saudi IBAN from a bank-change request."""
@@ -512,10 +600,14 @@ def get_historical_precedent(
     if action_type == "leave_request":
         rows = conn.execute(
             """
-            SELECT status, COUNT(*) AS count
-            FROM leave_requests
-            WHERE employee_id = ?
-            GROUP BY status
+            SELECT p.status, COUNT(*) AS count
+            FROM proposed_actions pa
+            JOIN pending_approvals p
+                ON p.proposal_id = pa.proposal_id
+            WHERE pa.employee_id = ?
+            AND pa.action_type = 'leave_request'
+            AND p.status IN ('approved', 'rejected')
+            GROUP BY p.status
             """,
             (employee_id,),
         ).fetchall()
@@ -527,13 +619,21 @@ def get_historical_precedent(
             if status == "approved":
                 approved_count += count
 
-            elif status in {"rejected", "denied"}:
+            elif status == "rejected":
                 denied_count += count
 
     # -------------------------------------------------
     # Audit log precedent
     # -------------------------------------------------
 
+    if action_type == "leave_request":
+        return {
+            "employee_id": employee_id,
+            "action_type": action_type,
+            "approved_count": approved_count,
+            "denied_count": denied_count,
+            "total_count": approved_count + denied_count,
+        }
     audit_rows = conn.execute(
         """
         SELECT event_type, details
@@ -624,6 +724,7 @@ class HRAgent(BaseAgent):
 
         user = input.get("user") or {}
         query = str(input.get("query") or "")
+        write_actions = _detect_write_actions(query)
 
         employee_id = str(
             input.get("employee_id")
@@ -640,6 +741,23 @@ class HRAgent(BaseAgent):
         if not _own_record_only(user, employee_id):
             return empty
 
+        if len(write_actions) > 1:
+            return {
+                "facts": {
+                    "employee_id": employee_id,
+                    "request_assessment": {
+                        "status": "NEEDS_INFORMATION",
+                        "action_type": "multiple_actions",
+                        "missing_information": [],
+                        "notes": [
+                            "Multiple write actions were detected. "
+                            "Please submit one action at a time."
+                        ],
+                    },
+                },
+                "proposed_action": None,
+                "sources": [],
+            }
         conn = get_connection()
 
         # Initialize before any conditional branches.
@@ -663,7 +781,13 @@ class HRAgent(BaseAgent):
             )
 
             if employee:
-                facts["profile"] = _safe_profile(employee)
+                profile_fields = _profile_fields_for_query(query)
+
+                facts["profile"] = {
+                    key: employee[key]
+                    for key in profile_fields
+                    if key in employee
+                }
 
                 sources.append(
                     f"employees:{employee_id}"
@@ -1039,6 +1163,77 @@ class HRAgent(BaseAgent):
                     days = extracted.get("days")
 
                     facts["requested_days"] = days
+
+                    # -------------------------------------------------
+                    # Leave request sanity checks
+                    # -------------------------------------------------
+
+                    request_notes = []
+
+                    try:
+                        start = datetime.strptime(start_date, "%Y-%m-%d").date()
+                        end = datetime.strptime(end_date, "%Y-%m-%d").date()
+                        today = datetime.now().date()
+
+                        if start < today:
+                            request_notes.append(
+                                f"Requested leave starts in the past: {start_date}."
+                            )
+
+                        if end < start:
+                            request_notes.append(
+                                f"Leave end date {end_date} is before start date {start_date}."
+                            )
+
+                        existing_requests = list_leave_requests(
+                            conn,
+                            employee_id,
+                        )
+
+                        for existing in existing_requests:
+                            existing_status = str(
+                                existing.get("status") or ""
+                            ).lower()
+
+                            if existing_status == "rejected":
+                                continue
+
+                            existing_start = existing.get("start_date")
+                            existing_end = existing.get("end_date")
+
+                            if not existing_start or not existing_end:
+                                continue
+
+                            try:
+                                existing_start_date = datetime.strptime(
+                                    existing_start,
+                                    "%Y-%m-%d",
+                                ).date()
+                                existing_end_date = datetime.strptime(
+                                    existing_end,
+                                    "%Y-%m-%d",
+                                ).date()
+                            except ValueError:
+                                continue
+
+                            if start <= existing_end_date and end >= existing_start_date:
+                                request_notes.append(
+                                    "Requested leave overlaps an existing "
+                                    f"{existing_status or 'leave'} request "
+                                    f"from {existing_start} to {existing_end}."
+                                )
+
+                    except (TypeError, ValueError):
+                        request_notes.append(
+                            "Leave dates could not be validated."
+                        )
+
+                    facts["request_assessment"] = {
+                        "status": "READY_FOR_APPROVAL",
+                        "action_type": "leave_request",
+                        "missing_information": [],
+                        "notes": request_notes,
+                    }
 
                     if leave_balance:
                         type_remaining = leave_balance.get(

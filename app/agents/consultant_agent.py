@@ -10,14 +10,14 @@ from openai import OpenAI
 from app.agents.base import BaseAgent
 from app.config import get_settings
 from app.rag.retrieve import retrieve
+
 from app.security.governance import (
     detect_prompt_injection,
     mask_pii,
     sanitize_input,
     validate_output,
+    verify_citations,
 )
-
-
 # =========================================================
 # CONSTANTS
 # =========================================================
@@ -456,6 +456,7 @@ def _analyze_policy_chunks(
     for chunk in chunks:
 
         source_id = chunk.get("id")
+        source_table = chunk.get("source_table")
 
         text = chunk.get(
             "text",
@@ -473,6 +474,7 @@ def _analyze_policy_chunks(
             rules.append(
                 {
                     "source_id": source_id,
+                    "source_table": source_table,
                     "text": _safe_text(rule),
                 }
             )
@@ -482,6 +484,7 @@ def _analyze_policy_chunks(
             conditions.append(
                 {
                     "source_id": source_id,
+                    "source_table": source_table,
                     "text": _safe_text(condition),
                 }
             )
@@ -491,6 +494,7 @@ def _analyze_policy_chunks(
             exceptions.append(
                 {
                     "source_id": source_id,
+                    "source_table": source_table,
                     "text": _safe_text(exception),
                 }
             )
@@ -501,7 +505,93 @@ def _analyze_policy_chunks(
         "exceptions": exceptions,
     }
 
+def _detect_policy_conflicts(
+    policy_analysis: dict,
+) -> list[str]:
+    """
+    Detect explicit conflicts between Saudi Labor Law
+    and Company Policies.
+    """
 
+    conflicts: list[str] = []
+
+    entries = []
+
+    for field_name in (
+        "rules",
+        "conditions",
+        "exceptions",
+    ):
+        for entry in policy_analysis.get(field_name, []):
+            entries.append(
+                {
+                    "field": field_name,
+                    **entry,
+                }
+            )
+
+    law_entries = [
+        entry
+        for entry in entries
+        if entry.get("source_table") == "saudi_labor_law"
+    ]
+
+    policy_entries = [
+        entry
+        for entry in entries
+        if entry.get("source_table") == "company_policies"
+    ]
+
+    for law in law_entries:
+        law_text = _safe_text(
+            law.get("text")
+        ).strip()
+
+        for policy in policy_entries:
+            policy_text = _safe_text(
+                policy.get("text")
+            ).strip()
+
+            if not law_text or not policy_text:
+                continue
+
+            law_tokens = _extract_tokens(law_text)
+            policy_tokens = _extract_tokens(policy_text)
+
+            shared_tokens = law_tokens & policy_tokens
+
+            if len(shared_tokens) < 2:
+                continue
+
+            # Detect explicit numeric disagreement.
+            law_numbers = set(
+                re.findall(
+                    r"\b\d+(?:\.\d+)?\b",
+                    law_text,
+                )
+            )
+
+            policy_numbers = set(
+                re.findall(
+                    r"\b\d+(?:\.\d+)?\b",
+                    policy_text,
+                )
+            )
+
+            if (
+                law_numbers
+                and policy_numbers
+                and law_numbers != policy_numbers
+            ):
+                conflicts.append(
+                    "Potential conflict between "
+                    f"{law.get('source_id')} and "
+                    f"{policy.get('source_id')}: "
+                    "the retrieved law and company policy "
+                    "contain different numeric requirements."
+                )
+
+    return list(dict.fromkeys(conflicts))
 # =========================================================
 # SOURCES
 # =========================================================
@@ -642,6 +732,7 @@ def _format_context(
 def _generate_consultant_recommendation(
     query: str,
     chunks: list[dict],
+    is_grievance: bool = False,
 ) -> str:
     """
     Generate a policy-only Consultant response.
@@ -670,122 +761,49 @@ def _generate_consultant_recommendation(
     # -----------------------------------------------------
     # SYSTEM PROMPT
     # -----------------------------------------------------
+    if is_grievance:
+       system_prompt = """
+        You are the Consultant Agent in the Yusr Agentic HR System.
 
-    system_prompt = """
-You are the Consultant Agent in the Yusr Agentic HR System.
+        You are handling an employee grievance or complaint.
 
-Your role is HR policy retrieval and policy interpretation only.
+        STRICT RULES:
 
-STRICT RULES:
+        1. Use ONLY retrieved Saudi Labor Law and Company HR policy evidence.
+        2. Explain the relevant legal or policy rules and supporting evidence.
+        3. Mention the relevant Article or policy when available.
+        4. Do not access employee-specific data or the HR database.
+        5. Do not decide employee eligibility, approve, reject, or resolve the grievance.
+        6. Do not invent policies, legal rules, conditions, exceptions, or citations.
+        7. Never expose internal source IDs, Law IDs, record IDs, or filenames.
+        8. State clearly if the retrieved evidence is insufficient.
+        9. Human HR review is ALWAYS required.
+        10. If employee-specific information is required, indicate that it is required.
+        """.strip()
+    else:
+        system_prompt = """
+    You are the Consultant Agent in the Yusr Agentic HR System.
 
-1. Answer only from the retrieved policy evidence.
+    Your role is HR policy retrieval and policy interpretation only.
 
-2. Explain the policy rules that directly answer
-   the user's question.
+    STRICT RULES:
 
-3. Clearly identify policy:
-   - Rules
-   - Conditions
-   - Requirements
-   - Exceptions
-
-4. Do NOT access employee-specific data.
-
-5. Do NOT access the HR database.
-
-6. Do NOT evaluate whether a specific employee
-   satisfies a policy condition.
-
-7. Do NOT calculate employee leave balances.
-
-8. Do NOT determine employee eligibility.
-
-9. Do NOT assess an employee's request.
-
-10. Do NOT create employee-specific blockers.
-
-11. Do NOT request employee information.
-
-12. Do NOT approve or reject employee actions.
-
-13. Do NOT make authorization decisions.
-
-14. Never invent policies, legal rules, conditions,
-    exceptions, or citations.
-
-15. If the retrieved evidence is insufficient,
-    clearly say that the available policy evidence
-    is insufficient.
-
-16. Use human-readable source names only.
-17. Do not add citation tags such as [Source: ID].
-
-17. Keep the response concise and professional.
-
-18. The Manager Agent is responsible for governance
-    and final system-level decisions.
-
-19. The Consultant is advisory only.
-
-20. The Consultant must remain independent from
-    the HR Agent.
-
-21. When the retrieved evidence contains an Article number,
-    you may mention the Article number when relevant.
-
-22. Never mention, expose, or reproduce internal source IDs,
-    Law IDs, record IDs, filenames, or source identifiers
-    in the user-facing response.
-
-23. Use human-readable source names instead of internal identifiers.
-
-24. Internal identifiers may be used only for system validation,
-    source linking, and internal processing.
-
-GRIEVANCE HANDLING:
-
-When the user request is a grievance or complaint:
-
-1. Analyze the complaint using ONLY:
-   - Saudi Labor Law
-   - Company HR policies
-   - Retrieved policy evidence
-
-2. Determine whether the complaint appears:
-   - compliant with the regulations/policies
-   - or potentially in violation
-
-3. Identify the relevant:
-   - Article
-   - Company policy
-   when available in the retrieved evidence.
-
-4. Never expose Law IDs or other internal source identifiers
-   to the user.
-4. Provide:
-   - policy/legal analysis
-   - supporting evidence
-   - suggested resolution
-
-5. Determine whether resolving the grievance requires
-   employee-specific information.
-
-6. Return whether employee-specific data is required.
-
-7. NEVER retrieve employee-specific information yourself.
-
-8. If employee-specific information is required,
-   the Orchestrator may call the HR Agent only when
-   the employee's identity is visible.
-
-9. If the employee chose to hide their identity,
-   do not request, reveal, or retrieve identifying information.
-
-10. A grievance must NEVER be considered finally resolved
-    by the Consultant.
-
-11. Human HR review is ALWAYS required for grievances.
-""".strip()
+    1. Answer only from the retrieved policy evidence.
+    2. Explain the policy rules that directly answer the user's question.
+    3. Clearly identify rules, conditions, requirements, and exceptions.
+    4. Do NOT access employee-specific data or the HR database.
+    5. Do NOT evaluate employee eligibility or employee-specific conditions.
+    6. Do NOT calculate employee leave balances.
+    7. Do NOT approve, reject, or authorize employee actions.
+    8. Never invent policies, legal rules, conditions, exceptions, or citations.
+    9. If the retrieved evidence is insufficient, clearly say so.
+    10. Use human-readable source names only.
+    11. Keep the response concise and professional.
+    12. The Manager Agent is responsible for governance and final decisions.
+    13. The Consultant is advisory only and independent from the HR Agent.
+    14. Article numbers may be mentioned when relevant.
+    15. Never expose internal source IDs, Law IDs, record IDs, filenames, or source identifiers.
+    """.strip()
 
     # -----------------------------------------------------
     # USER PROMPT
@@ -862,7 +880,6 @@ Do not add citation tags such as [Source: ID].
         _normalize_citations(recommendation)
     )
 
-
 # =========================================================
 # CONSULTANT AGENT
 # =========================================================
@@ -913,6 +930,11 @@ class ConsultantAgent(BaseAgent):
             )
 
         raw_query = input.get("query", "")
+        intent = str(
+            input.get("intent") or ""
+        ).strip().upper()
+
+        is_grievance = intent == "GRIEVANCE"
 
         # Second call shape: {"action_type": "bank_update"} looks up the
         # policy/law citation for that action instead of a free-text
@@ -1289,7 +1311,9 @@ class ConsultantAgent(BaseAgent):
 
         # Consultant does not create employee-specific
         # conflicts.
-        conflicts: list[str] = []
+        conflicts = _detect_policy_conflicts(
+            policy_analysis
+        )
 
         # =================================================
         # 8. LLM GENERATION
@@ -1312,6 +1336,7 @@ class ConsultantAgent(BaseAgent):
                 _generate_consultant_recommendation(
                     query=query,
                     chunks=relevant_chunks,
+                    is_grievance=is_grievance,
                 )
             )
 
@@ -1388,10 +1413,15 @@ class ConsultantAgent(BaseAgent):
             for chunk in relevant_chunks
         ]
 
+
         try:
 
             output_is_valid = (
                 validate_output(
+                    recommendation,
+                    validation_sources,
+                )
+                and verify_citations(
                     recommendation,
                     validation_sources,
                 )

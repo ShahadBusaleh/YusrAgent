@@ -11,6 +11,7 @@ from app.security.governance import (
     mask_pii,
     requires_human_approval,
     validate_output,
+    verify_citations,
 )
 
 
@@ -285,7 +286,7 @@ def _get_ai_recommendation(
     return "MANAGER REVIEW"
 
 def _compose_decision_brief(facts: dict, consultant_result: dict) -> str:
-    """Build a concise Decision Brief for human HR review."""
+    """Build an evidence-based Decision Brief for human HR review."""
 
     if not isinstance(facts, dict):
         return ""
@@ -309,6 +310,40 @@ def _compose_decision_brief(facts: dict, consultant_result: dict) -> str:
 
         parts.append(f"Employee: {employee_text}")
 
+    # HR assessment
+    assessment = facts.get("request_assessment")
+    if isinstance(assessment, dict):
+        status = assessment.get("status")
+        action_type = assessment.get("action_type")
+
+        if action_type:
+            parts.append(f"Request: {action_type}")
+
+        if status:
+            parts.append(f"HR Assessment: {status}")
+
+        missing = assessment.get("missing_information") or []
+        if missing:
+            parts.append(
+                "Missing information: "
+                + ", ".join(str(item) for item in missing)
+            )
+
+        notes = assessment.get("notes") or []
+        for note in notes:
+            if note:
+                parts.append(f"HR Note: {note}")
+
+    # Request evidence
+    requested_days = facts.get("requested_days")
+    remaining_balance = facts.get("remaining_balance")
+
+    if requested_days is not None:
+        parts.append(f"Requested days: {requested_days:g}")
+
+    if remaining_balance is not None:
+        parts.append(f"Remaining balance: {remaining_balance:g}")
+
     # Historical precedent
     precedent = facts.get("historical_precedent")
 
@@ -331,27 +366,76 @@ def _compose_decision_brief(facts: dict, consultant_result: dict) -> str:
         f"AI Recommendation: {ai_recommendation}"
     )
 
-    # Short reason
-    if ai_recommendation == "MANAGER REVIEW":
+    # Policy evidence
+    consultant_sources = (
+        consultant_result.get("sources") or []
+        if isinstance(consultant_result, dict)
+        else []
+    )
+
+    source_names = []
+
+    for source in consultant_sources:
+        if isinstance(source, dict):
+            source_name = (
+                source.get("source_name")
+                or source.get("filename")
+                or source.get("id")
+            )
+        else:
+            source_name = source
+
+        if source_name:
+            source_names.append(str(source_name))
+
+    source_names = list(dict.fromkeys(source_names))
+
+    if source_names:
         parts.append(
-            "Reason: Approval depends on workload, "
-            "business commitments, and staffing requirements."
+            "Policy evidence: " + ", ".join(source_names)
         )
 
-    elif ai_recommendation == "APPROVE":
-        parts.append(
-            "Reason: The request appears consistent "
-            "with the available policy evidence."
-        )
-
-    elif ai_recommendation == "REJECT":
-        parts.append(
-            "Reason: The request conflicts with "
-            "the available policy evidence."
-        )
+    # Human decision remains final
+    parts.append(
+        "Final decision: Pending Manager Review"
+    )
 
     return "\n".join(parts)
+def _find_duplicate_pending_action(
+    conn,
+    employee_id: str,
+    action_type: str,
+    payload: dict,
+) -> dict | None:
+    """Return an existing pending approval for the same action and payload."""
+    import json
 
+    rows = conn.execute(
+        """
+        SELECT pa.*, p.approval_id
+        FROM proposed_actions pa
+        JOIN pending_approvals p
+            ON p.proposal_id = pa.proposal_id
+        WHERE pa.employee_id = ?
+          AND pa.action_type = ?
+          AND pa.status = 'pending_approval'
+          AND p.status = 'pending'
+        ORDER BY pa.created_at DESC
+        """,
+        (employee_id, action_type),
+    ).fetchall()
+
+    target_payload = json.dumps(payload, sort_keys=True)
+
+    for row in rows:
+        existing_payload = json.dumps(
+            json.loads(row["payload_json"]),
+            sort_keys=True,
+        )
+        if existing_payload == target_payload:
+            return dict(row)
+
+    return None
 def _submit_for_approval(
     employee_id: str,
     action_type: str,
@@ -368,6 +452,19 @@ def _submit_for_approval(
     they were confirmed to the user but never written anywhere."""
     conn = get_connection()
     try:
+        duplicate = _find_duplicate_pending_action(
+            conn,
+            employee_id,
+            action_type,
+            payload,
+        )
+
+        if duplicate:
+            return (
+                f"Your request is already pending approval "
+                f"(proposal {duplicate['proposal_id']})."
+            )
+    
         proposal = create_proposed_action(
             conn,
             employee_id=employee_id,
@@ -572,10 +669,12 @@ class ManagerAgent(BaseAgent):
             # against the retrieved documents; HR facts are deterministic
             # values from the database and just need their table sources.
             if policy_text:
-                grounded = validate_output(policy_text, consultant_sources)
+                grounded = (
+                    validate_output(policy_text, consultant_sources)
+                    and verify_citations(policy_text, consultant_sources)
+                )
             else:
                 grounded = bool(response_text and hr_sources)
-
         if not grounded:
             if consultant_failed and not response_text:
                 error = consultant_result.get("error") or {}

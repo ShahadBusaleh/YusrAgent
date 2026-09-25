@@ -162,6 +162,36 @@ def validate_output(response: str, sources: list) -> bool:
     overlap = sum(1 for t in tokens if t in blob)
     return overlap / max(len(tokens), 1) >= 0.08
 
+def verify_citations(response: str, sources: list) -> bool:
+    """Return True when every explicit source citation belongs to retrieved sources."""
+    if not response:
+        return True
+
+    retrieved_ids = set()
+
+    for source in sources or []:
+        if isinstance(source, dict):
+            source_id = source.get("id")
+        else:
+            source_id = source
+
+        if source_id:
+            retrieved_ids.add(str(source_id).strip().lower())
+
+    citation_pattern = re.compile(
+        r"\[\s*source\s*:\s*([^\]]+)\]",
+        re.IGNORECASE,
+    )
+
+    citations = citation_pattern.findall(str(response))
+
+    if not citations:
+        return True
+
+    return all(
+        citation.strip().lower() in retrieved_ids
+        for citation in citations
+    )
 
 def check_rate_limit(user_id: str, limit: int = 30, window_seconds: int = 60) -> bool:
     """Return True if the caller is within the window budget."""
