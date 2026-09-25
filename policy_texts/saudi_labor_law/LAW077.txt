@@ -1,0 +1,7 @@
+Law ID: LAW077
+Category: End of Service
+Article: 84
+Title: End-of-Service Award
+Rule: When the employment relationship ends, the employer must pay the worker an end-of-service award equal to half a month's wage for each of the first five years of service and one month's wage for each year after that. The award is calculated on the last wage received. The worker is entitled to a proportional award for parts of a year.
+Conditions: Applies when the employment relationship ends, subject to Articles 80, 85 and 87.
+Exceptions: Not due where Article 80 dismissal applies; reduced on resignation under Article 85.

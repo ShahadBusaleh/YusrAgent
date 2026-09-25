@@ -1,0 +1,7 @@
+Law ID: LAW080
+Category: End of Service
+Article: 88
+Title: Settlement of Entitlements at End of Service
+Rule: When the employment relationship ends, the employer must pay the worker's wages and entitlements within a maximum of one week from the end of the relationship. If the worker terminated the contract, the employer must settle all entitlements within two weeks.
+Conditions: Applies to all contract endings.
+Exceptions: The employer may deduct any debt owed by the worker from the entitlements within the legal limits.

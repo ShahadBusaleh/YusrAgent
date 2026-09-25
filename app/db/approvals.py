@@ -11,6 +11,17 @@ from app.db.attendance import add_leave_days
 from app.db.employees import get_employee
 from app.db.leave import create_leave_request
 from app.db.proposed_actions import get_proposed_action
+from app.security.passwords import hash_password
+from app.seed_leave_balances import (
+    ANNUAL_BASE_DAYS,
+    ANNUAL_SENIOR_DAYS,
+    ANNUAL_SENIOR_YEARS,
+    DATE_FMT_ROWS,
+    EMERGENCY_ENTITLEMENT_DAYS,
+    SICK_ENTITLEMENT_DAYS,
+    _parse_ddmmyyyy,
+    _years_of_service,
+)
 
 _LEAVE_BALANCE_COLUMNS = {"annual", "sick", "emergency"}
 
@@ -170,6 +181,8 @@ def decide_approval(
             decided_at=now,
             decided_by=decided_by,
         )
+        _sync_new_hire(conn, proposal_id, status=status)
+        _sync_termination(conn, proposal_id, status=status)
     return get_approval(conn, approval_id)
 
 
@@ -362,4 +375,196 @@ def _sync_sensitive_change(
     conn.execute(
         "UPDATE proposed_actions SET related_request_id = ? WHERE proposal_id = ?",
         (request_id, proposal_id),
+    )
+
+
+# Same dev/test password as every seeded account (see DATABASE_SCHEMA.md).
+# Demo project only — replace before any real use.
+_NEW_HIRE_DEFAULT_PASSWORD = "ChangeMe123!"
+
+# employment_status by termination type (TEAM.md Phase 4); values match the
+# statuses already in the seeded data. Anything else -> 'Terminated'.
+_TERMINATION_STATUS = {
+    "resignation": "Resigned",
+    "retirement": "Retired",
+    "end_of_contract": "End of Contract",
+}
+
+
+def _next_employee_id(conn: sqlite3.Connection) -> str:
+    """EMP-#### in the seeded 4-digit format (next_id would pad to 5)."""
+    row = conn.execute(
+        """
+        SELECT MAX(CAST(SUBSTR(employee_id, 5) AS INTEGER))
+        FROM employees
+        WHERE employee_id LIKE 'EMP-%'
+        """
+    ).fetchone()
+    return f"EMP-{(row[0] or 0) + 1:04d}"
+
+
+def _sync_new_hire(
+    conn: sqlite3.Connection,
+    proposal_id: str,
+    *,
+    status: str,
+) -> None:
+    """If an approved proposal is a new_hire, create the employees row,
+    its login in users, and its leave_balances row. Rejected: no write."""
+    proposal = get_proposed_action(conn, proposal_id)
+    if not proposal or proposal.get("action_type") != "new_hire":
+        return
+    if status != "approved":
+        return
+
+    try:
+        payload = json.loads(proposal.get("payload_json") or "{}")
+    except (TypeError, ValueError):
+        return
+    hire = payload.get("new_employee") or {}
+
+    employee_id = _next_employee_id(conn)
+    now = datetime.now(timezone.utc).isoformat()
+    department = conn.execute(
+        "SELECT location_city FROM departments WHERE department_id = ?",
+        (hire.get("department_id"),),
+    ).fetchone()
+    work_city = department[0] if department else None
+    nationality = hire.get("nationality")
+    basic = hire.get("basic_salary")
+    housing = hire.get("housing_allowance") or 0
+    transport = hire.get("transport_allowance") or 0
+
+    conn.execute(
+        """
+        INSERT INTO employees (
+            employee_id, full_name, employee_name_en, gender, email, mobile,
+            city, work_city, nationality, is_saudi, department_id,
+            job_title, job_title_en, employment_status, employment_type,
+            hire_date, manager_id, salary, basic_salary, basic_salary_sar,
+            housing_allowance, housing_allowance_sar, transport_allowance,
+            transport_allowance_sar, is_hr_approver, created_at
+        ) VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active', ?,
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?
+        )
+        """,
+        (
+            employee_id,
+            hire.get("full_name"),
+            hire.get("full_name"),
+            hire.get("gender"),
+            hire.get("email"),
+            hire.get("mobile"),
+            work_city,
+            work_city,
+            nationality,
+            None if not nationality else ("Yes" if nationality.lower() == "saudi" else "No"),
+            hire.get("department_id"),
+            hire.get("job_title"),
+            hire.get("job_title"),
+            hire.get("employment_type") or "Full-time",
+            hire.get("hire_date"),
+            hire.get("manager_id"),
+            basic,
+            basic,
+            basic,
+            housing,
+            housing,
+            transport,
+            transport,
+            now,
+        ),
+    )
+
+    user_id = next_id(conn, "users", "user_id", "USR")
+    conn.execute(
+        """
+        INSERT INTO users (
+            user_id, employee_id, username, password_hash, role,
+            is_active, created_at, last_login_at
+        ) VALUES (?, ?, ?, ?, 'employee', 1, ?, NULL)
+        """,
+        (
+            user_id,
+            employee_id,
+            employee_id,
+            hash_password(_NEW_HIRE_DEFAULT_PASSWORD),
+            now,
+        ),
+    )
+
+    # Same placeholder entitlement rules as app/seed_leave_balances.py.
+    as_of = date.today()
+    years = _years_of_service(_parse_ddmmyyyy(hire.get("hire_date")), as_of)
+    annual = ANNUAL_SENIOR_DAYS if years >= ANNUAL_SENIOR_YEARS else ANNUAL_BASE_DAYS
+    conn.execute(
+        """
+        INSERT INTO leave_balances (
+            employee_id, annual_entitlement, annual_used, annual_remaining,
+            sick_entitlement, sick_used, sick_remaining,
+            emergency_entitlement, emergency_used, emergency_remaining,
+            as_of_date
+        ) VALUES (?, ?, 0, ?, ?, 0, ?, ?, 0, ?, ?)
+        """,
+        (
+            employee_id,
+            annual,
+            annual,
+            SICK_ENTITLEMENT_DAYS,
+            SICK_ENTITLEMENT_DAYS,
+            EMERGENCY_ENTITLEMENT_DAYS,
+            EMERGENCY_ENTITLEMENT_DAYS,
+            as_of.strftime(DATE_FMT_ROWS),
+        ),
+    )
+
+    conn.execute(
+        "UPDATE proposed_actions SET related_request_id = ? WHERE proposal_id = ?",
+        (employee_id, proposal_id),
+    )
+
+
+def _sync_termination(
+    conn: sqlite3.Connection,
+    proposal_id: str,
+    *,
+    status: str,
+) -> None:
+    """If an approved proposal is a termination, set the employee's
+    status for the termination type and deactivate their login. Never deletes rows, and does
+    not reassign direct reports or pending requests. Rejected: no write."""
+    proposal = get_proposed_action(conn, proposal_id)
+    if not proposal or proposal.get("action_type") != "termination":
+        return
+    if status != "approved":
+        return
+
+    try:
+        payload = json.loads(proposal.get("payload_json") or "{}")
+    except (TypeError, ValueError):
+        return
+    employee_id = payload.get("employee_id")
+    if not employee_id:
+        return
+
+    conn.execute(
+        """
+        UPDATE employees
+        SET employment_status = ?, termination_date = ?
+        WHERE employee_id = ?
+        """,
+        (
+            _TERMINATION_STATUS.get(payload.get("termination_type"), "Terminated"),
+            payload.get("termination_date"),
+            employee_id,
+        ),
+    )
+    conn.execute(
+        "UPDATE users SET is_active = 0 WHERE employee_id = ?",
+        (employee_id,),
+    )
+    conn.execute(
+        "UPDATE proposed_actions SET related_request_id = ? WHERE proposal_id = ?",
+        (employee_id, proposal_id),
     )

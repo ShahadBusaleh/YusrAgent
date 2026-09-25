@@ -1,0 +1,7 @@
+Law ID: LAW072
+Category: Contract Termination
+Article: 75
+Title: Notice Period for Indefinite-Term Contracts (amended 2025)
+Rule: When an indefinite-term contract is terminated by either party for a legitimate reason, written notice is required. For a worker paid monthly, the notice period is at least 30 days if the worker terminates and at least 60 days if the employer terminates. For other workers, the notice period is at least 30 days for both parties.
+Conditions: Applies to indefinite-term contracts; amended provisions effective 18-02-2025.
+Exceptions: Does not apply to fixed-term contracts, which end on expiry under Article 74.

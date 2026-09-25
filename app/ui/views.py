@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import re
 from datetime import date, datetime, timedelta
+from fractions import Fraction
 
 import httpx
 import streamlit as st
@@ -211,6 +212,301 @@ def _resolve_identity_choice(identity_visible: bool) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Phase 4: new hire / termination forms inside Ask Yusor (HR staff only).
+# Each form builds a structured "key: value" query and sends it through the
+# normal POST /agent/query path — HR agent parses it, Manager files it as a
+# HIGH-risk pending approval. Nothing is written until an HR manager approves.
+# ---------------------------------------------------------------------------
+
+_STAFFING_ROLES = {"hr_specialist", "hr_manager", "admin"}
+# Same values as app.agents.hr_agent.TERMINATION_TYPES.
+_TERMINATION_TYPES = (
+    "termination_by_employer",
+    "article_80",
+    "resignation",
+    "end_of_contract",
+    "mutual_agreement",
+    "retirement",
+    "force_majeure",
+)
+_EMPLOYMENT_TYPES = ("Full-time", "Contract", "Part-time", "Temporary")
+_ARABIC_RE = re.compile(r"[؀-ۿݐ-ݿ]")
+_STAFF_FORM_PREFIXES = ("hire_", "term_")
+_FIELD_BREAK_RE = re.compile(r"\s*[;\r\n]+\s*")
+
+
+def _can_manage_staff() -> bool:
+    return (st.session_state.get("me") or {}).get("role") in _STAFFING_ROLES
+
+
+def _close_staff_form() -> None:
+    st.session_state.pop("staff_form", None)
+    for key in list(st.session_state.keys()):
+        if str(key).startswith(_STAFF_FORM_PREFIXES):
+            st.session_state.pop(key, None)
+
+
+def _staffing_query(header: str, fields: list[tuple[str, object]]) -> str:
+    """One "key: value" pair per field; ";" and new lines inside a value
+    would start a new field in the HR parser, so they become commas."""
+    pairs = [
+        f"{key}: {_FIELD_BREAK_RE.sub(', ', str(value)).strip()}"
+        for key, value in fields
+        if value not in (None, "")
+    ]
+    return header + "\n" + "; ".join(pairs)
+
+
+def _load_departments() -> list[dict] | None:
+    """Real departments, or None when this role can't read the list
+    (GET /experience-gap/departments is hr_manager/admin only)."""
+    if "staff_departments" not in st.session_state:
+        try:
+            data = api.raise_for_api(api.request("GET", "/experience-gap/departments")) or {}
+            st.session_state["staff_departments"] = data.get("departments") or []
+        except RuntimeError:
+            st.session_state["staff_departments"] = None
+    return st.session_state["staff_departments"]
+
+
+def _employee_picker(
+    label: str,
+    key: str,
+    *,
+    department_id: str | None = None,
+    optional: bool = False,
+    exclude_id: str | None = None,
+) -> dict | None:
+    """Search active employees through GET /employees (max 50 per call)."""
+    search = st.text_input(i18n.t("staff.search"), key=f"{key}_q")
+    params = {}
+    if search.strip():
+        params["q"] = search.strip()
+    if department_id:
+        params["department_id"] = department_id
+    if not params:
+        st.caption(i18n.t("staff.search_hint"))
+        return None
+    try:
+        rows = api.raise_for_api(api.request("GET", "/employees", params=params)) or []
+    except RuntimeError as exc:
+        st.error(str(exc))
+        return None
+    rows = [
+        r
+        for r in rows
+        if r.get("employment_status") == "Active" and r.get("employee_id") != exclude_id
+    ]
+    if not rows:
+        st.caption(i18n.t("staff.no_matches"))
+        return None
+    by_id = {r["employee_id"]: r for r in rows}
+    options = ([None] if optional else []) + list(by_id)
+    chosen = st.selectbox(
+        label,
+        options,
+        key=f"{key}_pick",
+        format_func=lambda eid: i18n.t("staff.none")
+        if eid is None
+        else f"{eid} — {by_id[eid].get('full_name') or ''} — {by_id[eid].get('job_title') or ''}",
+    )
+    return by_id.get(chosen)
+
+
+def _english_only_error(fields: list[tuple[str, str]]) -> bool:
+    """Arabic text would send the whole query through the LLM translation
+    step, which may rewrite the keys; records are stored in English."""
+    for label, value in fields:
+        if _ARABIC_RE.search(value or ""):
+            st.error(i18n.t("staff.english_only", field=label))
+            return True
+    return False
+
+
+def _render_new_hire_form() -> None:
+    with st.container(border=True, key="staff_form_hire"):
+        st.markdown(f"**{i18n.t('staff.hire_title')}**")
+        c1, c2 = st.columns(2)
+        full_name = c1.text_input(i18n.t("staff.full_name"), key="hire_full_name")
+        job_title = c2.text_input(i18n.t("staff.job_title"), key="hire_job_title")
+        gender = c1.selectbox(i18n.t("staff.gender"), ["Female", "Male"], key="hire_gender")
+        nationality = c2.text_input(i18n.t("staff.nationality"), value="Saudi", key="hire_nationality")
+        email = c1.text_input(i18n.t("staff.email"), key="hire_email")
+        mobile = c2.text_input(i18n.t("staff.mobile"), key="hire_mobile")
+
+        departments = _load_departments()
+        department_id = None
+        if departments:
+            names = {d["department_id"]: d.get("department_name") for d in departments}
+            department_id = st.selectbox(
+                i18n.t("staff.department"),
+                list(names),
+                key="hire_department",
+                format_func=lambda dep_id: f"{names[dep_id]} ({dep_id})",
+            )
+            manager = _employee_picker(
+                i18n.t("staff.manager_optional"),
+                "hire_manager",
+                department_id=department_id,
+                optional=True,
+            )
+        else:
+            manager = _employee_picker(i18n.t("staff.manager"), "hire_manager")
+            if manager:
+                department_id = manager.get("department_id")
+                st.caption(
+                    i18n.t(
+                        "staff.department_from_manager",
+                        department=f"{manager.get('department_name')} ({department_id})",
+                    )
+                )
+
+        c3, c4 = st.columns(2)
+        employment_type = c3.selectbox(
+            i18n.t("staff.employment_type"), _EMPLOYMENT_TYPES, key="hire_employment_type"
+        )
+        hire_date = c4.date_input(
+            i18n.t("staff.hire_date"), value=date.today(), format="DD-MM-YYYY", key="hire_date"
+        )
+        s1, s2, s3 = st.columns(3)
+        basic = s1.number_input(i18n.t("staff.basic_salary"), min_value=0.0, step=100.0, key="hire_basic")
+        housing = s2.number_input(i18n.t("staff.housing_allowance"), min_value=0.0, step=100.0, key="hire_housing")
+        transport = s3.number_input(i18n.t("staff.transport_allowance"), min_value=0.0, step=50.0, key="hire_transport")
+
+        b1, b2 = st.columns(2)
+        submit = b1.button(i18n.t("staff.submit"), type="primary", key="hire_submit", use_container_width=True)
+        cancel = b2.button(i18n.t("staff.cancel"), key="hire_cancel", use_container_width=True)
+
+    if cancel:
+        _close_staff_form()
+        st.rerun()
+    if not submit:
+        return
+
+    missing = [
+        label
+        for label, ok in (
+            (i18n.t("staff.full_name"), full_name.strip()),
+            (i18n.t("staff.job_title"), job_title.strip()),
+            (i18n.t("staff.department"), department_id),
+            (i18n.t("staff.basic_salary"), basic > 0),
+        )
+        if not ok
+    ]
+    if missing:
+        st.error(i18n.t("staff.required", fields=", ".join(missing)))
+        return
+    if _english_only_error(
+        [
+            (i18n.t("staff.full_name"), full_name),
+            (i18n.t("staff.job_title"), job_title),
+            (i18n.t("staff.nationality"), nationality),
+        ]
+    ):
+        return
+
+    query = _staffing_query(
+        "Hire new employee",
+        [
+            ("full_name", full_name.strip()),
+            ("gender", gender),
+            ("nationality", nationality.strip()),
+            ("email", email.strip()),
+            ("mobile", mobile.strip()),
+            ("department_id", department_id),
+            ("job_title", job_title.strip()),
+            ("manager_id", (manager or {}).get("employee_id")),
+            ("employment_type", employment_type),
+            ("hire_date", hire_date.strftime("%d-%m-%Y")),
+            ("basic_salary", f"{basic:g}"),
+            ("housing_allowance", f"{housing:g}"),
+            ("transport_allowance", f"{transport:g}"),
+        ],
+    )
+    _close_staff_form()
+    _submit_query(query)
+    st.rerun()
+
+
+def _render_termination_form() -> None:
+    me = st.session_state.get("me") or {}
+    with st.container(border=True, key="staff_form_term"):
+        st.markdown(f"**{i18n.t('staff.term_title')}**")
+        employee = _employee_picker(
+            i18n.t("staff.employee"), "term_employee", exclude_id=me.get("employee_id")
+        )
+        c1, c2 = st.columns(2)
+        termination_type = c1.selectbox(
+            i18n.t("staff.termination_type"),
+            [None, *_TERMINATION_TYPES],
+            key="term_type",
+            format_func=lambda v: "—" if v is None else i18n.t(f"term.{v}"),
+        )
+        termination_date = c2.date_input(
+            i18n.t("staff.termination_date"), value=date.today(), format="DD-MM-YYYY", key="term_date"
+        )
+        reason = st.text_area(i18n.t("staff.reason"), key="term_reason")
+
+        b1, b2 = st.columns(2)
+        submit = b1.button(i18n.t("staff.submit"), type="primary", key="term_submit", use_container_width=True)
+        cancel = b2.button(i18n.t("staff.cancel"), key="term_cancel", use_container_width=True)
+
+    if cancel:
+        _close_staff_form()
+        st.rerun()
+    if not submit:
+        return
+
+    missing = [
+        label
+        for label, ok in (
+            (i18n.t("staff.employee"), employee),
+            (i18n.t("staff.termination_type"), termination_type),
+            (i18n.t("staff.reason"), reason.strip()),
+        )
+        if not ok
+    ]
+    if missing:
+        st.error(i18n.t("staff.required", fields=", ".join(missing)))
+        return
+    if _english_only_error([(i18n.t("staff.reason"), reason)]):
+        return
+
+    query = _staffing_query(
+        "Terminate employee",
+        [
+            ("employee_id", employee.get("employee_id")),
+            ("termination_type", termination_type),
+            ("termination_date", termination_date.strftime("%d-%m-%Y")),
+            ("reason", reason.strip()),
+        ],
+    )
+    _close_staff_form()
+    _submit_query(query)
+    st.rerun()
+
+
+def _render_staffing_actions() -> None:
+    if not _can_manage_staff():
+        return
+    c1, c2 = st.columns(2)
+    if c1.button(i18n.t("staff.add_employee"), key="staff_open_hire", use_container_width=True):
+        _close_staff_form()
+        st.session_state["staff_form"] = "new_hire"
+        st.rerun()
+    if c2.button(i18n.t("staff.terminate_employee"), key="staff_open_term", use_container_width=True):
+        _close_staff_form()
+        st.session_state["staff_form"] = "termination"
+        st.rerun()
+
+    form = st.session_state.get("staff_form")
+    if form == "new_hire":
+        _render_new_hire_form()
+    elif form == "termination":
+        _render_termination_form()
+
+
 def _render_message(message: dict, index: int) -> None:
     role = message.get("role")
     content = str(message.get("content") or "")
@@ -292,6 +588,7 @@ def page_chat() -> None:
                     if st.button(label, use_container_width=True):
                         _submit_query(query)
                         st.rerun()
+        _render_staffing_actions()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -430,7 +727,7 @@ def page_inbox() -> None:
             "_id": str(r.get("approval_id") or ""),
             "type": styles.type_badge_html("approval", i18n.t("inbox.type_approval")),
             "employee": names.get(str(r.get("employee_id") or "")) or r.get("employee_id") or "—",
-            "request": _action_label(r),
+            "request": _staffing_label(proposals.get(r.get("proposal_id"))) or _action_label(r),
             "date": _friendly_when(r.get("created_at")) or "—",
             "status": (r.get("status") or "pending").lower(),
         }
@@ -511,6 +808,9 @@ def _render_approval_review(row: dict, names: dict, proposals: dict) -> None:
     employee_id = str(row.get("employee_id") or "")
     person = names.get(employee_id) or employee_id or "—"
     status = (row.get("status") or "pending").lower()
+    staffing_label = _staffing_label(proposals.get(row.get("proposal_id")))
+    if staffing_label:
+        row = {**row, "action_summary": staffing_label}
 
     with st.container(key=f"inbox_review_{approval_id}"):
         top_l, top_r = st.columns([5, 1])
@@ -643,6 +943,11 @@ def _render_decision_brief(decision_brief: dict, approval_id: str) -> None:
         st.markdown(f"**{i18n.t('inbox.risk')}**")
         st.write(str(decision_brief.get("risk_level") or "—").upper())
 
+    profile = decision_brief.get("termination_profile")
+    if profile:
+        _render_termination_profile(profile)
+    _render_staffing_checklist(decision_brief.get("action_type"))
+
     precedent = decision_brief.get("historical_precedent")
     if precedent:
         st.markdown(f"**{i18n.t('inbox.historical_precedent')}**")
@@ -678,6 +983,145 @@ def _render_decision_brief(decision_brief: dict, approval_id: str) -> None:
         st.markdown(f"**{i18n.t('inbox.notes')}**")
         for reason in reasons:
             st.write(f"- {reason}")
+
+
+def _cite(item: dict | None) -> str:
+    item = item or {}
+    if not item.get("law_id"):
+        return ""
+    return i18n.t("profile.cite", article=item.get("article"), law_id=item.get("law_id"))
+
+
+def _money(value) -> str:
+    return f"{float(value or 0):,.2f}"
+
+
+def _ratio_text(ratio) -> str:
+    ratio = float(ratio or 0)
+    if ratio >= 1:
+        return i18n.t("profile.ratio_full")
+    if ratio <= 0:
+        return "0"
+    return str(Fraction(ratio).limit_denominator(3))
+
+
+def _render_termination_profile(profile: dict) -> None:
+    """Read-only end-of-service file from HR agent's get_termination_profile.
+    Every figure shows the article it was computed from."""
+    st.markdown(f"**{i18n.t('profile.title')}**")
+    if profile.get("error"):
+        st.warning(profile["error"])
+        st.caption(i18n.t("profile.disclaimer"))
+        return
+
+    service = profile.get("service") or {}
+    wage = profile.get("monthly_wage") or {}
+    award = profile.get("end_of_service_award") or {}
+    notice = profile.get("notice") or {}
+    leave = profile.get("unused_leave") or {}
+    settlement = profile.get("settlement") or {}
+    impact = profile.get("impact") or {}
+
+    award_cites = [_cite(award.get("full_award_law"))]
+    if (award.get("ratio_law") or {}).get("law_id") != (award.get("full_award_law") or {}).get("law_id"):
+        award_cites.append(_cite(award.get("ratio_law")))
+
+    required = notice.get("required_days")
+    if required is None:
+        notice_text = i18n.t("profile.notice_by_agreement")
+    elif required == 0:
+        notice_text = i18n.t("profile.notice_na")
+    else:
+        notice_text = i18n.t("profile.notice_value", required=required, given=notice.get("days_given"))
+
+    styles.detail_card(
+        [
+            (
+                i18n.t("profile.service"),
+                i18n.t(
+                    "profile.service_value",
+                    y=service.get("years"),
+                    m=service.get("months"),
+                    d=service.get("days"),
+                    total=service.get("total_days"),
+                )
+                + f" · {_cite(service)}",
+            ),
+            (i18n.t("profile.monthly_wage"), f"{_money(wage.get('value'))} SAR · {_cite(wage)}"),
+            (
+                i18n.t("profile.award"),
+                i18n.t(
+                    "profile.award_value",
+                    full=_money(award.get("full_award")),
+                    ratio=_ratio_text(award.get("ratio")),
+                    value=_money(award.get("value")),
+                )
+                + " · "
+                + " + ".join(award_cites),
+            ),
+            (i18n.t("profile.notice"), f"{notice_text} · {_cite(notice)}"),
+            (
+                i18n.t("profile.unused_leave"),
+                i18n.t(
+                    "profile.unused_leave_value",
+                    days=f"{float(leave.get('annual_remaining_days') or 0):g}",
+                    daily=_money(leave.get("daily_wage")),
+                    value=_money(leave.get("value")),
+                )
+                + f" · {_cite(leave)}",
+            ),
+            (
+                i18n.t("profile.settlement"),
+                i18n.t(
+                    "profile.settlement_value",
+                    deadline=settlement.get("deadline"),
+                    days=settlement.get("within_days"),
+                )
+                + f" · {_cite(settlement)}",
+            ),
+        ]
+    )
+    st.caption(i18n.t("profile.monthly_wage_note"))
+
+    for warning in profile.get("warnings") or []:
+        code = warning.get("code")
+        if code == "notice_shortfall":
+            text = i18n.t(
+                "profile.warn_notice",
+                given=notice.get("days_given"),
+                required=notice.get("required_days"),
+                payer=i18n.t(f"profile.payer_{notice.get('payer')}"),
+                shortfall=notice.get("shortfall_days"),
+                amount=_money(notice.get("compensation")),
+            )
+        elif code == "article_80_objection":
+            text = i18n.t("profile.warn_article_80")
+        elif code == "illegitimate_termination":
+            text = i18n.t("profile.warn_illegitimate")
+        else:
+            text = str(warning.get("text") or "")
+        st.warning(f"{text} · {_cite(warning)}")
+
+    st.caption(i18n.t("profile.impact"))
+    styles.detail_card(
+        [
+            (i18n.t("profile.direct_reports"), impact.get("active_direct_reports")),
+            (i18n.t("profile.departments_headed"), ", ".join(impact.get("departments_headed") or []) or "—"),
+            (i18n.t("profile.pending_requests"), impact.get("pending_requests")),
+        ]
+    )
+    st.caption(i18n.t("profile.disclaimer"))
+
+
+def _render_staffing_checklist(action_type: str | None) -> None:
+    keys = {
+        "termination": ("term_qiwa", "term_gosi", "term_mudad", "term_clearance"),
+        "new_hire": ("hire_qiwa", "hire_gosi", "hire_medical", "hire_probation"),
+    }.get(str(action_type or ""))
+    if not keys:
+        return
+    st.markdown(f"**{i18n.t('checklist.title')}**")
+    st.markdown("\n".join(f"- {i18n.t(f'checklist.{key}')}" for key in keys))
 
 
 def _render_grievance_review(g: dict, names: dict) -> None:
@@ -1081,11 +1525,15 @@ def _render_proposal_details(item: dict | None) -> None:
     st.caption("Request details")
     if action_type == "leave_request":
         _render_leave_proposal_details(payload, key_prefix)
+    elif action_type == "new_hire":
+        _render_new_hire_details(payload)
+    elif action_type == "termination":
+        _render_termination_details(payload)
     else:
         _render_generic_proposal_details(payload)
 
     related = item.get("related_request_id")
-    if related:
+    if related and action_type == "leave_request":
         st.caption(f"Linked leave request: {related}")
 
 
@@ -1116,6 +1564,69 @@ def _render_leave_proposal_details(payload: dict, key_prefix: str) -> None:
                     [("name", i18n.t("detail.col_name")), ("role", i18n.t("detail.col_role"))],
                     key=f"covercandidates_{key_prefix}",
                 )
+
+
+def _staffing_label(proposal: dict | None) -> str:
+    """Readable inbox label for new_hire / termination. Manager's generic
+    action_summary for these is "<action_type> for <employee_id>", and a
+    new_hire's employee_id is the HR requester, not the new employee."""
+    if not proposal:
+        return ""
+    payload = proposal.get("payload_json")
+    payload = payload if isinstance(payload, dict) else {}
+    action_type = proposal.get("action_type")
+    if action_type == "new_hire":
+        hire = payload.get("new_employee") or {}
+        return (
+            f"{i18n.t('staff.add_employee')}: {hire.get('full_name') or '—'} — "
+            f"{hire.get('job_title') or '—'} ({hire.get('department_id') or '—'})"
+        )
+    if action_type == "termination":
+        termination_type = payload.get("termination_type")
+        return (
+            f"{i18n.t('staff.terminate_employee')}: {payload.get('employee_id') or '—'} — "
+            f"{i18n.t(f'term.{termination_type}') if termination_type else '—'} — "
+            f"{payload.get('termination_date') or '—'}"
+        )
+    return ""
+
+
+def _render_new_hire_details(payload: dict) -> None:
+    hire = payload.get("new_employee") or {}
+    styles.detail_card(
+        [
+            (i18n.t("detail.new_employee"), hire.get("full_name")),
+            (i18n.t("staff.job_title"), hire.get("job_title")),
+            (i18n.t("staff.department"), f"{hire.get('department_name') or ''} ({hire.get('department_id')})"),
+            (i18n.t("staff.manager"), hire.get("manager_id")),
+            (i18n.t("staff.gender"), hire.get("gender")),
+            (i18n.t("staff.nationality"), hire.get("nationality")),
+            (i18n.t("staff.employment_type"), hire.get("employment_type")),
+            (i18n.t("staff.hire_date"), hire.get("hire_date")),
+            (i18n.t("staff.basic_salary"), hire.get("basic_salary")),
+            (i18n.t("staff.housing_allowance"), hire.get("housing_allowance")),
+            (i18n.t("staff.transport_allowance"), hire.get("transport_allowance")),
+            (i18n.t("staff.email"), hire.get("email")),
+            (i18n.t("staff.mobile"), hire.get("mobile")),
+            (i18n.t("detail.requested_by"), payload.get("requested_by")),
+        ]
+    )
+
+
+def _render_termination_details(payload: dict) -> None:
+    termination_type = payload.get("termination_type")
+    styles.detail_card(
+        [
+            (i18n.t("staff.employee"), payload.get("employee_id")),
+            (
+                i18n.t("staff.termination_type"),
+                i18n.t(f"term.{termination_type}") if termination_type else None,
+            ),
+            (i18n.t("staff.termination_date"), payload.get("termination_date")),
+            (i18n.t("detail.reason"), payload.get("reason")),
+            (i18n.t("detail.requested_by"), payload.get("requested_by")),
+        ]
+    )
 
 
 def _render_generic_proposal_details(payload: dict) -> None:

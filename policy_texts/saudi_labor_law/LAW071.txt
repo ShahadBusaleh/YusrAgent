@@ -1,0 +1,7 @@
+Law ID: LAW071
+Category: Contract Termination
+Article: 74
+Title: Cases Ending the Employment Contract
+Rule: The employment contract ends by: (1) agreement of both parties, provided the worker consents in writing; (2) expiry of the contract term, unless it was expressly or implicitly renewed; (3) the wish of either party in an indefinite-term contract, subject to Article 75; (4) the worker reaching retirement age; (5) force majeure; (6) permanent closure of the establishment; (7) termination of the activity in which the worker is employed.
+Conditions: Applies to all employment contracts governed by the Labor Law.
+Exceptions: Termination by agreement is valid only with the worker's written consent.

@@ -111,3 +111,26 @@ Rules for the UI phase:
 - UI only. Do not change backend logic, API contracts, agent contracts, RBAC, or the database.
 - Every visible button/page must call an existing API endpoint. No fake data, no fake features.
 - If a UI need truly requires a backend change, stop and list it for the team instead of implementing it.
+
+
+## Phase 4: new features
+
+The team assigned two new features to one member, the **Phase 4 Feature Owner**:
+(1) add new employee / terminate employee, (2) regulation update agent.
+For these two features only, the Feature Owner takes the HR-agent, Manager (approvals), and Orchestrator-routing work listed below. This overrides the Phase 3 "UI only" limit for these files only.
+
+| Owner | May edit | Must not |
+|---|---|---|
+| **Phase 4 Feature Owner** | `app/agents/hr_agent.py` (new_hire / termination intents only), new `app/agents/regulation_agent.py`, `app/agents/orchestrator.py` (routing only), `app/agents/consultant_agent.py` (new action_type citations only), `app/db/approvals.py` (new `_sync_new_hire`, `_sync_termination`, `_sync_regulation_update` only; don't change existing `_sync_*`), new `app/db/regulations.py`, `app/ui/**` | rename frozen contract keys, change columns of existing tables, delete rows, rewrite `app/rag/**` (call ingest helpers only) |
+
+Rules:
+- Every hire / termination / regulation change is a HIGH-risk proposed_action. No DB write before approval.
+- Data writes after approval are allowed through `_sync_*` (same pattern as `_sync_personal_info_update`). The schema is not changed.
+- Terminations never delete rows. `employment_status` follows the termination type: resignation → `Resigned`, retirement → `Retired`, end_of_contract → `End of Contract`, all others → `Terminated`. Always set `termination_date` and `users.is_active=0`.
+
+- New hires get the same dev/test password as all seeded accounts (`ChangeMe123!`, see DATABASE_SCHEMA.md), hashed with the same function in `app/security/passwords.py`. Demo project only — replace before any real use.
+- New tables allowed: `regulation_versions`.
+
+- Adding new labor-law articles is allowed: new rows in `saudi_labor_law` + new files in `policy_texts/saudi_labor_law/` (same format as existing LAW files), then re-index with the existing ingest helpers. Existing articles are not edited or deleted.
+
+- `app/agents/orchestrator.py` may also get ONE read-only call inside `explain_pending_approval` that adds `brief["termination_profile"]` (computed by a read-only function in `hr_agent.py`). No other orchestrator logic changes.

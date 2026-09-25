@@ -1,0 +1,7 @@
+Law ID: LAW074
+Category: Contract Termination
+Article: 77
+Title: Compensation for Termination Without a Legitimate Reason
+Rule: If a contract is terminated for an illegitimate reason, the injured party is entitled to compensation: 15 days' wage for each year of service in an indefinite-term contract, or the wage for the remaining term in a fixed-term contract. The compensation may not be less than two months' wage.
+Conditions: Applies when the contract does not specify a compensation amount for illegitimate termination.
+Exceptions: A contractually agreed compensation amount applies if specified.

@@ -1,0 +1,7 @@
+Law ID: LAW073
+Category: Contract Termination
+Article: 76
+Title: Compensation for Not Observing Notice
+Rule: A party that does not observe the notice period must pay the other party compensation equal to the worker's wage for the notice period or the remainder of it.
+Conditions: Applies when an indefinite-term contract is ended without the full notice required by Article 75.
+Exceptions: The parties may agree otherwise.

@@ -1,0 +1,7 @@
+Law ID: LAW076
+Category: Contract Termination
+Article: 81
+Title: Worker Leaving Without Notice With Full Rights
+Rule: The worker may leave work without notice while retaining all statutory rights in the cases set out in Article 81, including the employer's failure to fulfil essential contractual or statutory obligations, fraud by the employer regarding working conditions at contracting, assault or humiliating treatment by the employer or their representative, or a serious danger to the worker's safety or health known to the employer.
+Conditions: Applies only to the cases listed in Article 81.
+Exceptions: Rights retained include the end-of-service award and any compensation due.

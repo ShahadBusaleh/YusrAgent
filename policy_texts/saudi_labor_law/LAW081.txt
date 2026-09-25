@@ -1,0 +1,7 @@
+Law ID: LAW081
+Category: Probation
+Article: 53
+Title: Probation Period (amended 2025)
+Rule: A worker may be placed on probation if this is clearly stated in the employment contract. The probation period may be extended by written agreement between the parties, provided the total probation period does not exceed 180 days.
+Conditions: Applies to contracts that expressly include a probation period; amended provisions effective 18-02-2025.
+Exceptions: Eid al-Fitr and Eid al-Adha holidays and sick leave are not counted in the probation period.

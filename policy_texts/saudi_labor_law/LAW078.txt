@@ -1,0 +1,7 @@
+Law ID: LAW078
+Category: End of Service
+Article: 85
+Title: End-of-Service Award on Resignation
+Rule: If the contract ends by the worker's resignation, the worker is entitled to: no award for service of less than two consecutive years; one third of the award for service of two to less than five years; two thirds of the award for service of five to less than ten years; and the full award for ten years or more.
+Conditions: Applies when the worker resigns.
+Exceptions: Article 87 cases grant the full award regardless of service length.

@@ -1,0 +1,7 @@
+Law ID: LAW079
+Category: End of Service
+Article: 87
+Title: Full End-of-Service Award Cases
+Rule: Notwithstanding Article 85, the worker is entitled to the full end-of-service award if they leave work due to force majeure beyond their control. A female worker is also entitled to the full award if she terminates the contract within six months of marriage or within three months of giving birth.
+Conditions: Applies to the force majeure, marriage and childbirth cases stated in the article.
+Exceptions: Overrides the resignation reductions in Article 85.

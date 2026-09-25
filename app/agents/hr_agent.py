@@ -1,6 +1,7 @@
+import json
 import re
 from calendar import monthrange
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from app.agents.base import BaseAgent
 from app.agents.leave_intent import (
@@ -705,6 +706,682 @@ def get_historical_precedent(
     }
 
 
+# =========================================================
+# Phase 4: new hire / termination (HR staff only)
+# =========================================================
+#
+# Both are HIGH-risk proposed_actions: nothing is written here. The
+# employee/users/leave_balances rows are only created or updated by
+# `_sync_new_hire` / `_sync_termination` in app/db/approvals.py after an
+# HR manager approves.
+
+TERMINATION_TYPES = (
+    "termination_by_employer",
+    "article_80",
+    "resignation",
+    "end_of_contract",
+    "mutual_agreement",
+    "retirement",
+    "force_majeure",
+)
+
+_EMPLOYMENT_TYPES = ("Full-time", "Contract", "Part-time", "Temporary")
+
+_NEW_HIRE_FIELDS = (
+    "full_name",
+    "gender",
+    "nationality",
+    "email",
+    "mobile",
+    "department_id",
+    "job_title",
+    "manager_id",
+    "employment_type",
+    "hire_date",
+    "basic_salary",
+    "housing_allowance",
+    "transport_allowance",
+)
+
+_NEW_HIRE_REQUIRED = (
+    "full_name",
+    "department_id",
+    "job_title",
+    "basic_salary",
+    "hire_date",
+)
+
+_TERMINATION_FIELDS = (
+    "employee_id",
+    "termination_type",
+    "termination_date",
+    "reason",
+)
+
+# Structured "key: value" pairs separated by ";" or new lines — the shape
+# the Ask Yusor forms send. Only known keys are read, so a free-text
+# reason containing a colon can't inject another field.
+_STAFFING_FIELD_RE = re.compile(
+    r"\b("
+    + "|".join(
+        sorted(set(_NEW_HIRE_FIELDS + _TERMINATION_FIELDS), key=len, reverse=True)
+    )
+    + r")\s*:\s*([^;\n]*)",
+    re.IGNORECASE,
+)
+
+_EMPLOYEE_ID_RE = re.compile(r"\bEMP-\d{4}\b", re.IGNORECASE)
+
+# (law_id, article) for every figure in the termination profile.
+_LAW_END_CASES = ("LAW071", "74")
+_LAW_NOTICE = ("LAW072", "75")
+_LAW_NOTICE_COMPENSATION = ("LAW073", "76")
+_LAW_ILLEGITIMATE_TERMINATION = ("LAW074", "77")
+_LAW_ARTICLE_80 = ("LAW075", "80")
+_LAW_AWARD = ("LAW077", "84")
+_LAW_RESIGNATION_AWARD = ("LAW078", "85")
+_LAW_FULL_AWARD = ("LAW079", "87")
+_LAW_SETTLEMENT = ("LAW080", "88")
+_LAW_UNUSED_LEAVE = ("LAW046", "111")
+
+# Article 75 (amended 2025) for a monthly-paid worker, by who ends the
+# contract. Types not listed have no Article 75 notice period.
+_NOTICE_DAYS = {
+    "termination_by_employer": (60, "employer"),
+    "resignation": (30, "employee"),
+}
+
+TERMINATION_DISCLAIMER = "Indicative estimate, not legal advice."
+
+
+def _is_new_hire(query: str) -> bool:
+    return _contains_any(
+        query,
+        (
+            "hire new employee",
+            "hire a new employee",
+            "add new employee",
+            "add a new employee",
+            "onboard new employee",
+            "onboard a new employee",
+        ),
+    )
+
+
+def _is_termination(query: str) -> bool:
+    return _contains_any(
+        query,
+        (
+            "terminate employee",
+            "terminate the employment of",
+            "terminate the service of",
+            "end the employment of",
+            "end the service of",
+        ),
+    )
+
+
+def _parse_staffing_fields(query: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for key, value in _STAFFING_FIELD_RE.findall(query or ""):
+        value = value.strip()
+        if value:
+            fields.setdefault(key.lower(), value)
+    return fields
+
+
+def _parse_day(value: str | None) -> date | None:
+    """DD-MM-YYYY (the employees table format), DD/MM/YYYY or YYYY-MM-DD."""
+
+    for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(str(value or "").strip(), fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _format_day(value: date) -> str:
+    return value.strftime("%d-%m-%Y")
+
+
+def _to_amount(value: str | None) -> float | None:
+    text = re.sub(r"(?i)sar|,", "", str(value or "")).strip()
+    try:
+        amount = float(text)
+    except ValueError:
+        return None
+    return amount if amount >= 0 else None
+
+
+def _staffing_result(
+    requester_id: str,
+    action_type: str,
+    status: str,
+    notes: list[str],
+    sources: list[str],
+    *,
+    missing: list[str] | None = None,
+    proposed_action: dict | None = None,
+) -> dict:
+    return {
+        "facts": {
+            "employee_id": requester_id,
+            "request_assessment": {
+                "status": status,
+                "action_type": action_type,
+                "missing_information": missing or [],
+                "notes": notes,
+            },
+        },
+        "proposed_action": proposed_action,
+        "sources": sources,
+    }
+
+
+def _new_hire_request(conn, requester_id: str, query: str) -> dict:
+    fields = _parse_staffing_fields(query)
+    sources = [f"employees:{requester_id}"]
+
+    missing = [field for field in _NEW_HIRE_REQUIRED if not fields.get(field)]
+    if missing:
+        return _staffing_result(
+            requester_id,
+            "new_hire",
+            "NEEDS_INFORMATION",
+            [
+                "To add a new employee, provide "
+                + ", ".join(missing)
+                + ' as "key: value" pairs separated by semicolons.'
+            ],
+            sources,
+            missing=missing,
+        )
+
+    problems: list[str] = []
+
+    department_id = fields["department_id"].upper()
+    department = conn.execute(
+        "SELECT department_id, department_name FROM departments WHERE department_id = ?",
+        (department_id,),
+    ).fetchone()
+    if department is None:
+        problems.append(f"Department {department_id} does not exist.")
+
+    basic_salary = _to_amount(fields["basic_salary"])
+    if not basic_salary:
+        problems.append("basic_salary must be a positive amount in SAR.")
+
+    housing = _to_amount(fields.get("housing_allowance") or "0")
+    transport = _to_amount(fields.get("transport_allowance") or "0")
+    if housing is None or transport is None:
+        problems.append("Allowances must be amounts in SAR (0 or more).")
+
+    hire_date = _parse_day(fields["hire_date"])
+    if hire_date is None:
+        problems.append("hire_date must be a date in DD-MM-YYYY format.")
+
+    manager_id = (fields.get("manager_id") or "").upper() or None
+    if manager_id:
+        manager = get_employee(conn, manager_id)
+        if not manager or manager.get("employment_status") != "Active":
+            problems.append(f"Manager {manager_id} is not an active employee.")
+
+    email = fields.get("email")
+    if email:
+        if not _is_valid_email(email):
+            problems.append("email is not a valid email address.")
+        elif conn.execute(
+            "SELECT 1 FROM employees WHERE LOWER(email) = LOWER(?)",
+            (email,),
+        ).fetchone():
+            problems.append("That email is already used by another employee.")
+
+    mobile = fields.get("mobile")
+    if mobile and not _is_valid_saudi_mobile(mobile):
+        problems.append("mobile must be a Saudi mobile number (05XXXXXXXX).")
+
+    gender = (fields.get("gender") or "").title() or None
+    if gender and gender not in ("Male", "Female"):
+        problems.append("gender must be Male or Female.")
+
+    employment_type = "Full-time"
+    if fields.get("employment_type"):
+        employment_type = next(
+            (
+                t
+                for t in _EMPLOYMENT_TYPES
+                if t.lower() == fields["employment_type"].strip().lower()
+            ),
+            "",
+        )
+        if not employment_type:
+            problems.append(
+                "employment_type must be one of: " + ", ".join(_EMPLOYMENT_TYPES) + "."
+            )
+
+    if problems:
+        return _staffing_result(
+            requester_id, "new_hire", "NEEDS_INFORMATION", problems, sources
+        )
+
+    new_employee = {
+        "full_name": fields["full_name"],
+        "gender": gender,
+        "nationality": fields.get("nationality"),
+        "email": email,
+        "mobile": mobile,
+        "department_id": department_id,
+        "department_name": department["department_name"],
+        "job_title": fields["job_title"],
+        "manager_id": manager_id,
+        "employment_type": employment_type,
+        "hire_date": _format_day(hire_date),
+        "basic_salary": basic_salary,
+        "housing_allowance": housing,
+        "transport_allowance": transport,
+    }
+
+    sources.append(f"departments:{department_id}")
+    if manager_id:
+        sources.append(f"employees:{manager_id}")
+
+    return _staffing_result(
+        requester_id,
+        "new_hire",
+        "READY_FOR_APPROVAL",
+        [
+            f"New hire {new_employee['full_name']} as {new_employee['job_title']} "
+            f"in {new_employee['department_name']}, starting "
+            f"{new_employee['hire_date']}. The employee record and login are "
+            "created only after an HR manager approves."
+        ],
+        sources,
+        proposed_action={
+            "action_type": "new_hire",
+            "payload": {
+                # The proposal belongs to the HR requester (the new
+                # employee has no employees row yet), which also stops
+                # the requester approving their own request.
+                "employee_id": requester_id,
+                "requested_by": requester_id,
+                # Top-level copy: governance.classify_risk only inspects
+                # top-level payload keys, and basic_salary is what makes a
+                # hire HIGH risk.
+                "basic_salary": basic_salary,
+                "new_employee": new_employee,
+            },
+        },
+    )
+
+
+def _termination_request(conn, requester_id: str, query: str) -> dict:
+    fields = _parse_staffing_fields(query)
+
+    target_id = (fields.get("employee_id") or "").upper()
+    if not target_id:
+        match = _EMPLOYEE_ID_RE.search(query or "")
+        target_id = match.group(0).upper() if match else ""
+
+    sources = [f"employees:{target_id or requester_id}"]
+
+    missing = [
+        field
+        for field, value in (
+            ("employee_id", target_id),
+            ("termination_type", fields.get("termination_type")),
+            ("reason", fields.get("reason")),
+        )
+        if not value
+    ]
+    if missing:
+        return _staffing_result(
+            requester_id,
+            "termination",
+            "NEEDS_INFORMATION",
+            [
+                "To terminate an employee, provide "
+                + ", ".join(missing)
+                + ' as "key: value" pairs. termination_type is one of: '
+                + ", ".join(TERMINATION_TYPES)
+                + "."
+            ],
+            sources,
+            missing=missing,
+        )
+
+    if target_id == requester_id:
+        return _staffing_result(
+            requester_id,
+            "termination",
+            "NOT_AUTHORIZED",
+            ["You cannot submit a termination request for yourself."],
+            sources,
+        )
+
+    problems: list[str] = []
+
+    termination_type = re.sub(r"[\s-]+", "_", fields["termination_type"].strip().lower())
+    if termination_type not in TERMINATION_TYPES:
+        problems.append(
+            "termination_type must be one of: " + ", ".join(TERMINATION_TYPES) + "."
+        )
+
+    employee = get_employee(conn, target_id)
+    if employee is None:
+        problems.append(f"Employee {target_id} does not exist.")
+    elif employee.get("employment_status") != "Active":
+        problems.append(
+            f"Employee {target_id} is already {employee.get('employment_status')}."
+        )
+
+    notes: list[str] = []
+    if fields.get("termination_date"):
+        termination_date = _parse_day(fields["termination_date"])
+        if termination_date is None:
+            problems.append("termination_date must be a date in DD-MM-YYYY format.")
+    else:
+        termination_date = date.today()
+        notes.append("termination_date was not given, so today's date is used.")
+
+    hire_date = _parse_day((employee or {}).get("hire_date"))
+    if termination_date and hire_date and termination_date < hire_date:
+        problems.append("termination_date cannot be before the employee's hire date.")
+
+    if problems:
+        return _staffing_result(
+            requester_id, "termination", "NEEDS_INFORMATION", problems, sources
+        )
+
+    notes.insert(
+        0,
+        f"Termination of {employee.get('full_name')} ({target_id}) as "
+        f"{termination_type} on {_format_day(termination_date)}. The record is "
+        "updated only after an HR manager approves.",
+    )
+
+    return _staffing_result(
+        requester_id,
+        "termination",
+        "READY_FOR_APPROVAL",
+        notes,
+        sources,
+        proposed_action={
+            "action_type": "termination",
+            "payload": {
+                "employee_id": target_id,
+                "termination_type": termination_type,
+                "termination_date": _format_day(termination_date),
+                "reason": fields["reason"],
+                "requested_by": requester_id,
+            },
+        },
+    )
+
+
+def _staffing_request(user: dict, query: str) -> dict:
+    """HR-agent result for a new_hire / termination request."""
+
+    requester_id = str((user or {}).get("employee_id") or "")
+    wants_hire = _is_new_hire(query)
+    wants_termination = _is_termination(query)
+    action_type = "new_hire" if wants_hire else "termination"
+    sources = [f"employees:{requester_id}"]
+
+    if (user or {}).get("role") not in _STAFF_ROLES:
+        return _staffing_result(
+            requester_id,
+            action_type,
+            "NOT_AUTHORIZED",
+            ["Only HR staff can submit new-hire or termination requests."],
+            sources,
+        )
+
+    if wants_hire and wants_termination:
+        return _staffing_result(
+            requester_id,
+            "multiple_actions",
+            "NEEDS_INFORMATION",
+            ["Please submit the new hire and the termination as separate requests."],
+            sources,
+        )
+
+    conn = get_connection()
+    try:
+        if wants_hire:
+            return _new_hire_request(conn, requester_id, query)
+        return _termination_request(conn, requester_id, query)
+    finally:
+        conn.close()
+
+
+def _service_breakdown(start: date, end: date) -> tuple[int, int, int]:
+    """Calendar years/months/days between two dates."""
+
+    years = end.year - start.year
+    months = end.month - start.month
+    days = end.day - start.day
+    if days < 0:
+        months -= 1
+        prev_month = end.month - 1 or 12
+        prev_year = end.year if end.month > 1 else end.year - 1
+        days += monthrange(prev_year, prev_month)[1]
+    if months < 0:
+        years -= 1
+        months += 12
+    return years, months, days
+
+
+def _cite(law: tuple[str, str]) -> dict:
+    return {"law_id": law[0], "article": law[1]}
+
+
+def get_termination_profile(conn, proposal: dict) -> dict:
+    """Read-only end-of-service estimate for a pending termination proposal.
+
+    Used by the Decision Brief. Every figure carries the article it was
+    computed from. Does not create or modify any records.
+    """
+
+    try:
+        payload = json.loads(proposal.get("payload_json") or "{}")
+    except (TypeError, ValueError):
+        payload = {}
+
+    employee_id = payload.get("employee_id")
+    termination_type = payload.get("termination_type")
+    employee = get_employee(conn, employee_id) if employee_id else None
+    hire_date = _parse_day((employee or {}).get("hire_date"))
+    end_date = _parse_day(payload.get("termination_date"))
+
+    if not employee or not hire_date or not end_date:
+        return {
+            "employee_id": employee_id,
+            "error": "Employee record, hire date or termination date is missing.",
+            "disclaimer": TERMINATION_DISCLAIMER,
+        }
+
+    # --- Service length (hire_date -> termination_date) ---
+    years, months, days = _service_breakdown(hire_date, end_date)
+    total_days = (end_date - hire_date).days
+    service_years = total_days / 365
+
+    # --- Monthly wage (last recorded components) ---
+    basic = float(employee.get("basic_salary_sar") or 0)
+    housing = float(employee.get("housing_allowance_sar") or 0)
+    transport = float(employee.get("transport_allowance_sar") or 0)
+    monthly_wage = basic + housing + transport
+    daily_wage = monthly_wage / 30
+
+    # --- End-of-service award (Art. 84, adjusted by Art. 80/85/87) ---
+    full_award = (
+        monthly_wage * 0.5 * min(service_years, 5)
+        + monthly_wage * max(service_years - 5, 0)
+    )
+    if termination_type == "article_80":
+        ratio, ratio_law = 0.0, _LAW_ARTICLE_80
+    elif termination_type == "resignation":
+        if service_years < 2:
+            ratio = 0.0
+        elif service_years < 5:
+            ratio = 1 / 3
+        elif service_years < 10:
+            ratio = 2 / 3
+        else:
+            ratio = 1.0
+        ratio_law = _LAW_RESIGNATION_AWARD
+    elif termination_type == "force_majeure":
+        ratio, ratio_law = 1.0, _LAW_FULL_AWARD
+    else:
+        ratio, ratio_law = 1.0, _LAW_AWARD
+
+    # --- Notice period (Art. 75) and shortfall (Art. 76) ---
+    created_at = str(proposal.get("created_at") or "")
+    try:
+        notice_date = datetime.fromisoformat(created_at).date()
+    except ValueError:
+        notice_date = date.today()
+    days_given = max((end_date - notice_date).days, 0)
+
+    warnings: list[dict] = []
+    notice: dict = {"notice_given_on": _format_day(notice_date), "days_given": days_given}
+    if termination_type == "article_80":
+        notice.update(required_days=0, **_cite(_LAW_ARTICLE_80))
+    elif termination_type in _NOTICE_DAYS:
+        required, payer = _NOTICE_DAYS[termination_type]
+        shortfall = max(required - days_given, 0)
+        notice.update(
+            required_days=required,
+            shortfall_days=shortfall,
+            payer=payer,
+            compensation=round(daily_wage * shortfall, 2),
+            **_cite(_LAW_NOTICE),
+        )
+        if shortfall:
+            warnings.append(
+                {
+                    "code": "notice_shortfall",
+                    "text": (
+                        f"The termination date gives {days_given} days' notice "
+                        f"but Article 75 requires {required}. Under Article 76 "
+                        f"the {payer} owes the other party the wage for the "
+                        f"missing {shortfall} days "
+                        f"({round(daily_wage * shortfall, 2):,.2f} SAR), "
+                        "unless they agree otherwise."
+                    ),
+                    **_cite(_LAW_NOTICE_COMPENSATION),
+                }
+            )
+    else:
+        notice.update(required_days=None, **_cite(_LAW_NOTICE))
+
+    if termination_type == "article_80":
+        warnings.append(
+            {
+                "code": "article_80_objection",
+                "text": (
+                    "Article 80 dismissal requires giving the employee the "
+                    "opportunity to state the reasons for their objection "
+                    "before the decision is final."
+                ),
+                **_cite(_LAW_ARTICLE_80),
+            }
+        )
+    elif termination_type == "termination_by_employer":
+        warnings.append(
+            {
+                "code": "illegitimate_termination",
+                "text": (
+                    "If this termination is found to lack a legitimate reason, "
+                    "Article 77 compensation (at least two months' wage) may "
+                    "also be due."
+                ),
+                **_cite(_LAW_ILLEGITIMATE_TERMINATION),
+            }
+        )
+
+    # --- Unused annual leave (Art. 111) ---
+    balance = get_leave_balance(conn, employee_id) or {}
+    annual_remaining = float(balance.get("annual_remaining") or 0)
+
+    # --- Settlement deadline (Art. 88) ---
+    settlement_days = 14 if termination_type == "resignation" else 7
+
+    # --- Read-only impact: nothing is reassigned automatically ---
+    direct_reports = conn.execute(
+        """
+        SELECT COUNT(*) FROM employees
+        WHERE manager_id = ? AND employment_status = 'Active'
+        """,
+        (employee_id,),
+    ).fetchone()[0]
+    departments_headed = [
+        row[0]
+        for row in conn.execute(
+            "SELECT department_id FROM departments WHERE manager_employee_id = ?",
+            (employee_id,),
+        ).fetchall()
+    ]
+    pending_requests = conn.execute(
+        """
+        SELECT COUNT(*) FROM pending_approvals
+        WHERE employee_id = ? AND status = 'pending' AND proposal_id != ?
+        """,
+        (employee_id, proposal.get("proposal_id")),
+    ).fetchone()[0]
+
+    return {
+        "employee_id": employee_id,
+        "full_name": employee.get("full_name"),
+        "termination_type": termination_type,
+        "hire_date": employee.get("hire_date"),
+        "termination_date": payload.get("termination_date"),
+        "service": {
+            "years": years,
+            "months": months,
+            "days": days,
+            "total_days": total_days,
+            "service_years": round(service_years, 4),
+            **_cite(_LAW_AWARD),
+        },
+        "monthly_wage": {
+            "basic_salary_sar": basic,
+            "housing_allowance_sar": housing,
+            "transport_allowance_sar": transport,
+            "value": round(monthly_wage, 2),
+            "estimate": True,
+            **_cite(_LAW_AWARD),
+        },
+        "end_of_service_award": {
+            "full_award": round(full_award, 2),
+            "full_award_law": _cite(_LAW_AWARD),
+            "ratio": round(ratio, 4),
+            "ratio_law": _cite(ratio_law),
+            "value": round(full_award * ratio, 2),
+        },
+        "notice": notice,
+        "unused_leave": {
+            "annual_remaining_days": annual_remaining,
+            "daily_wage": round(daily_wage, 2),
+            "value": round(daily_wage * annual_remaining, 2),
+            **_cite(_LAW_UNUSED_LEAVE),
+        },
+        "settlement": {
+            "within_days": settlement_days,
+            "deadline": _format_day(end_date + timedelta(days=settlement_days)),
+            **_cite(_LAW_SETTLEMENT),
+        },
+        "impact": {
+            "active_direct_reports": direct_reports,
+            "departments_headed": departments_headed,
+            "pending_requests": pending_requests,
+        },
+        "warnings": warnings,
+        "contract_end_case": _cite(_LAW_END_CASES),
+        "disclaimer": TERMINATION_DISCLAIMER,
+    }
+
+
 class HRAgent(BaseAgent):
 
     def run(self, input: dict) -> dict:
@@ -740,6 +1417,12 @@ class HRAgent(BaseAgent):
 
         if not _own_record_only(user, employee_id):
             return empty
+
+        # Phase 4: hiring and termination act on someone else's record
+        # (or a record that doesn't exist yet), so they skip the
+        # self-service branches below.
+        if _is_new_hire(query) or _is_termination(query):
+            return _staffing_request(user, query)
 
         if len(write_actions) > 1:
             return {

@@ -12,3 +12,5 @@ If the human says “just finish the project,” still implement **only their on
 
 
 **Phase 3 exception:** the agents are complete. If the human says they are the **UI Owner**, follow the "Phase 3: UI redesign" section in `TEAM.md` — you may edit `app/ui/**` only.
+
+**Phase 4 exception:** if the human says they are the **Phase 4 Feature Owner** working on "add/terminate employee" or "regulation update agent", follow the "Phase 4" section in `TEAM.md` for the files it lists.

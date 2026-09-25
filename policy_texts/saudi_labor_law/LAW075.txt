@@ -1,0 +1,7 @@
+Law ID: LAW075
+Category: Contract Termination
+Article: 80
+Title: Dismissal Without End-of-Service Award, Notice or Compensation
+Rule: The employer may terminate the contract without end-of-service award, notice or compensation if the worker: (1) assaults the employer, the manager or a superior during or because of work; (2) fails to perform essential contractual obligations or obey legitimate orders, or deliberately disregards written safety instructions, despite written warning; (3) commits misconduct or an act breaching honor or integrity; (4) deliberately causes material loss to the employer, provided the incident is reported to the authorities within 24 hours of learning of it; (5) obtained the job through forgery; (6) is still in the probation period; (7) is absent without legitimate reason for more than 30 non-consecutive days or more than 15 consecutive days in one contractual year; (8) unlawfully exploits their position for personal gain; (9) discloses the employer's industrial or commercial secrets.
+Conditions: The employer must give the worker an opportunity to state the reasons for their objection to the termination.
+Exceptions: For absence, dismissal must be preceded by a written warning as required by the law.

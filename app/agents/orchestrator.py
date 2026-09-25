@@ -18,7 +18,7 @@ from app.db.connection import get_connection
 from app.db.approvals import list_pending_approvals
 from app.db.grievances import create_grievance
 from app.db.proposed_actions import get_proposed_action
-from app.agents.hr_agent import get_historical_precedent
+from app.agents.hr_agent import get_historical_precedent, get_termination_profile
 
 
 logger = logging.getLogger(__name__)
@@ -195,6 +195,16 @@ class OrchestratorAgent:
         normalized = str(query or "").strip().lower()
 
         fast_paths = [
+            (
+                # Phase 4 staffing actions — checked first so a free-text
+                # termination reason can't route the request elsewhere.
+                "HR",
+                [
+                    "hire new employee",
+                    "add new employee",
+                    "terminate employee",
+                ],
+            ),
             (
                 "GRIEVANCE",
                 [
@@ -694,6 +704,12 @@ User request:
                     ),
 
                     "historical_precedent": precedent,
+
+                    "termination_profile": (
+                        get_termination_profile(conn, proposal)
+                        if action_type == "termination"
+                        else None
+                    ),
 
                     "policy": {
                         "recommendation": consultant_result.get(

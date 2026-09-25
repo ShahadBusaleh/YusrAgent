@@ -182,6 +182,16 @@ _ACTION_TYPE_QUERIES: dict[str, str] = {
         "What is the HR policy on issuing an employment or salary "
         "certificate letter for an employee?"
     ),
+    "new_hire": (
+        "What does Saudi labor law say about the probation period for a "
+        "newly hired employee, and what is the company medical "
+        "insurance policy for new employees?"
+    ),
+    "termination": (
+        "Under Saudi labor law, what notice period is required to "
+        "terminate an employment contract, and how is the end-of-service "
+        "award calculated?"
+    ),
 }
 
 
