@@ -1023,6 +1023,19 @@ section[data-testid="stSidebar"] .stButton > button:hover {
   margin-top: .1rem;
 }
 
+/* ---------- Onboarding & Offboarding forms ---------- */
+.st-key-staff_card_hire,
+.st-key-staff_card_term {
+  background: rgba(255,252,247,0.78);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--yz-glass-border);
+  border-radius: 16px;
+  padding: 1.2rem 1.4rem;
+  max-width: 820px;
+  margin-bottom: 1rem;
+}
+
 /* ---------- Growth Opportunities ---------- */
 [class*="st-key-growth_card_"] {
   background: rgba(255,252,247,0.78);

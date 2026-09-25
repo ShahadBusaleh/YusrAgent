@@ -213,10 +213,11 @@ def _resolve_identity_choice(identity_visible: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Phase 4: new hire / termination forms inside Ask Yusor (HR staff only).
-# Each form builds a structured "key: value" query and sends it through the
-# normal POST /agent/query path — HR agent parses it, Manager files it as a
-# HIGH-risk pending approval. Nothing is written until an HR manager approves.
+# Phase 4: "Onboarding & Offboarding" page (HR staff only). Each form builds
+# a structured "key: value" query and sends it through the normal
+# POST /agent/query path (_call_agent) — HR agent parses it, Manager files it
+# as a HIGH-risk pending approval. Nothing is written until an HR manager
+# approves.
 # ---------------------------------------------------------------------------
 
 _STAFFING_ROLES = {"hr_specialist", "hr_manager", "admin"}
@@ -232,7 +233,8 @@ _TERMINATION_TYPES = (
 )
 _EMPLOYMENT_TYPES = ("Full-time", "Contract", "Part-time", "Temporary")
 _ARABIC_RE = re.compile(r"[؀-ۿݐ-ݿ]")
-_STAFF_FORM_PREFIXES = ("hire_", "term_")
+# Manager's submission note: "... submitted for approval (proposal PA00018)."
+_SUBMITTED_RE = re.compile(r"submitted for approval \(proposal (PA\d+)\)")
 _FIELD_BREAK_RE = re.compile(r"\s*[;\r\n]+\s*")
 
 
@@ -240,11 +242,37 @@ def _can_manage_staff() -> bool:
     return (st.session_state.get("me") or {}).get("role") in _STAFFING_ROLES
 
 
-def _close_staff_form() -> None:
-    st.session_state.pop("staff_form", None)
+def _reset_staff_form(prefix: str) -> None:
     for key in list(st.session_state.keys()):
-        if str(key).startswith(_STAFF_FORM_PREFIXES):
+        if str(key).startswith(prefix):
             st.session_state.pop(key, None)
+
+
+def _submit_staffing(query: str, prefix: str) -> None:
+    """Send through the same _call_agent -> POST /agent/query path as Ask
+    Yusor, then show the outcome on this page (flash survives the rerun)."""
+    history = st.session_state.setdefault("chat_history", [])
+    before = len(history)
+    payload = _call_agent(query)
+    if payload is None:
+        # _call_agent reports failures into the chat history; they belong
+        # on this page instead.
+        failures = history[before:]
+        del history[before:]
+        detail = failures[-1]["content"] if failures else "Request failed."
+        st.session_state["staff_flash"] = ("error", detail)
+    else:
+        response = _format_agent_text(payload)
+        submitted = _SUBMITTED_RE.search(response)
+        if payload.get("status") == "PASS" and submitted:
+            st.session_state["staff_flash"] = (
+                "success",
+                i18n.t("staffing.submitted", inbox=i18n.t("nav.approvals"), proposal=submitted.group(1)),
+            )
+            _reset_staff_form(prefix)
+        else:
+            st.session_state["staff_flash"] = ("warning", response)
+    st.rerun()
 
 
 def _staffing_query(header: str, fields: list[tuple[str, object]]) -> str:
@@ -325,8 +353,7 @@ def _english_only_error(fields: list[tuple[str, str]]) -> bool:
 
 
 def _render_new_hire_form() -> None:
-    with st.container(border=True, key="staff_form_hire"):
-        st.markdown(f"**{i18n.t('staff.hire_title')}**")
+    with st.container(key="staff_card_hire"):
         c1, c2 = st.columns(2)
         full_name = c1.text_input(i18n.t("staff.full_name"), key="hire_full_name")
         job_title = c2.text_input(i18n.t("staff.job_title"), key="hire_job_title")
@@ -374,13 +401,8 @@ def _render_new_hire_form() -> None:
         housing = s2.number_input(i18n.t("staff.housing_allowance"), min_value=0.0, step=100.0, key="hire_housing")
         transport = s3.number_input(i18n.t("staff.transport_allowance"), min_value=0.0, step=50.0, key="hire_transport")
 
-        b1, b2 = st.columns(2)
-        submit = b1.button(i18n.t("staff.submit"), type="primary", key="hire_submit", use_container_width=True)
-        cancel = b2.button(i18n.t("staff.cancel"), key="hire_cancel", use_container_width=True)
+        submit = st.button(i18n.t("staff.submit"), type="primary", key="hire_submit")
 
-    if cancel:
-        _close_staff_form()
-        st.rerun()
     if not submit:
         return
 
@@ -424,15 +446,12 @@ def _render_new_hire_form() -> None:
             ("transport_allowance", f"{transport:g}"),
         ],
     )
-    _close_staff_form()
-    _submit_query(query)
-    st.rerun()
+    _submit_staffing(query, "hire_")
 
 
 def _render_termination_form() -> None:
     me = st.session_state.get("me") or {}
-    with st.container(border=True, key="staff_form_term"):
-        st.markdown(f"**{i18n.t('staff.term_title')}**")
+    with st.container(key="staff_card_term"):
         employee = _employee_picker(
             i18n.t("staff.employee"), "term_employee", exclude_id=me.get("employee_id")
         )
@@ -448,13 +467,8 @@ def _render_termination_form() -> None:
         )
         reason = st.text_area(i18n.t("staff.reason"), key="term_reason")
 
-        b1, b2 = st.columns(2)
-        submit = b1.button(i18n.t("staff.submit"), type="primary", key="term_submit", use_container_width=True)
-        cancel = b2.button(i18n.t("staff.cancel"), key="term_cancel", use_container_width=True)
+        submit = st.button(i18n.t("staff.submit"), type="primary", key="term_submit")
 
-    if cancel:
-        _close_staff_form()
-        st.rerun()
     if not submit:
         return
 
@@ -482,29 +496,91 @@ def _render_termination_form() -> None:
             ("reason", reason.strip()),
         ],
     )
-    _close_staff_form()
-    _submit_query(query)
-    st.rerun()
+    _submit_staffing(query, "term_")
 
 
-def _render_staffing_actions() -> None:
+def _render_my_staffing_requests() -> None:
+    """New-hire / termination requests this user submitted, from the real
+    GET /proposed-actions (staff roles get every proposal; payload.requested_by
+    identifies the submitter)."""
+    me_id = (st.session_state.get("me") or {}).get("employee_id")
+    try:
+        items = api.raise_for_api(api.request("GET", "/proposed-actions")) or []
+    except RuntimeError as exc:
+        st.error(str(exc))
+        items = []
+
+    mine = []
+    for item in items if isinstance(items, list) else []:
+        payload = item.get("payload_json")
+        payload = payload if isinstance(payload, dict) else {}
+        if item.get("action_type") in {"new_hire", "termination"} and payload.get("requested_by") == me_id:
+            mine.append((item, payload))
+
+    names = _employee_names(
+        [payload.get("employee_id") for item, payload in mine if item.get("action_type") == "termination"]
+    )
+    rows = []
+    for item, payload in mine:
+        if item.get("action_type") == "new_hire":
+            kind = i18n.t("staffing.tab_hire")
+            person = (payload.get("new_employee") or {}).get("full_name")
+        else:
+            kind = i18n.t("staffing.tab_term")
+            eid = str(payload.get("employee_id") or "")
+            person = f"{names.get(eid) or eid} ({eid})" if eid else None
+        rows.append(
+            {
+                "type": kind,
+                "employee": person,
+                "date": _friendly_when(item.get("created_at")),
+                "status": item.get("status"),
+            }
+        )
+
+    styles.data_table(
+        rows,
+        [
+            ("type", i18n.t("staffing.col_type")),
+            ("employee", i18n.t("staffing.col_employee")),
+            ("date", i18n.t("staffing.col_date")),
+            ("status", i18n.t("staffing.col_status")),
+        ],
+        status_key="status",
+        # proposed_actions uses "pending_approval" until decided.
+        status_styles={"pending_approval": styles.status_pills()["pending"]},
+        key="staffing_requests",
+        empty_message=i18n.t("staffing.empty"),
+    )
+
+
+def page_staffing() -> None:
+    st.markdown(
+        f"""
+        <div class="yz-chat-header">
+          <div class="yz-chat-title">{html.escape(i18n.t("staffing.title"))}</div>
+          <div class="yz-chat-subtitle">{html.escape(i18n.t("staffing.subtitle"))}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     if not _can_manage_staff():
+        st.error(i18n.t("staffing.not_allowed"))
         return
-    c1, c2 = st.columns(2)
-    if c1.button(i18n.t("staff.add_employee"), key="staff_open_hire", use_container_width=True):
-        _close_staff_form()
-        st.session_state["staff_form"] = "new_hire"
-        st.rerun()
-    if c2.button(i18n.t("staff.terminate_employee"), key="staff_open_term", use_container_width=True):
-        _close_staff_form()
-        st.session_state["staff_form"] = "termination"
-        st.rerun()
 
-    form = st.session_state.get("staff_form")
-    if form == "new_hire":
+    flash = st.session_state.pop("staff_flash", None)
+    if flash:
+        kind, text = flash
+        {"success": st.success, "warning": st.warning}.get(kind, st.error)(text)
+
+    tab_hire, tab_term = st.tabs([i18n.t("staffing.tab_hire"), i18n.t("staffing.tab_term")])
+    with tab_hire:
         _render_new_hire_form()
-    elif form == "termination":
+    with tab_term:
         _render_termination_form()
+
+    st.markdown(f"#### {html.escape(i18n.t('staffing.my_requests'))}")
+    _render_my_staffing_requests()
 
 
 def _render_message(message: dict, index: int) -> None:
@@ -588,7 +664,6 @@ def page_chat() -> None:
                     if st.button(label, use_container_width=True):
                         _submit_query(query)
                         st.rerun()
-        _render_staffing_actions()
 
     st.markdown("</div>", unsafe_allow_html=True)
 

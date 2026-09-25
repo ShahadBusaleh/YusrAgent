@@ -44,11 +44,19 @@ PAGES_BY_ROLE = {
     # Requests/Approvals tabs and never calls /approvals for this role —
     # this nav entry is what makes the Grievances-only inbox reachable at
     # all, since deciding a grievance only happens from that page now.
-    "hr_specialist": ["Dashboard", "Ask Yusor", "Approvals", "Grievances", "My Requests"],
+    "hr_specialist": [
+        "Dashboard",
+        "Ask Yusor",
+        "Approvals",
+        "Onboarding & Offboarding",
+        "Grievances",
+        "My Requests",
+    ],
     "hr_manager": [
         "Dashboard",
         "Ask Yusor",
         "Approvals",
+        "Onboarding & Offboarding",
         "Team Insights",
         "Payroll",
         "Grievances",
@@ -58,6 +66,7 @@ PAGES_BY_ROLE = {
         "Dashboard",
         "Ask Yusor",
         "Approvals",
+        "Onboarding & Offboarding",
         "Team Insights",
         "Payroll",
         "Grievances",
@@ -73,6 +82,7 @@ NAV_ICONS = {
     "Dashboard": "dashboard",
     "Ask Yusor": "chat",
     "Approvals": "pending_actions",
+    "Onboarding & Offboarding": "badge",
     "Team Insights": "insights",
     "Payroll": "payments",
     "Grievances": "feedback",
@@ -88,6 +98,7 @@ def _nav_labels() -> dict[str, str]:
         "Dashboard": i18n.t("nav.dashboard"),
         "Ask Yusor": i18n.t("nav.ask_yusor"),
         "Approvals": i18n.t("nav.approvals"),
+        "Onboarding & Offboarding": i18n.t("nav.staffing"),
         "Team Insights": i18n.t("nav.team_insights"),
         "Grievances": i18n.t("nav.grievances"),
         "My Requests": i18n.t("nav.my_requests"),
@@ -739,6 +750,8 @@ def _render(page: str) -> None:
         views.page_leave()
     elif page == "Approvals":
         views.page_inbox()
+    elif page == "Onboarding & Offboarding":
+        views.page_staffing()
     elif page == "Team Insights":
         _team_insights_v2()
     elif page == "Payroll":
