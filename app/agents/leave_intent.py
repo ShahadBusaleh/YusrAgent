@@ -14,21 +14,18 @@ from typing import Any
 from app.config import get_settings
 
 _LEAVE_INTENT_PATTERNS = (
-    r"\btake\b.{0,20}\bleave\b",
-    r"\brequest(ing)?\b.{0,20}\bleave\b",
-    r"\bapply(ing)?\s+for\s+leave\b",
-    r"\bsubmit\b.{0,20}\bleave\b",
-    r"\bleave\s+from\b",
-    r"\bcover\s+(for\s+)?me\b",
-    r"\bcover\s+my\b",
-    r"\btime\s+off\b",
+    r"^(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:request|apply\s+for|submit|book)\s+(?:my\s+|a\s+)?(?:(?:annual|sick|emergency)\s+)?(?:leave|time\s+off)\b",
+    r"\bi\s+(?:want|need|would\s+like)\s+to\s+(?:take|request|apply\s+for|submit|book)\s+(?:my\s+|a\s+)?(?:(?:annual|sick|emergency)\s+)?(?:leave|time\s+off)\b",
+    r"\bi\s+am\s+(?:requesting|applying\s+for)\s+(?:(?:annual|sick|emergency)\s+)?leave\b",
 )
 
 _LEAVE_TYPES = {"annual", "sick", "emergency"}
 
 
 def detects_leave_submission_intent(query: str) -> bool:
-    lowered = (query or "").lower()
+    lowered = (query or "").strip().lower()
+    if re.search(r"\b(?:how|policy|rules|eligible|eligibility|cancel|withdraw)\b|\b(?:do not|don't|not to)\b", lowered):
+        return False
     return any(re.search(pattern, lowered) for pattern in _LEAVE_INTENT_PATTERNS)
 
 
@@ -44,19 +41,10 @@ def _coerce_date(value: Any) -> str | None:
         return None
     text = str(value).strip()
     try:
-        datetime.strptime(text, "%Y-%m-%d")
+        parsed = datetime.strptime(text, "%Y-%m-%d").date()
     except ValueError:
         return None
-    return text
-
-
-def _coerce_days(value: Any) -> float | None:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
+    return parsed.isoformat()
 
 
 def extract_leave_fields(query: str) -> dict:
@@ -106,18 +94,20 @@ def extract_leave_fields(query: str) -> dict:
     leave_type = _coerce_leave_type(parsed.get("leave_type"))
     start_date = _coerce_date(parsed.get("start_date"))
     end_date = _coerce_date(parsed.get("end_date"))
-    days = _coerce_days(parsed.get("days"))
+    days = None
     reason = parsed.get("reason")
     reason = str(reason).strip() if reason else None
 
-    if days is None and start_date and end_date:
-        try:
-            start = datetime.strptime(start_date, "%Y-%m-%d").date()
-            end = datetime.strptime(end_date, "%Y-%m-%d").date()
-            if end >= start:
-                days = float((end - start).days + 1)
-        except ValueError:
-            days = None
+    today = date.today()
+    if any(date.fromisoformat(value) < today for value in (start_date, end_date) if value):
+        return {}
+    if start_date and end_date:
+        start = date.fromisoformat(start_date)
+        end = date.fromisoformat(end_date)
+        if end < start:
+            return {}
+        # Inclusive calendar days, matching the existing leave convention.
+        days = float((end - start).days + 1)
 
     result: dict[str, Any] = {}
     if leave_type:

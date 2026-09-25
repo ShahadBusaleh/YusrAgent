@@ -3,8 +3,16 @@ from __future__ import annotations
 import sqlite3
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from openai import OpenAIError
 
-from app.agents.growth_plan import extract_pdf_text, generate_growth_plan
+from app.agents.growth_plan import (
+    GrowthPlanError,
+    GrowthPlanUnavailableError,
+    InvalidCVError,
+    extract_pdf_text,
+    generate_growth_plan,
+    prepare_cv_text,
+)
 from app.api.deps import CurrentUser, get_current_user
 from app.db.connection import get_db
 from app.db.employees import get_employee
@@ -87,8 +95,30 @@ def upload_cv(
         )
 
     employee = get_employee(conn, user.employee_id)
+    if not employee:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee profile not found.")
 
-    plan_text = generate_growth_plan(employee, opportunity, cv_text)
+    # Use the same employee-aware sanitized text for generation and persistence.
+    cv_text = prepare_cv_text(cv_text, employee)
+    try:
+        if not cv_text:
+            raise InvalidCVError("The CV contains no usable text.")
+        plan_text = generate_growth_plan(employee, opportunity, cv_text)
+    except InvalidCVError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No usable CV content remains. Please upload a CV describing your skills and experience.",
+        ) from exc
+    except GrowthPlanError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="We couldn't generate a complete growth plan. Please retry, or upload a clearer CV.",
+        ) from exc
+    except (GrowthPlanUnavailableError, OpenAIError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Growth plans are temporarily unavailable. Please try again later.",
+        ) from exc
 
     saved = save_growth_plan(
         conn,
