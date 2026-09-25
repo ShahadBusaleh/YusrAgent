@@ -1,0 +1,7 @@
+id: WPS063
+category: Violations
+topic: Bulk selection
+rule: The platform can support selecting multiple applicable violations for processing
+conditions: Where the feature is available
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

@@ -10,14 +10,14 @@ from openai import OpenAI
 from app.agents.base import BaseAgent
 from app.config import get_settings
 from app.rag.retrieve import retrieve
+
 from app.security.governance import (
     detect_prompt_injection,
     mask_pii,
     sanitize_input,
     validate_output,
+    verify_citations,
 )
-
-
 # =========================================================
 # CONSTANTS
 # =========================================================
@@ -218,6 +218,25 @@ def _safe_text(value: Any) -> str:
     return mask_pii(str(value))
 
 
+_HYPHEN_VARIANTS = "‐‑‒–—−"
+
+_POLICY_ID_ODD_HYPHENS_RE = re.compile(
+    rf"\bAAM[{_HYPHEN_VARIANTS}]POL[{_HYPHEN_VARIANTS}](\d{{3}})\b"
+)
+
+
+def _normalize_citations(text: str) -> str:
+    """
+    The model sometimes writes 【Source: X】 and non-breaking hyphens
+    (AAM‑POL‑015). Normalize to the [Source: ID] / AAM-POL-015 form the
+    UI, the Arabic translator, and the retrieved source ids all use.
+    """
+
+    text = text.replace("【", "[").replace("】", "]")
+
+    return _POLICY_ID_ODD_HYPHENS_RE.sub(r"AAM-POL-\1", text)
+
+
 def _extract_tokens(text: str) -> set[str]:
     """
     Tokenization used only for lexical relevance reranking.
@@ -338,7 +357,7 @@ def _filter_relevant_chunks(
     max_chunks: int = 3,
 ) -> list[dict]:
     """
-    Rank retrieved policy chunks and keep the strongest ones.
+    Keep the first retrieved chunks that pass a lexical relevance filter.
     """
 
     if not chunks:
@@ -361,13 +380,10 @@ def _filter_relevant_chunks(
 
         ranked_chunks.append(enriched_chunk)
 
-    ranked_chunks.sort(
-        key=lambda item: item[
-            "consultant_relevance_score"
-        ],
-        reverse=True,
-    )
-
+    # Keep the retriever's (hybrid dense + keyword) order and use the
+    # lexical score only as a filter. Sorting by it let generic words
+    # ("policy", "labor", "law") outrank the right article — e.g. the
+    # annual-leave policy beat LAW006 for an IBAN question.
     relevant_chunks = [
         chunk
         for chunk in ranked_chunks
@@ -376,9 +392,16 @@ def _filter_relevant_chunks(
         ] >= min_score
     ]
 
-    # Keep at least the strongest retrieved document.
+    # Keep at least the strongest retrieved document — but only if it
+    # shares any vocabulary with the question at all. A zero-overlap
+    # chunk is noise; returning [] lets the caller say the evidence is
+    # insufficient instead of stretching an unrelated rule.
     if not relevant_chunks:
-        return ranked_chunks[:1]
+        return [
+            chunk
+            for chunk in ranked_chunks[:1]
+            if chunk["consultant_relevance_score"] > 0
+        ]
 
     return relevant_chunks[:max_chunks]
 
@@ -433,6 +456,7 @@ def _analyze_policy_chunks(
     for chunk in chunks:
 
         source_id = chunk.get("id")
+        source_table = chunk.get("source_table")
 
         text = chunk.get(
             "text",
@@ -450,6 +474,7 @@ def _analyze_policy_chunks(
             rules.append(
                 {
                     "source_id": source_id,
+                    "source_table": source_table,
                     "text": _safe_text(rule),
                 }
             )
@@ -459,6 +484,7 @@ def _analyze_policy_chunks(
             conditions.append(
                 {
                     "source_id": source_id,
+                    "source_table": source_table,
                     "text": _safe_text(condition),
                 }
             )
@@ -468,6 +494,7 @@ def _analyze_policy_chunks(
             exceptions.append(
                 {
                     "source_id": source_id,
+                    "source_table": source_table,
                     "text": _safe_text(exception),
                 }
             )
@@ -478,7 +505,93 @@ def _analyze_policy_chunks(
         "exceptions": exceptions,
     }
 
+def _detect_policy_conflicts(
+    policy_analysis: dict,
+) -> list[str]:
+    """
+    Detect explicit conflicts between Saudi Labor Law
+    and Company Policies.
+    """
 
+    conflicts: list[str] = []
+
+    entries = []
+
+    for field_name in (
+        "rules",
+        "conditions",
+        "exceptions",
+    ):
+        for entry in policy_analysis.get(field_name, []):
+            entries.append(
+                {
+                    "field": field_name,
+                    **entry,
+                }
+            )
+
+    law_entries = [
+        entry
+        for entry in entries
+        if entry.get("source_table") == "saudi_labor_law"
+    ]
+
+    policy_entries = [
+        entry
+        for entry in entries
+        if entry.get("source_table") == "company_policies"
+    ]
+
+    for law in law_entries:
+        law_text = _safe_text(
+            law.get("text")
+        ).strip()
+
+        for policy in policy_entries:
+            policy_text = _safe_text(
+                policy.get("text")
+            ).strip()
+
+            if not law_text or not policy_text:
+                continue
+
+            law_tokens = _extract_tokens(law_text)
+            policy_tokens = _extract_tokens(policy_text)
+
+            shared_tokens = law_tokens & policy_tokens
+
+            if len(shared_tokens) < 2:
+                continue
+
+            # Detect explicit numeric disagreement.
+            law_numbers = set(
+                re.findall(
+                    r"\b\d+(?:\.\d+)?\b",
+                    law_text,
+                )
+            )
+
+            policy_numbers = set(
+                re.findall(
+                    r"\b\d+(?:\.\d+)?\b",
+                    policy_text,
+                )
+            )
+
+            if (
+                law_numbers
+                and policy_numbers
+                and law_numbers != policy_numbers
+            ):
+                conflicts.append(
+                    "Potential conflict between "
+                    f"{law.get('source_id')} and "
+                    f"{policy.get('source_id')}: "
+                    "the retrieved law and company policy "
+                    "contain different numeric requirements."
+                )
+
+    return list(dict.fromkeys(conflicts))
 # =========================================================
 # SOURCES
 # =========================================================
@@ -489,9 +602,8 @@ def _build_sources(
     """
     Build source metadata.
 
-    Source text is intentionally included so the Manager
-    can validate that the Consultant response is grounded
-    in retrieved evidence.
+    Source IDs are kept internally for validation and linking.
+    A human-readable display name is also generated for the UI.
     """
 
     sources: list[dict] = []
@@ -512,28 +624,67 @@ def _build_sources(
 
         seen.add(source_key)
 
+        source_text = str(
+            chunk.get("text") or ""
+        ).strip()
+
+        # ---------------------------------
+        # Human-readable source name
+        # ---------------------------------
+        display_name = ""
+
+        # Saudi Labor Law
+        article_match = re.search(
+            r"Article:\s*([^\n]+)\s*"
+            r"Title:\s*([^\n]+)",
+            source_text,
+            flags=re.IGNORECASE,
+        )
+
+        if article_match:
+            article = article_match.group(1).strip()
+            title = article_match.group(2).strip()
+
+            display_name = (
+                f"Saudi Labor Law — "
+                f"Article {article}: {title}"
+            )
+
+        # Internal company policy
+        # Internal company policy
+        if not display_name:
+            policy_match = re.search(
+                r"Policy Name:\s*([^\n]+)",
+                source_text,
+                flags=re.IGNORECASE,
+            )
+
+            if policy_match:
+                policy_name = policy_match.group(1).strip()
+
+                display_name = (
+                    f"Company Policies — "
+                    f"{policy_name}"
+                )
+
+        # Generic fallback
+        # Generic source name from RAG metadata
+        if not display_name:
+            display_name = (
+                chunk.get("source_name")
+                or chunk.get("filename")
+                or "Policy source"
+            )
+
+        
         sources.append(
             {
                 "id": source_id,
-
-                # Important for Manager validation.
-                "text": chunk.get(
-                    "text",
-                    "",
-                ),
-
-                "source_table": chunk.get(
-                    "source_table"
-                ),
-
-                "filename": chunk.get(
-                    "filename"
-                ),
-
-                "score": chunk.get(
-                    "score"
-                ),
-
+                "display_name": display_name,
+                "text": source_text,
+                "source_table": chunk.get("source_table"),
+                "filename": chunk.get("filename"),
+                "score": chunk.get("score"),
                 "relevance_score": chunk.get(
                     "consultant_relevance_score"
                 ),
@@ -541,7 +692,6 @@ def _build_sources(
         )
 
     return sources
-
 
 def _format_context(
     chunks: list[dict],
@@ -554,15 +704,11 @@ def _format_context(
 
     for chunk in chunks:
 
-        source_id = (
-            chunk.get("id")
-            or "UNKNOWN"
-        )
-
-        source_table = (
-            chunk.get("source_table")
-            or "unknown"
-        )
+        source_name = (
+        chunk.get("source_name")
+        or chunk.get("source_table")
+        or "Policy source"
+    )
 
         text = _safe_text(
             chunk.get(
@@ -572,8 +718,7 @@ def _format_context(
         )
 
         parts.append(
-            f"[Source: {source_id}]\n"
-            f"Source type: {source_table}\n"
+            f"Source: {source_name}\n"
             f"{text}"
         )
 
@@ -587,6 +732,7 @@ def _format_context(
 def _generate_consultant_recommendation(
     query: str,
     chunks: list[dict],
+    is_grievance: bool = False,
 ) -> str:
     """
     Generate a policy-only Consultant response.
@@ -615,121 +761,49 @@ def _generate_consultant_recommendation(
     # -----------------------------------------------------
     # SYSTEM PROMPT
     # -----------------------------------------------------
+    if is_grievance:
+       system_prompt = """
+        You are the Consultant Agent in the Yusr Agentic HR System.
 
-    system_prompt = """
-You are the Consultant Agent in the Yusr Agentic HR System.
+        You are handling an employee grievance or complaint.
 
-Your role is HR policy retrieval and policy interpretation only.
+        STRICT RULES:
 
-STRICT RULES:
+        1. Use ONLY retrieved Saudi Labor Law and Company HR policy evidence.
+        2. Explain the relevant legal or policy rules and supporting evidence.
+        3. Mention the relevant Article or policy when available.
+        4. Do not access employee-specific data or the HR database.
+        5. Do not decide employee eligibility, approve, reject, or resolve the grievance.
+        6. Do not invent policies, legal rules, conditions, exceptions, or citations.
+        7. Never expose internal source IDs, Law IDs, record IDs, or filenames.
+        8. State clearly if the retrieved evidence is insufficient.
+        9. Human HR review is ALWAYS required.
+        10. If employee-specific information is required, indicate that it is required.
+        """.strip()
+    else:
+        system_prompt = """
+    You are the Consultant Agent in the Yusr Agentic HR System.
 
-1. Answer only from the retrieved policy evidence.
+    Your role is HR policy retrieval and policy interpretation only.
 
-2. Explain the policy rules that directly answer
-   the user's question.
+    STRICT RULES:
 
-3. Clearly identify policy:
-   - Rules
-   - Conditions
-   - Requirements
-   - Exceptions
-
-4. Do NOT access employee-specific data.
-
-5. Do NOT access the HR database.
-
-6. Do NOT evaluate whether a specific employee
-   satisfies a policy condition.
-
-7. Do NOT calculate employee leave balances.
-
-8. Do NOT determine employee eligibility.
-
-9. Do NOT assess an employee's request.
-
-10. Do NOT create employee-specific blockers.
-
-11. Do NOT request employee information.
-
-12. Do NOT approve or reject employee actions.
-
-13. Do NOT make authorization decisions.
-
-14. Never invent policies, legal rules, conditions,
-    exceptions, or citations.
-
-15. If the retrieved evidence is insufficient,
-    clearly say that the available policy evidence
-    is insufficient.
-
-16. Cite relevant evidence using:
-
-    [Source: SOURCE_ID]
-
-17. Keep the response concise and professional.
-
-18. The Manager Agent is responsible for governance
-    and final system-level decisions.
-
-19. The Consultant is advisory only.
-
-20. The Consultant must remain independent from
-    the HR Agent.
-
-21. When the retrieved evidence contains a Law ID or Article number,
-    explicitly mention it in the answer.
-
-22. Prefer this format when applicable:
-    "According to Article X (Law ID: LAWXXX), ..."
-
-23. Connect each policy rule to its corresponding Article or Law ID.
-
-24. Do not invent an Article number or Law ID.
-    Only mention identifiers explicitly present in the retrieved evidence.
-
-GRIEVANCE HANDLING:
-
-When the user request is a grievance or complaint:
-
-1. Analyze the complaint using ONLY:
-   - Saudi Labor Law
-   - Company HR policies
-   - Retrieved policy evidence
-
-2. Determine whether the complaint appears:
-   - compliant with the regulations/policies
-   - or potentially in violation
-
-3. Identify the relevant:
-   - Article
-   - Law ID
-   - Company policy
-   when available in the retrieved evidence.
-
-4. Provide:
-   - policy/legal analysis
-   - supporting evidence
-   - suggested resolution
-
-5. Determine whether resolving the grievance requires
-   employee-specific information.
-
-6. Return whether employee-specific data is required.
-
-7. NEVER retrieve employee-specific information yourself.
-
-8. If employee-specific information is required,
-   the Orchestrator may call the HR Agent only when
-   the employee's identity is visible.
-
-9. If the employee chose to hide their identity,
-   do not request, reveal, or retrieve identifying information.
-
-10. A grievance must NEVER be considered finally resolved
-    by the Consultant.
-
-11. Human HR review is ALWAYS required for grievances.
-""".strip()
+    1. Answer only from the retrieved policy evidence.
+    2. Explain the policy rules that directly answer the user's question.
+    3. Clearly identify rules, conditions, requirements, and exceptions.
+    4. Do NOT access employee-specific data or the HR database.
+    5. Do NOT evaluate employee eligibility or employee-specific conditions.
+    6. Do NOT calculate employee leave balances.
+    7. Do NOT approve, reject, or authorize employee actions.
+    8. Never invent policies, legal rules, conditions, exceptions, or citations.
+    9. If the retrieved evidence is insufficient, clearly say so.
+    10. Use human-readable source names only.
+    11. Keep the response concise and professional.
+    12. The Manager Agent is responsible for governance and final decisions.
+    13. The Consultant is advisory only and independent from the HR Agent.
+    14. Article numbers may be mentioned when relevant.
+    15. Never expose internal source IDs, Law IDs, record IDs, filenames, or source identifiers.
+    """.strip()
 
     # -----------------------------------------------------
     # USER PROMPT
@@ -754,14 +828,13 @@ Explain the relevant:
 - Requirements
 - Exceptions
 
-For each relevant policy rule, include the corresponding
-Article number and Law ID when they are available in the evidence.
+For each relevant policy rule, mention the Article number
+when it is relevant and available.
 
-Use the format:
+Never mention Law IDs, internal source IDs, record IDs,
+filenames, or other internal identifiers.
 
-According to Article X (Law ID: LAWXXX), ...
-
-Do not invent or infer legal identifiers.
+Use human-readable source names only.
 
 Do NOT evaluate any specific employee.
 
@@ -771,9 +844,8 @@ Do NOT calculate leave balances.
 
 Do NOT determine eligibility.
 
-Cite relevant sources using:
-
-[Source: SOURCE_ID]
+Use human-readable source names only.
+Do not add citation tags such as [Source: ID].
 """.strip()
 
     response = client.chat.completions.create(
@@ -805,9 +877,8 @@ Cite relevant sources using:
         )
 
     return _safe_text(
-        recommendation
+        _normalize_citations(recommendation)
     )
-
 
 # =========================================================
 # CONSULTANT AGENT
@@ -856,12 +927,14 @@ class ConsultantAgent(BaseAgent):
                     ),
                 ),
                 trace=trace,
-                conflicts=[
-                    "invalid_input"
-                ],
             )
 
         raw_query = input.get("query", "")
+        intent = str(
+            input.get("intent") or ""
+        ).strip().upper()
+
+        is_grievance = intent == "GRIEVANCE"
 
         # Second call shape: {"action_type": "bank_update"} looks up the
         # policy/law citation for that action instead of a free-text
@@ -894,9 +967,6 @@ class ConsultantAgent(BaseAgent):
                     ),
                 ),
                 trace=trace,
-                conflicts=[
-                    "missing_query"
-                ],
             )
 
         _add_trace(
@@ -957,9 +1027,6 @@ class ConsultantAgent(BaseAgent):
                     ),
                 ),
                 trace=trace,
-                conflicts=[
-                    "prompt_injection_detected"
-                ],
             )
 
         _add_trace(
@@ -988,7 +1055,9 @@ class ConsultantAgent(BaseAgent):
 
             retrieved_chunks = retrieve(
                 query=query,
-                top_k=3,
+                # Over-fetch so the reranker below can actually choose
+                # the best 3; with top_k=3 it could only reorder.
+                top_k=8,
             )
 
         except Exception as exc:
@@ -1026,9 +1095,6 @@ class ConsultantAgent(BaseAgent):
                     retryable=True,
                 ),
                 trace=trace,
-                conflicts=[
-                    "retrieval_error"
-                ],
             )
 
         retrieval_duration = round(
@@ -1065,9 +1131,6 @@ class ConsultantAgent(BaseAgent):
                     ),
                 ),
                 trace=trace,
-                conflicts=[
-                    "no_matching_policy"
-                ],
             )
 
         _add_trace(
@@ -1127,9 +1190,6 @@ class ConsultantAgent(BaseAgent):
                     ),
                 ),
                 trace=trace,
-                conflicts=[
-                    "unsafe_retrieved_content"
-                ],
             )
 
         _add_trace(
@@ -1187,9 +1247,6 @@ class ConsultantAgent(BaseAgent):
                     ),
                 ),
                 trace=trace,
-                conflicts=[
-                    "no_relevant_policy"
-                ],
             )
 
         source_ids = [
@@ -1254,7 +1311,9 @@ class ConsultantAgent(BaseAgent):
 
         # Consultant does not create employee-specific
         # conflicts.
-        conflicts: list[str] = []
+        conflicts = _detect_policy_conflicts(
+            policy_analysis
+        )
 
         # =================================================
         # 8. LLM GENERATION
@@ -1277,6 +1336,7 @@ class ConsultantAgent(BaseAgent):
                 _generate_consultant_recommendation(
                     query=query,
                     chunks=relevant_chunks,
+                    is_grievance=is_grievance,
                 )
             )
 
@@ -1317,9 +1377,6 @@ class ConsultantAgent(BaseAgent):
                     retryable=True,
                 ),
                 trace=trace,
-                conflicts=[
-                    "generation_error"
-                ],
                 sources=sources,
                 policy_analysis=policy_analysis,
             )
@@ -1356,10 +1413,15 @@ class ConsultantAgent(BaseAgent):
             for chunk in relevant_chunks
         ]
 
+
         try:
 
             output_is_valid = (
                 validate_output(
+                    recommendation,
+                    validation_sources,
+                )
+                and verify_citations(
                     recommendation,
                     validation_sources,
                 )
@@ -1386,24 +1448,36 @@ class ConsultantAgent(BaseAgent):
                     ),
                 ),
                 trace=trace,
-                conflicts=[
-                    "consultant_output_validation_failed"
-                ],
                 sources=sources,
                 policy_analysis=policy_analysis,
             )
 
         if not output_is_valid:
 
-            conflicts.append(
-                "consultant_output_validation_failed"
-            )
-
             _add_trace(
                 trace,
                 phase="OBSERVE",
                 stage="OUTPUT_VALIDATION",
                 status=FAILED,
+            )
+
+            # An ungrounded answer is an error, not a policy conflict:
+            # `conflicts` is reserved for real law-vs-policy conflicts,
+            # and Manager reads `success`/`error` to decide whether to
+            # use the recommendation at all.
+            return _error_response(
+                recommendation=recommendation,
+                error=_build_error(
+                    error_type="ungrounded_output",
+                    stage="OUTPUT_VALIDATION",
+                    message=(
+                        "The generated Consultant output is not "
+                        "sufficiently supported by the retrieved evidence."
+                    ),
+                ),
+                trace=trace,
+                sources=sources,
+                policy_analysis=policy_analysis,
             )
 
         else:

@@ -1,0 +1,7 @@
+id: WPS018
+category: File format
+topic: Total amount
+rule: The file contains the total amount associated with the wage transaction
+conditions: Must match the required wage data
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

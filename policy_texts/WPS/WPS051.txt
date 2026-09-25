@@ -1,0 +1,7 @@
+id: WPS051
+category: Registration
+topic: Establishment access
+rule: Authorized establishment representatives can access the establishment's wage protection information
+conditions: Required permissions
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

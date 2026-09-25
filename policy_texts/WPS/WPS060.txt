@@ -1,0 +1,7 @@
+id: WPS060
+category: Upload workflow
+topic: View compliance
+rule: After processing, the user can view the resulting compliance information
+conditions: After successful processing
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

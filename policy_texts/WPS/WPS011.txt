@@ -1,0 +1,7 @@
+id: WPS011
+category: File format
+topic: Wage frequency
+rule: The file records the applicable wage payment frequency
+conditions: According to the employee wage arrangement
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

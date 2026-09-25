@@ -1,4 +1,6 @@
 import re
+from calendar import monthrange
+from datetime import datetime
 
 from app.agents.base import BaseAgent
 from app.agents.leave_intent import (
@@ -9,8 +11,8 @@ from app.agents.leave_intent import (
 from app.db.connection import get_connection
 from app.db.employees import find_cover_candidates, get_employee
 from app.db.leave import get_leave_balance, list_leave_requests
-from app.db.payroll import get_latest_payroll
-from app.db.attendance import get_latest_attendance
+from app.db.payroll import get_latest_payroll, get_payroll_for_period
+from app.db.attendance import get_attendance_for_period, get_latest_attendance
 from app.db.skills import get_department_experience_gap
 
 
@@ -68,11 +70,144 @@ def _safe_profile(employee: dict) -> dict:
     }
 
 
+def _profile_fields_for_query(query: str) -> tuple[str, ...]:
+    """Return only profile fields relevant to the query."""
+
+    if _is_payroll_query(query):
+        return (
+            "salary",
+            "basic_salary",
+        )
+
+    if _contains_any(
+        query,
+        (
+            "iban",
+            "bank",
+            "bank account",
+            "bank details",
+            "bank information",
+        ),
+    ):
+        return (
+            "bank_code",
+            "bank_name",
+            "iban",
+            "bank_iban",
+        )
+
+    if _contains_any(
+        query,
+        (
+            "phone",
+            "mobile",
+            "email",
+            "address",
+            "city",
+            "contact",
+        ),
+    ):
+        return (
+            "mobile",
+            "email",
+            "address",
+            "city",
+        )
+
+    if _contains_any(
+        query,
+        (
+            "job title",
+            "position",
+            "department",
+            "hire date",
+            "hired",
+            "employment status",
+            "manager",
+        ),
+    ):
+        return (
+            "job_title",
+            "department_id",
+            "department_name",
+            "hire_date",
+            "employment_status",
+            "manager_id",
+        )
+
+    return (
+        "employee_id",
+        "full_name",
+    )
+
 def _contains_any(query: str, words: tuple[str, ...]) -> bool:
-    """Simple case-insensitive keyword matching."""
+    """Case-insensitive whole-word matching, so "late" doesn't fire on
+    "calculate" or "present" on "represent"."""
 
     query_lower = query.lower()
-    return any(word in query_lower for word in words)
+    return any(
+        re.search(rf"\b{re.escape(word)}\b", query_lower)
+        for word in words
+    )
+
+
+_EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
+_SAUDI_MOBILE_RE = re.compile(r"(?:05|\+9665|009665|9665)\d{8}")
+
+
+def _is_valid_email(value: str) -> bool:
+    return bool(_EMAIL_RE.fullmatch(value or ""))
+
+
+def _is_valid_saudi_mobile(value: str) -> bool:
+    return bool(_SAUDI_MOBILE_RE.fullmatch(value or ""))
+
+
+def _is_valid_saudi_iban(value: str) -> bool:
+    """SA + 22 digits with a valid ISO 13616 mod-97 checksum."""
+
+    if not re.fullmatch(r"SA\d{22}", value or ""):
+        return False
+
+    rearranged = value[4:] + value[:4]
+    numeric = "".join(
+        str(int(ch, 36)) for ch in rearranged
+    )
+    return int(numeric) % 97 == 1
+
+
+def _needs_information(
+    action_type: str,
+    missing: list[str],
+    note: str,
+) -> dict:
+    return {
+        "status": "NEEDS_INFORMATION",
+        "action_type": action_type,
+        "missing_information": missing,
+        "notes": [note],
+    }
+
+
+def _is_leave_query(query: str) -> bool:
+    return _contains_any(
+        query,
+        (
+            "leave balance",
+            "remaining leave",
+            "leave days",
+            "how many leave",
+            "vacation balance",
+            "annual leave",
+            "sick leave",
+            "emergency leave",
+            "day off",
+            "days off",
+            "leave request",
+            "leave history",
+            "my leave",
+        ),
+    )
 
 
 def _is_payroll_query(query: str) -> bool:
@@ -89,6 +224,147 @@ def _is_payroll_query(query: str) -> bool:
             "allowance",
             "deduction",
         ),
+    )
+
+
+_MONTH_NAMES = {
+    "january": 1, "jan": 1,
+    "february": 2, "feb": 2,
+    "march": 3, "mar": 3,
+    "april": 4, "apr": 4,
+    "may": 5,
+    "june": 6, "jun": 6,
+    "july": 7, "jul": 7,
+    "august": 8, "aug": 8,
+    "september": 9, "sep": 9, "sept": 9,
+    "october": 10, "oct": 10,
+    "november": 11, "nov": 11,
+    "december": 12, "dec": 12,
+}
+
+
+def _extract_period(query: str) -> str | None:
+    """Pull a "YYYY-MM" period out of a payroll/attendance question, e.g.
+    "June 2026" or "2026-06". Returns None when no specific month was
+    named, so the caller can fall back to the latest available period."""
+
+    match = re.search(r"\b(20\d{2})-(0[1-9]|1[0-2])\b", query)
+
+    if match:
+        return f"{match.group(1)}-{match.group(2)}"
+
+    month_pattern = "|".join(_MONTH_NAMES)
+
+    match = re.search(
+        rf"\b({month_pattern})\b\.?\s+(20\d{{2}})\b",
+        query,
+        re.IGNORECASE,
+    )
+
+    if match:
+        month = _MONTH_NAMES[match.group(1).lower()]
+        year = match.group(2)
+        return f"{year}-{month:02d}"
+
+    return None
+
+
+def _date_to_period(value: str | None) -> str | None:
+    """employees.hire_date/termination_date are stored DD-MM-YYYY;
+    leave_requests dates are YYYY-MM-DD. Accept either, return "YYYY-MM"."""
+
+    if not value:
+        return None
+
+    for fmt in ("%d-%m-%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(value, fmt).strftime("%Y-%m")
+        except ValueError:
+            continue
+
+    return None
+
+
+def _approved_leave_note(
+    conn, employee_id: str, period: str
+) -> str | None:
+    """An approved leave overlapping `period`, if any — extra context on a
+    missing-payroll answer, not claimed as the cause (payroll continues
+    through leave in this dataset; pre-hire/post-termination is the actual
+    cause of a missing row)."""
+
+    try:
+        year, month = (int(part) for part in period.split("-"))
+        month_end = f"{period}-{monthrange(year, month)[1]:02d}"
+    except (ValueError, TypeError):
+        return None
+
+    row = conn.execute(
+        """
+        SELECT leave_type, start_date, end_date FROM leave_requests
+        WHERE employee_id = ? AND status = 'approved'
+          AND start_date <= ? AND end_date >= ?
+        ORDER BY start_date
+        LIMIT 1
+        """,
+        (employee_id, month_end, f"{period}-01"),
+    ).fetchone()
+
+    if not row:
+        return None
+
+    return (
+        f"Note: approved {row['leave_type']} leave "
+        f"{row['start_date']} to {row['end_date']} overlaps this period."
+    )
+
+
+def _explain_missing_record(
+    conn,
+    employee: dict | None,
+    employee_id: str,
+    period: str | None,
+    subject: str,
+) -> str:
+    """Say *why* a payroll/attendance lookup came back empty instead of
+    just reporting the absence, and ask for a specific month when that's
+    genuinely the missing piece — an interactive answer, not a dead end."""
+
+    if period:
+        base = f"No {subject} found for {period}."
+    else:
+        # No month was named and even the latest record is missing — the
+        # default-to-latest path found nothing at all.
+        base = f"No {subject} on file yet."
+        period = datetime.now().strftime("%Y-%m")
+
+    if employee:
+        hire_period = _date_to_period(employee.get("hire_date"))
+
+        if hire_period and period < hire_period:
+            return (
+                f"{base} {employee.get('full_name') or 'This employee'} "
+                f"joined on {employee.get('hire_date')}, after this period. "
+                "Ask about a month from your hire date onward."
+            )
+
+        term_period = _date_to_period(employee.get("termination_date"))
+
+        if term_period and period > term_period:
+            return (
+                f"{base} Employment ended on "
+                f"{employee.get('termination_date')}, before this period."
+            )
+
+    leave_note = _approved_leave_note(conn, employee_id, period)
+
+    if leave_note:
+        return f"{base} {leave_note}"
+
+    topic = subject.replace(" record", "")
+    return (
+        f"{base} If you meant a specific month, name it "
+        f'(e.g. "what is my {topic} for June 2026?").'
     )
 
 
@@ -179,14 +455,16 @@ def _extract_personal_info_new_value(
             return match.group(1)
 
     if field_name in {"address", "city"}:
+        # Anchor on the field word so "I want to update my address to X"
+        # captures X, not "update my address to X".
         match = re.search(
-            r"(?:to|as)\s+(.+)$",
+            rf"\b{field_name}\b.*?\b(?:to|as)\s+(.+)$",
             query,
             re.IGNORECASE,
         )
 
         if match:
-            return match.group(1).strip()
+            return match.group(1).strip().rstrip(".")
 
     return None
 
@@ -215,6 +493,24 @@ def _is_bank_update(query: str) -> bool:
         )
     )
 
+def _detect_write_actions(query: str) -> list[str]:
+    """Detect write actions requested in the same query."""
+
+    actions: list[str] = []
+
+    if _is_personal_info_update(query):
+        actions.append("personal_info_update")
+
+    if _is_bank_update(query):
+        actions.append("bank_update")
+
+    if _is_certificate_request(query):
+        actions.append("certificate_request")
+
+    if detects_leave_submission_intent(query):
+        actions.append("leave_request")
+
+    return actions
 
 def _extract_new_iban(query: str) -> str | None:
     """Extract a Saudi IBAN from a bank-change request."""
@@ -304,10 +600,14 @@ def get_historical_precedent(
     if action_type == "leave_request":
         rows = conn.execute(
             """
-            SELECT status, COUNT(*) AS count
-            FROM leave_requests
-            WHERE employee_id = ?
-            GROUP BY status
+            SELECT p.status, COUNT(*) AS count
+            FROM proposed_actions pa
+            JOIN pending_approvals p
+                ON p.proposal_id = pa.proposal_id
+            WHERE pa.employee_id = ?
+            AND pa.action_type = 'leave_request'
+            AND p.status IN ('approved', 'rejected')
+            GROUP BY p.status
             """,
             (employee_id,),
         ).fetchall()
@@ -319,13 +619,21 @@ def get_historical_precedent(
             if status == "approved":
                 approved_count += count
 
-            elif status in {"rejected", "denied"}:
+            elif status == "rejected":
                 denied_count += count
 
     # -------------------------------------------------
     # Audit log precedent
     # -------------------------------------------------
 
+    if action_type == "leave_request":
+        return {
+            "employee_id": employee_id,
+            "action_type": action_type,
+            "approved_count": approved_count,
+            "denied_count": denied_count,
+            "total_count": approved_count + denied_count,
+        }
     audit_rows = conn.execute(
         """
         SELECT event_type, details
@@ -416,6 +724,7 @@ class HRAgent(BaseAgent):
 
         user = input.get("user") or {}
         query = str(input.get("query") or "")
+        write_actions = _detect_write_actions(query)
 
         employee_id = str(
             input.get("employee_id")
@@ -432,6 +741,23 @@ class HRAgent(BaseAgent):
         if not _own_record_only(user, employee_id):
             return empty
 
+        if len(write_actions) > 1:
+            return {
+                "facts": {
+                    "employee_id": employee_id,
+                    "request_assessment": {
+                        "status": "NEEDS_INFORMATION",
+                        "action_type": "multiple_actions",
+                        "missing_information": [],
+                        "notes": [
+                            "Multiple write actions were detected. "
+                            "Please submit one action at a time."
+                        ],
+                    },
+                },
+                "proposed_action": None,
+                "sources": [],
+            }
         conn = get_connection()
 
         # Initialize before any conditional branches.
@@ -455,7 +781,13 @@ class HRAgent(BaseAgent):
             )
 
             if employee:
-                facts["profile"] = _safe_profile(employee)
+                profile_fields = _profile_fields_for_query(query)
+
+                facts["profile"] = {
+                    key: employee[key]
+                    for key in profile_fields
+                    if key in employee
+                }
 
                 sources.append(
                     f"employees:{employee_id}"
@@ -465,12 +797,18 @@ class HRAgent(BaseAgent):
             # Leave balance
             # -------------------------------------------------
 
+            # `leave_balance` itself is always fetched (cheap, single row) since
+            # the leave-submission branch below needs it regardless of query
+            # wording. Whether it's exposed in `facts` — and therefore shown
+            # by Manager's fallback summary — is gated on the query actually
+            # being about leave, so an unrelated question (e.g. payroll)
+            # doesn't always drag leave balance into the answer.
             leave_balance = get_leave_balance(
                 conn,
                 employee_id,
             )
 
-            if leave_balance:
+            if leave_balance and _is_leave_query(query):
                 facts["leave_balance"] = leave_balance
 
                 annual_remaining = leave_balance.get(
@@ -489,27 +827,38 @@ class HRAgent(BaseAgent):
             # Previous leave requests
             # -------------------------------------------------
 
-            requests = list_leave_requests(
-                conn,
-                employee_id,
-            )
-
-            if requests:
-                facts["leave_requests"] = requests
-
-                sources.append(
-                    f"leave_requests:{employee_id}"
-                )
-
-            # -------------------------------------------------
-            # Payroll query
-            # -------------------------------------------------
-
-            if _is_payroll_query(query):
-                payroll = get_latest_payroll(
+            if _is_leave_query(query):
+                requests = list_leave_requests(
                     conn,
                     employee_id,
                 )
+
+                if requests:
+                    facts["leave_requests"] = requests
+
+                    sources.append(
+                        f"leave_requests:{employee_id}"
+                    )
+
+            # -------------------------------------------------
+            # Payroll query — own record only (enforced above by
+            # _own_record_only, same as every other fact here). A named
+            # month ("June 2026") is looked up exactly; otherwise this
+            # falls back to the latest period on file. Bulk, all-employee
+            # payroll is a separate HR-manager-only PDF export, not chat.
+            # -------------------------------------------------
+
+            # "salary certificate" is a certificate request, not a payroll
+            # lookup.
+            if _is_payroll_query(query) and not _is_certificate_request(query):
+                period = _extract_period(query)
+
+                if period:
+                    payroll = get_payroll_for_period(
+                        conn, employee_id, period
+                    )
+                else:
+                    payroll = get_latest_payroll(conn, employee_id)
 
                 if payroll:
                     facts["payroll"] = payroll
@@ -517,22 +866,39 @@ class HRAgent(BaseAgent):
                     sources.append(
                         f"payroll_monthly:{employee_id}"
                     )
+                else:
+                    facts["payroll_notice"] = _explain_missing_record(
+                        conn, employee, employee_id, period, "payroll record"
+                    )
 
             # -------------------------------------------------
-            # Attendance query
+            # Attendance query — same shape as payroll: a named month is
+            # looked up exactly, otherwise this falls back to the latest
+            # period on file, and either way a miss gets a real reason
+            # instead of silence.
             # -------------------------------------------------
 
             if _is_attendance_query(query):
-                attendance = get_latest_attendance(
-                    conn,
-                    employee_id,
-                )
+                period = _extract_period(query)
+
+                if period:
+                    attendance = get_attendance_for_period(
+                        conn, employee_id, period
+                    )
+                else:
+                    attendance = get_latest_attendance(
+                        conn, employee_id
+                    )
 
                 if attendance:
                     facts["attendance"] = attendance
 
                     sources.append(
                         f"attendance_leave_monthly:{employee_id}"
+                    )
+                else:
+                    facts["attendance_notice"] = _explain_missing_record(
+                        conn, employee, employee_id, period, "attendance record"
                     )
 
             # -------------------------------------------------
@@ -605,17 +971,49 @@ class HRAgent(BaseAgent):
                     query
                 )
 
+                field_label = {
+                    "mobile": "mobile number",
+                    "email": "email address",
+                    "address": "address",
+                    "city": "city",
+                }.get(field_name or "", "field")
+
+                new_value = (
+                    _extract_personal_info_new_value(query, field_name)
+                    if field_name
+                    else None
+                )
+
                 if field_name is None:
-                    facts["request_assessment"] = {
-                        "status": "NEEDS_INFORMATION",
-                        "missing_information": [
-                            "field_name"
-                        ],
-                        "notes": [
-                            "Specify whether you want to update "
-                            "your mobile, email, address, or city."
-                        ],
-                    }
+                    facts["request_assessment"] = _needs_information(
+                        "personal_info_update",
+                        ["field_name"],
+                        "Specify whether you want to update "
+                        "your mobile, email, address, or city.",
+                    )
+
+                elif not new_value:
+                    facts["request_assessment"] = _needs_information(
+                        "personal_info_update",
+                        ["new_value"],
+                        f"Please include your new {field_label} "
+                        f'(e.g. "update my {field_label} to ...").',
+                    )
+
+                elif field_name == "email" and not _is_valid_email(new_value):
+                    facts["request_assessment"] = _needs_information(
+                        "personal_info_update",
+                        ["new_value"],
+                        f'"{new_value}" is not a valid email address.',
+                    )
+
+                elif field_name == "mobile" and not _is_valid_saudi_mobile(new_value):
+                    facts["request_assessment"] = _needs_information(
+                        "personal_info_update",
+                        ["new_value"],
+                        "That is not a valid Saudi mobile number. "
+                        "Use the format 05XXXXXXXX or +9665XXXXXXXX.",
+                    )
 
                 else:
                     old_value = (
@@ -624,39 +1022,22 @@ class HRAgent(BaseAgent):
                         else None
                     )
 
-                    new_value = _extract_personal_info_new_value(
-                        query,
-                        field_name,
-                    )
+                    facts["request_assessment"] = {
+                        "status": "READY_FOR_APPROVAL",
+                        "action_type": "personal_info_update",
+                        "missing_information": [],
+                        "notes": [],
+                    }
 
-                    if not new_value:
-                        facts["request_assessment"] = {
-                            "status": "NEEDS_INFORMATION",
-                            "missing_information": [
-                                "new_value"
-                            ],
-                            "notes": [
-                                f"Provide the new value for "
-                                f"{field_name}."
-                            ],
-                        }
-
-                    else:
-                        facts["request_assessment"] = {
-                            "status": "READY_FOR_APPROVAL",
-                            "missing_information": [],
-                            "notes": [],
-                        }
-
-                        proposed_action = {
-                            "action_type": "personal_info_update",
-                            "payload": {
-                                "employee_id": employee_id,
-                                "field_name": field_name,
-                                "old_value": old_value,
-                                "new_value": new_value,
-                            },
-                        }
+                    proposed_action = {
+                        "action_type": "personal_info_update",
+                        "payload": {
+                            "employee_id": employee_id,
+                            "field_name": field_name,
+                            "old_value": old_value,
+                            "new_value": new_value,
+                        },
+                    }
 
             # -------------------------------------------------
             # Bank / IBAN update
@@ -683,34 +1064,29 @@ class HRAgent(BaseAgent):
 
                 new_iban = _extract_new_iban(query)
 
+                # No proposed_action until we have a real IBAN — an
+                # incomplete one used to be submitted as "None" -> "None".
                 if not new_iban:
-                    facts["request_assessment"] = {
-                        "status": "NEEDS_INFORMATION",
-                        "missing_information": [
-                            "new_iban"
-                        ],
-                        "notes": [
-                            "Provide a valid Saudi IBAN to prepare "
-                            "the bank-change request."
-                        ],
-                    }
+                    facts["request_assessment"] = _needs_information(
+                        "bank_update",
+                        ["new_iban"],
+                        "Please include your new Saudi IBAN "
+                        "(SA followed by 22 digits) to prepare "
+                        "the bank-change request.",
+                    )
 
-                    proposed_action = {
-                        "action_type": "bank_update",
-                        "payload": {
-                            "employee_id": employee_id,
-                            "change_type": "iban_update",
-                            "old_bank_code": old_bank_code,
-                            "old_iban": old_iban,
-                            "new_bank_code": None,
-                            "new_bank_name": None,
-                            "new_iban": None,
-                        },
-                    }
+                elif not _is_valid_saudi_iban(new_iban):
+                    facts["request_assessment"] = _needs_information(
+                        "bank_update",
+                        ["new_iban"],
+                        "That IBAN fails the checksum. Please "
+                        "double-check it and send it again.",
+                    )
 
                 else:
                     facts["request_assessment"] = {
                         "status": "READY_FOR_APPROVAL",
+                        "action_type": "bank_update",
                         "missing_information": [],
                         "notes": [],
                     }
@@ -748,6 +1124,7 @@ class HRAgent(BaseAgent):
 
                 facts["request_assessment"] = {
                     "status": "READY_FOR_APPROVAL",
+                    "action_type": "certificate_request",
                     "missing_information": [],
                     "notes": [],
                 }
@@ -771,15 +1148,13 @@ class HRAgent(BaseAgent):
                 ]
 
                 if missing:
-                    facts["request_assessment"] = {
-                        "status": "NEEDS_INFORMATION",
-                        "missing_information": missing,
-                        "notes": [
-                            "Provide the missing leave details "
-                            "(type, start date, end date) "
-                            "to submit the request."
-                        ],
-                    }
+                    facts["request_assessment"] = _needs_information(
+                        "leave_request",
+                        missing,
+                        "Provide the missing leave details "
+                        "(type, start date, end date) "
+                        "to submit the request.",
+                    )
 
                 else:
                     leave_type = extracted["leave_type"]
@@ -788,6 +1163,77 @@ class HRAgent(BaseAgent):
                     days = extracted.get("days")
 
                     facts["requested_days"] = days
+
+                    # -------------------------------------------------
+                    # Leave request sanity checks
+                    # -------------------------------------------------
+
+                    request_notes = []
+
+                    try:
+                        start = datetime.strptime(start_date, "%Y-%m-%d").date()
+                        end = datetime.strptime(end_date, "%Y-%m-%d").date()
+                        today = datetime.now().date()
+
+                        if start < today:
+                            request_notes.append(
+                                f"Requested leave starts in the past: {start_date}."
+                            )
+
+                        if end < start:
+                            request_notes.append(
+                                f"Leave end date {end_date} is before start date {start_date}."
+                            )
+
+                        existing_requests = list_leave_requests(
+                            conn,
+                            employee_id,
+                        )
+
+                        for existing in existing_requests:
+                            existing_status = str(
+                                existing.get("status") or ""
+                            ).lower()
+
+                            if existing_status == "rejected":
+                                continue
+
+                            existing_start = existing.get("start_date")
+                            existing_end = existing.get("end_date")
+
+                            if not existing_start or not existing_end:
+                                continue
+
+                            try:
+                                existing_start_date = datetime.strptime(
+                                    existing_start,
+                                    "%Y-%m-%d",
+                                ).date()
+                                existing_end_date = datetime.strptime(
+                                    existing_end,
+                                    "%Y-%m-%d",
+                                ).date()
+                            except ValueError:
+                                continue
+
+                            if start <= existing_end_date and end >= existing_start_date:
+                                request_notes.append(
+                                    "Requested leave overlaps an existing "
+                                    f"{existing_status or 'leave'} request "
+                                    f"from {existing_start} to {existing_end}."
+                                )
+
+                    except (TypeError, ValueError):
+                        request_notes.append(
+                            "Leave dates could not be validated."
+                        )
+
+                    facts["request_assessment"] = {
+                        "status": "READY_FOR_APPROVAL",
+                        "action_type": "leave_request",
+                        "missing_information": [],
+                        "notes": request_notes,
+                    }
 
                     if leave_balance:
                         type_remaining = leave_balance.get(
@@ -837,6 +1283,13 @@ class HRAgent(BaseAgent):
 
         finally:
             conn.close()
+
+        # Never hand Manager an action while something is still missing
+        # (e.g. a certificate matched earlier, then a leave request in the
+        # same message lacked dates).
+        assessment = facts.get("request_assessment") or {}
+        if assessment.get("status") in {"NEEDS_INFORMATION", "NOT_AUTHORIZED"}:
+            proposed_action = None
 
         return {
             "facts": facts,

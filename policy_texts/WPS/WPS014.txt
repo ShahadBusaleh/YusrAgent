@@ -1,0 +1,7 @@
+id: WPS014
+category: File format
+topic: ESTB-ID
+rule: The wage file contains the establishment identifier
+conditions: Required establishment identifier
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

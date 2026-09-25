@@ -1,0 +1,7 @@
+id: WPS066
+category: Proactive justification
+topic: Same employee
+rule: The system can display or process repeated cases associated with the same employee
+conditions: Where applicable
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

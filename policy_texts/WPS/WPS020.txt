@@ -1,0 +1,7 @@
+id: WPS020
+category: File format
+topic: MOL-ESTBID
+rule: The wage file includes the Ministry establishment identifier
+conditions: Required establishment information
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

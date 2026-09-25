@@ -1,0 +1,7 @@
+id: WPS019
+category: File format
+topic: FILE-REF
+rule: The wage file includes a file reference identifier
+conditions: Required by the file format
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

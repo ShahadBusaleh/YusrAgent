@@ -1,0 +1,7 @@
+id: WPS047
+category: Justifications
+topic: Accepted justification
+rule: An employee may accept an employer justification through the platform
+conditions: When the employee accepts the justification
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

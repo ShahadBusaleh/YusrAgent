@@ -1,0 +1,7 @@
+id: WPS005
+category: Upload
+topic: File upload
+rule: The employer uploads the wage file electronically through Mudad
+conditions: Establishment must have access to Mudad
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

@@ -1,0 +1,7 @@
+id: WPS012
+category: File format
+topic: Header group
+rule: The wage file contains required header information used to identify the file and establishment
+conditions: Required fields must be provided
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

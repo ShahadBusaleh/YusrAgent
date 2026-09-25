@@ -1,0 +1,7 @@
+id: WPS035
+category: Alerts
+topic: Deductions above 50%
+rule: The system can flag cases where deductions exceed the applicable threshold
+conditions: Applicable program validation rules
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

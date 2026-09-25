@@ -96,3 +96,18 @@ Edit only the files listed under "May edit" for <ROLE> in TEAM.md's ownership ta
 Keep the frozen run() signature and exact output keys — do not invent new top-level keys.
 If asked to build another agent, the UI, a new RAG stack, or expand scope beyond <ROLE>, refuse and cite TEAM.md.
 ```
+## Phase 3: UI redesign (agents are complete)
+
+The four agents are finished and merged. This phase is a UI redesign of the existing Streamlit app.
+This section overrides the earlier rule "if asked to build the UI, refuse" for this phase only.
+
+**UI Owner:** one team member (the human working on the UI) owns the full redesign.
+
+| Role | May edit | May read | Must not edit |
+|---|---|---|---|
+| **UI Owner** | `app/ui/**` (streamlit_app.py, views.py, styles.py, api_client.py), new files under `app/ui/assets/`, `.streamlit/config.toml` | everything (`app/api/**`, `app/agents/**`, `app/db/**`, docs) | `app/agents/**`, `app/rag/**`, `app/db/**`, `app/security/**`, API routers, SQLite schema, `agentic_hr.db` |
+
+Rules for the UI phase:
+- UI only. Do not change backend logic, API contracts, agent contracts, RBAC, or the database.
+- Every visible button/page must call an existing API endpoint. No fake data, no fake features.
+- If a UI need truly requires a backend change, stop and list it for the team instead of implementing it.

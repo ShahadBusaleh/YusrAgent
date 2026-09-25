@@ -1,1209 +1,898 @@
 from __future__ import annotations
 
 import html
+import re
 from datetime import date, datetime, timedelta
 
+import httpx
 import streamlit as st
 
 from app.ui import api_client as api
+from app.ui import i18n
 from app.ui import styles
 
+_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 
-def _leave_query_examples() -> list[tuple[str, str]]:
+
+def _is_rtl(text: str) -> bool:
+    return any("؀" <= ch <= "ۿ" for ch in (text or ""))
+
+
+def _employee_suggestions() -> list[tuple[str, str]]:
     today = date.today()
-    annual_start = today + timedelta(days=21)
-    annual_end = annual_start + timedelta(days=2)
-    sick_start = today + timedelta(days=3)
-    sick_end = sick_start + timedelta(days=1)
+    start = today + timedelta(days=21)
+    end = start + timedelta(days=2)
     return [
         (
-            "Request annual leave",
-            f"I want to take annual leave from {annual_start.isoformat()} to "
-            f"{annual_end.isoformat()}, can you find someone to cover for me?",
+            i18n.t("sugg.request_leave.label"),
+            i18n.t("sugg.request_leave.query", start=start.isoformat(), end=end.isoformat()),
         ),
-        (
-            "Request sick leave",
-            f"I need to take sick leave from {sick_start.isoformat()} to "
-            f"{sick_end.isoformat()}.",
-        ),
-        (
-            "Check my balance",
-            "How many annual leave days do I have remaining?",
-        ),
+        (i18n.t("sugg.check_balance.label"), i18n.t("sugg.check_balance.query")),
+        (i18n.t("sugg.explain_policy.label"), i18n.t("sugg.explain_policy.query")),
     ]
 
 
-def page_chat() -> None:
-    styles.hero(
-        "Ask Yusor",
-        "What can I help with?",
-        "Ask a policy or leave question. Answers are grounded in HR facts and policy sources.",
-    )
-    st.caption(
-        "To request leave, include the **leave type** and **exact start and end "
-        "dates** (YYYY-MM-DD) — Yusor will check your balance, suggest someone "
-        "to cover for you, and send it for approval automatically."
-    )
+def _manager_suggestions() -> list[tuple[str, str]]:
+    return [
+        (i18n.t("sugg.skill_gaps.label"), i18n.t("sugg.skill_gaps.query")),
+        (i18n.t("sugg.pending_approvals.label"), i18n.t("sugg.pending_approvals.query")),
+        (i18n.t("sugg.bank_policy.label"), i18n.t("sugg.bank_policy.query")),
+    ]
 
-    example_cols = st.columns(3)
-    for col, (label, text) in zip(example_cols, _leave_query_examples()):
-        if col.button(label, use_container_width=True):
-            st.session_state["chat_query"] = text
 
-    # Keep the selected identity option only after
-    # the orchestrator detects a grievance.
-    identity_visible = st.session_state.get("grievance_identity_visible")
+def _chat_suggestions() -> list[tuple[str, str]]:
+    role = (st.session_state.get("me") or {}).get("role")
+    if role in {"hr_manager", "admin"}:
+        return _manager_suggestions()
+    return _employee_suggestions()
 
-    with st.form("ask_form"):
-        query = st.text_area(
-            "Your request",
-            height=150,
-            key="chat_query",
-            placeholder=(
-                "e.g. I want to submit a grievance because my manager "
-                "refused my annual leave request."
-            ),
+
+def _format_agent_text(payload: dict) -> str:
+    response = payload.get("response")
+    if isinstance(response, dict):
+        # CAREER intent returns CareerAgent's structured dict, not plain
+        # text — format it into something readable for a chat bubble
+        # without touching the orchestrator/agent contract.
+        if payload.get("intent") == "CAREER":
+            employee = response.get("employee") or {}
+            summary = response.get("summary") or {}
+            lines = [
+                f"**{employee.get('full_name') or 'Career development'}**",
+                (
+                    f"Completed: {summary.get('completed', 0)} · "
+                    f"In progress: {summary.get('in_progress', 0)} · "
+                    f"Recommended: {summary.get('recommended', 0)}"
+                ),
+            ]
+            for item in response.get("skill_progress") or []:
+                lines.append(
+                    f"- {item.get('skill_name', 'Skill')}: "
+                    f"{item.get('status', 'UNKNOWN')} "
+                    f"({item.get('current_level', 0)}/{item.get('target_level', 0)})"
+                )
+            return "\n".join(lines)
+        return str(response)
+
+    text = str(response or "").strip()
+    if text:
+        return text
+
+    # HTTP 200 with an empty response is a real, silent failure mode here:
+    # classify_intent() swallows any LLM-call exception and falls back to
+    # "OTHER" (see OrchestratorAgent.classify_intent), which skips every
+    # agent branch — happens on every query while LLM_API_KEY is unset.
+    # Never leave the bubble blank; say plainly that nothing came back.
+    if str(payload.get("status") or "").upper() == "FAIL":
+        return (
+            "Sorry, I couldn't find a grounded answer for that. This usually "
+            "means the connected AI/policy services aren't configured yet "
+            "(check `LLM_API_KEY` in `.env`)."
         )
+    return "I didn't get a response for that. Please try rephrasing your question."
 
-        # Show Hide / Show only after the orchestrator
-        # has detected a grievance.
-        if st.session_state.get("grievance_needs_identity"):
-            identity_option = st.radio(
-                "If this is a grievance, how would you like to submit it?",
-                [
-                    "🔒 Hide my identity",
-                    "👤 Show my identity",
-                ],
-                horizontal=True,
-                key="grievance_identity_option",
-            )
 
-            identity_visible = identity_option == "👤 Show my identity"
-            st.session_state["grievance_identity_visible"] = identity_visible
+def _agent_status_label(payload: dict) -> str:
+    execution_order = payload.get("execution_order") or []
+    intent = payload.get("intent")
+    bits = []
+    if "HR" in execution_order:
+        bits.append("Checking employee data")
+    if "CONSULTANT" in execution_order:
+        bits.append("Searching HR policy")
+    if intent == "CAREER":
+        bits.append("Reviewing career development data")
+    if intent == "GRIEVANCE":
+        bits.append("Reviewing grievance workflow")
+    label = " · ".join(bits) if bits else "Reviewing your request"
+    if payload.get("status") == "PENDING_HR_REVIEW" or payload.get("hr_review"):
+        label += " · Approval required"
+    return label
 
-        submitted = st.form_submit_button(
-            "Submit request",
-            type="primary",
-        )
 
-    if not (submitted and query.strip()):
-        return
-
+def _call_agent(query: str, identity_visible: bool | None = None) -> dict | None:
+    """POST /agent/query behind a small collapsible status. Appends an error
+    message to chat_history and returns None on any failure."""
+    status = st.status("Thinking...", expanded=True)
     api.refresh_session()
 
-    response = api.request(
-        "POST",
-        "/agent/query",
-        json={
-            "query": query.strip(),
-            "identity_visible": identity_visible,
-        },
-        timeout=120.0,
-    )
+    try:
+        response = api.request(
+            "POST",
+            "/agent/query",
+            json={"query": query, "identity_visible": identity_visible},
+            timeout=120.0,
+        )
+    except httpx.HTTPError:
+        status.update(label="Could not reach Yusor", state="error", expanded=False)
+        st.session_state.chat_history.append(
+            {
+                "role": "assistant",
+                "content": "Could not reach the Yusor API. Please try again in a moment.",
+                "sources": [],
+            }
+        )
+        return None
 
     if response.status_code == 501:
         try:
-            detail = response.json().get(
-                "detail",
-                "Manual implementation pending",
-            )
+            detail = response.json().get("detail", "Manual implementation pending")
         except Exception:
             detail = "Manual implementation pending"
-
-        st.info(detail)
-        return
+        status.update(label="Not available yet", state="error", expanded=False)
+        st.session_state.chat_history.append(
+            {"role": "assistant", "content": detail, "sources": []}
+        )
+        return None
 
     if response.status_code == 401:
-        st.error(
-            "Your session expired. Sign out, sign in again, then resubmit."
+        status.update(label="Session expired", state="error", expanded=False)
+        st.session_state.chat_history.append(
+            {
+                "role": "assistant",
+                "content": "Your session expired. Sign out, sign in again, then resubmit.",
+                "sources": [],
+            }
         )
-        return
+        return None
 
     try:
         payload = api.raise_for_api(response)
     except RuntimeError as exc:
-        st.error(str(exc))
-        return
+        status.update(label="Request failed", state="error", expanded=False)
+        st.session_state.chat_history.append(
+            {"role": "assistant", "content": str(exc), "sources": []}
+        )
+        return None
 
     if not isinstance(payload, dict):
-        st.error("Unexpected agent response.")
+        status.update(label="Unexpected response", state="error", expanded=False)
+        st.session_state.chat_history.append(
+            {"role": "assistant", "content": "Unexpected agent response.", "sources": []}
+        )
+        return None
+
+    status.update(label=_agent_status_label(payload), state="complete", expanded=False)
+    return payload
+
+
+def _submit_query(query: str) -> None:
+    query = query.strip()
+    if not query:
         return
+    st.session_state.chat_history.append({"role": "user", "content": query, "sources": []})
+    payload = _call_agent(query)
+    if payload is None:
+        return
+    if payload.get("intent") == "GRIEVANCE" and payload.get("needs_identity_choice"):
+        st.session_state["chat_pending_identity_query"] = query
+        return
+    st.session_state.chat_history.append(
+        {
+            "role": "assistant",
+            "content": _format_agent_text(payload),
+            "sources": payload.get("sources") or [],
+        }
+    )
 
-    # -------------------------------------------------
-    # Orchestrator detected a grievance and needs
-    # the employee to choose Hide / Show.
-    # -------------------------------------------------
 
-    if (
-        payload.get("intent") == "GRIEVANCE"
-        and payload.get("needs_identity_choice") is True
-    ):
-        st.session_state["grievance_needs_identity"] = True
+def _resolve_identity_choice(identity_visible: bool) -> None:
+    query = st.session_state.pop("chat_pending_identity_query", None)
+    if not query:
+        return
+    payload = _call_agent(query, identity_visible=identity_visible)
+    if payload is None:
+        return
+    st.session_state.chat_history.append(
+        {
+            "role": "assistant",
+            "content": _format_agent_text(payload),
+            "sources": payload.get("sources") or [],
+        }
+    )
+
+
+def _render_message(message: dict, index: int) -> None:
+    role = message.get("role")
+    content = str(message.get("content") or "")
+    # Escape first (safety), then re-apply just **bold** as <strong> — the
+    # only markdown the agent responses actually rely on (policy citations).
+    content_html = _BOLD_RE.sub(r"<strong>\1</strong>", html.escape(content))
+    content_html = content_html.replace("\n", "<br>")
+    direction = "rtl" if _is_rtl(content) else "ltr"
+    row_class = "yz-msg-row--user" if role == "user" else "yz-msg-row--assistant"
+    bubble_class = "yz-bubble--user" if role == "user" else "yz-bubble--assistant"
+    st.markdown(
+        f'<div class="yz-msg-row {row_class}">'
+        f'<div class="yz-bubble {bubble_class}" dir="{direction}">{content_html}</div>'
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    if role == "assistant" and message.get("sources"):
+        styles.render_sources(message["sources"], key=f"chatmsg_{index}")
+
+
+def page_chat() -> None:
+    st.markdown(
+        f"""
+        <div class="yz-chat-header">
+          <div class="yz-chat-title yz-chat-title--leaf">
+            {styles.leaf_icon_html("yz-chat-leaf")}{html.escape(i18n.t("chat.title"))}
+          </div>
+          <div class="yz-chat-subtitle">{html.escape(i18n.t("chat.subtitle"))}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+
+    st.markdown('<div class="yz-chat-scroll">', unsafe_allow_html=True)
+
+    if not st.session_state.chat_history:
+        st.markdown(
+            f"""
+            <div class="yz-welcome">
+              <strong>{html.escape(i18n.t("chat.welcome_title"))}</strong><br>
+              {html.escape(i18n.t("chat.welcome_body"))}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    for index, message in enumerate(st.session_state.chat_history):
+        _render_message(message, index)
+
+    pending_query = st.session_state.get("chat_pending_identity_query")
+    if pending_query:
+        st.markdown(
+            '<div class="yz-msg-row yz-msg-row--assistant">'
+            '<div class="yz-bubble yz-bubble--assistant">'
+            f"{html.escape(i18n.t('chat.identity_prompt'))}"
+            "</div></div>",
+            unsafe_allow_html=True,
+        )
+        c1, c2 = st.columns(2)
+        if c1.button(i18n.t("chat.hide_identity"), use_container_width=True):
+            _resolve_identity_choice(False)
+            st.rerun()
+        if c2.button(i18n.t("chat.show_identity"), use_container_width=True):
+            _resolve_identity_choice(True)
+            st.rerun()
+    else:
+        st.markdown(
+            f'<div class="yz-suggestions-label">{html.escape(i18n.t("chat.suggested_questions"))}</div>',
+            unsafe_allow_html=True,
+        )
+        cols = st.columns(3)
+        for col, (label, query) in zip(cols, _chat_suggestions()):
+            with col:
+                key = "yz_sugg_" + "".join(c if c.isalnum() else "_" for c in label.lower())
+                with st.container(key=key):
+                    if st.button(label, use_container_width=True):
+                        _submit_query(query)
+                        st.rerun()
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    prompt = st.chat_input(i18n.t("chat.placeholder"))
+    if prompt:
+        _submit_query(prompt)
         st.rerun()
 
-    # -------------------------------------------------
-    # Request completed — clear grievance UI state.
-    # -------------------------------------------------
-
-    st.session_state.pop("grievance_needs_identity", None)
-    st.session_state.pop("grievance_identity_visible", None)
-
-    status = str(payload.get("status") or "").strip() or "UNKNOWN"
-    answer_text = str(payload.get("response") or "").strip()
-
-    badge_color = {
-        "PASS": "#7eb4e0",
-        "FAIL": "#e08a7e",
-        "REPLAN": "#d7c6a4",
-        "PENDING_HR_REVIEW": "#7eb4e0",
-    }.get(status, "#c5d0d8")
-
-    st.markdown(
-        f'<span class="yusor-role" style="background:{badge_color}">'
-        f"{status}</span>",
-        unsafe_allow_html=True,
-    )
-
-    if status == "FAIL" and not answer_text:
-        st.caption("Blocked by governance — see status.")
-    elif answer_text:
-        st.markdown(answer_text)
-
-    source_ids: list[str] = []
-    source_texts: list[tuple[str, str]] = []
-
-    for item in payload.get("sources") or []:
-        if isinstance(item, str):
-            if item.strip():
-                source_ids.append(item.strip())
-            continue
-
-        if not isinstance(item, dict):
-            continue
-
-        sid = item.get("id") or item.get("source_id")
-        sid = str(sid).strip() if sid else ""
-
-        if sid:
-            source_ids.append(sid)
-
-        text = item.get("text")
-
-        if isinstance(text, str) and text.strip():
-            source_texts.append(
-                (sid or "source", text.strip())
-            )
-
-    if source_ids:
-        st.markdown(
-            "**Sources:** "
-            + " · ".join(f"`{sid}`" for sid in source_ids)
-        )
-
-    if source_texts:
-        with st.expander("Source excerpts"):
-            for sid, text in source_texts:
-                st.caption(sid)
-                st.write(text)
 
 def page_leave() -> None:
-    styles.hero(
-        "Self-service",
-        "My leave",
-        "Your current balance and request history. To submit a new request, "
-        "ask Yusor in the chat — it will suggest someone to cover for you "
-        "and send it for approval.",
-    )
-    balance_resp = api.request("GET", "/leave/balance")
-    try:
-        balance = api.raise_for_api(balance_resp)
-    except RuntimeError as exc:
-        st.error(str(exc))
-        return
-    cols = st.columns(3, gap="medium")
-    cols[0].markdown(
-        styles.stat_card("Annual", balance.get("annual_remaining"), "blue"),
-        unsafe_allow_html=True,
-    )
-    cols[1].markdown(
-        styles.stat_card("Sick", balance.get("sick_remaining"), "olive"),
-        unsafe_allow_html=True,
-    )
-    cols[2].markdown(
-        styles.stat_card("Emergency", balance.get("emergency_remaining"), "coffee"),
+    st.markdown(
+        f"""
+        <div class="yz-chat-header">
+          <div class="yz-chat-title">{html.escape(i18n.t("leave.title"))}</div>
+          <div class="yz-chat-subtitle">{html.escape(i18n.t("leave.subtitle"))}</div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
 
-    as_of = _friendly_when(balance.get("as_of_date"))
-    with st.expander("Balance breakdown" + (f" · as of {as_of}" if as_of else "")):
-        st.dataframe(
-            [
-                {
-                    "Type": kind,
-                    "Entitlement": balance.get(f"{key}_entitlement"),
-                    "Used": balance.get(f"{key}_used"),
-                    "Remaining": balance.get(f"{key}_remaining"),
-                }
-                for kind, key in (
-                    ("Annual", "annual"),
-                    ("Sick", "sick"),
-                    ("Emergency", "emergency"),
-                )
-            ],
-            use_container_width=True,
-            hide_index=True,
-        )
-
-    st.subheader("My requests")
-    reqs = api.raise_for_api(api.request("GET", "/leave/requests")) or []
-    if not reqs:
-        st.caption("No leave requests yet.")
-    else:
-        rows = [
-            {
-                "leave_type": str(r.get("leave_type") or "").title(),
-                "start_date": r.get("start_date"),
-                "end_date": r.get("end_date"),
-                "days": r.get("days"),
-                "reason": r.get("reason") or "—",
-                "status": _status_label(str(r.get("status") or "")),
-                "submitted_at": _friendly_when(r.get("submitted_at")),
-                "decided_at": _friendly_when(r.get("decided_at")),
-            }
-            for r in reqs
-        ]
-        st.dataframe(
-            rows,
-            use_container_width=True,
-            hide_index=True,
-            column_order=[
-                "leave_type",
-                "start_date",
-                "end_date",
-                "days",
-                "reason",
-                "status",
-                "submitted_at",
-                "decided_at",
-            ],
-            column_config={
-                "leave_type": st.column_config.TextColumn("Type"),
-                "start_date": st.column_config.TextColumn("Start"),
-                "end_date": st.column_config.TextColumn("End"),
-                "days": st.column_config.NumberColumn("Days", format="%.1f"),
-                "reason": st.column_config.TextColumn("Reason"),
-                "status": st.column_config.TextColumn("Status"),
-                "submitted_at": st.column_config.TextColumn("Submitted"),
-                "decided_at": st.column_config.TextColumn("Decided"),
-            },
-        )
-    st.caption("Need to submit a new request? Ask Yusor in the chat.")
-
-
-def page_employees() -> None:
-    role = (st.session_state.get("me") or {}).get("role")
-    if role == "hr_manager":
-        styles.hero(
-            "Your team",
-            "People",
-            "Look someone up when a case needs context. You can still fix a phone number or email here.",
-        )
-    else:
-        styles.hero(
-            "HR specialist",
-            "Employee records",
-            "Search the directory, open a profile, and update low-risk contact fields.",
-        )
-    q = st.text_input("Search by name, id, or email", placeholder="EMP0001 or Sara")
-    listing = api.request("GET", "/employees", params={"q": q} if q else {})
     try:
-        rows = api.raise_for_api(listing) or []
+        reqs = api.raise_for_api(api.request("GET", "/leave/requests")) or []
     except RuntimeError as exc:
         st.error(str(exc))
         return
-    if not rows:
-        st.caption("No matching employees.")
-    else:
-        st.dataframe(
-            [
-                {
-                    "employee_id": r.get("employee_id"),
-                    "full_name": r.get("full_name"),
-                    "job_title": r.get("job_title"),
-                    "department_name": r.get("department_name"),
-                    "employment_status": str(r.get("employment_status") or "").title(),
-                    "email": r.get("email"),
-                    "mobile": r.get("mobile"),
-                }
-                for r in rows
-            ],
-            use_container_width=True,
-            hide_index=True,
-            column_order=[
-                "employee_id",
-                "full_name",
-                "job_title",
-                "department_name",
-                "employment_status",
-                "email",
-                "mobile",
-            ],
-            column_config={
-                "employee_id": st.column_config.TextColumn("ID"),
-                "full_name": st.column_config.TextColumn("Name"),
-                "job_title": st.column_config.TextColumn("Title"),
-                "department_name": st.column_config.TextColumn("Department"),
-                "employment_status": st.column_config.TextColumn("Status"),
-                "email": st.column_config.TextColumn("Email"),
-                "mobile": st.column_config.TextColumn("Mobile"),
-            },
-        )
+    rows = [
+        {
+            "leave_type": str(r.get("leave_type") or "").title(),
+            "dates": (
+                f"{_friendly_when(r.get('start_date')) or r.get('start_date') or '—'} "
+                f"→ {_friendly_when(r.get('end_date')) or r.get('end_date') or '—'}"
+            ),
+            "days": r.get("days"),
+            "reason": r.get("reason") or "—",
+            "status": str(r.get("status") or "pending").lower(),
+            "submitted_at": _friendly_when(r.get("submitted_at")) or "—",
+        }
+        for r in reqs
+    ]
+    styles.data_table(
+        rows,
+        [
+            ("leave_type", i18n.t("leave.col_type")),
+            ("dates", i18n.t("leave.col_dates")),
+            ("days", i18n.t("leave.col_days")),
+            ("reason", i18n.t("leave.col_reason")),
+            ("status", i18n.t("leave.col_status")),
+            ("submitted_at", i18n.t("leave.col_submitted")),
+        ],
+        status_key="status",
+        key="myrequests",
+        empty_message=i18n.t("leave.empty"),
+    )
+    st.caption(i18n.t("leave.footer_hint"))
 
-    employee_id = st.text_input("Employee ID to view / update")
-    if not employee_id:
-        return
-    detail_resp = api.request("GET", f"/employees/{employee_id}")
-    try:
-        detail = api.raise_for_api(detail_resp)
-    except RuntimeError as exc:
-        st.error(str(exc))
-        return
-    _render_employee_profile(detail)
-    with st.form("profile_update"):
-        c1, c2 = st.columns(2)
-        mobile = c1.text_input("Mobile", value=detail.get("mobile") or "")
-        email = c2.text_input("Email", value=detail.get("email") or "")
-        city = c1.text_input("City", value=detail.get("city") or "")
-        address = c2.text_input("Address", value=detail.get("address") or "")
-        save = st.form_submit_button("Save profile fields", type="primary")
-    if save:
-        resp = api.request(
-            "PATCH",
-            f"/employees/{employee_id}",
-            json={"mobile": mobile, "email": email, "city": city, "address": address},
-        )
+
+def page_inbox() -> None:
+    """Waiting on you — every item that needs a real decision, in one
+    unified table across three real sources: pending /approvals split into
+    "leave_request" vs everything else (via /proposed-actions' action_type,
+    the only place that field lives — /approvals itself doesn't carry it),
+    and /grievances still at PENDING_HR_REVIEW. Tabs and their underlying
+    API calls are scoped to what this role can actually decide: hr_manager/
+    admin get all four tabs, hr_specialist gets only the Grievances tab
+    (hr_specialist has no /approvals access at all — confirmed against the
+    real router's role check — so /approvals is never even called for
+    them, not just hidden in the UI).
+    """
+    me = st.session_state.get("me") or {}
+    role = me.get("role")
+    can_approvals = role in {"hr_manager", "admin"}
+    can_grievances = role in {"hr_specialist", "hr_manager", "admin"}
+
+    st.markdown(
+        f"""
+        <div class="yz-chat-header">
+          <div class="yz-chat-title">{html.escape(i18n.t("inbox.title"))}</div>
+          <div class="yz-chat-subtitle">{html.escape(i18n.t("inbox.subtitle"))}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    pending_approvals: list[dict] = []
+    proposals: dict = {}
+    if can_approvals:
         try:
-            api.raise_for_api(resp)
-            st.success("Updated")
-            st.rerun()
+            approvals = api.raise_for_api(api.request("GET", "/approvals")) or []
         except RuntimeError as exc:
             st.error(str(exc))
+            approvals = []
+        if not isinstance(approvals, list):
+            approvals = []
+        pending_approvals = [r for r in approvals if (r.get("status") or "").lower() == "pending"]
+        proposals = _proposal_map()
 
+    pending_grievances: list[dict] = []
+    if can_grievances:
+        try:
+            grievances = api.raise_for_api(api.request("GET", "/grievances")) or []
+        except RuntimeError as exc:
+            st.error(str(exc))
+            grievances = []
+        if not isinstance(grievances, list):
+            grievances = []
+        pending_grievances = [
+            g for g in grievances if str(g.get("status") or "").upper() == "PENDING_HR_REVIEW"
+        ]
 
-def _kv_table(pairs: list[tuple[str, object]]) -> None:
-    rows = [
-        {"Field": label, "Value": value if value not in (None, "") else "—"}
-        for label, value in pairs
-    ]
-    st.dataframe(
-        rows,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Field": st.column_config.TextColumn("Field", width="small"),
-            "Value": st.column_config.TextColumn("Value"),
-        },
+    def _action_type(row: dict) -> str:
+        proposal = proposals.get(row.get("proposal_id")) or {}
+        return str(proposal.get("action_type") or "")
+
+    leave_items = [r for r in pending_approvals if _action_type(r) == "leave_request"]
+    other_approval_items = [r for r in pending_approvals if _action_type(r) != "leave_request"]
+
+    names = _employee_names(
+        [r.get("employee_id") for r in pending_approvals]
+        + [g.get("employee_id") for g in pending_grievances if g.get("identity_visible")]
     )
 
+    def _leave_row(r: dict) -> dict:
+        return {
+            "_kind": "approval",
+            "_id": str(r.get("approval_id") or ""),
+            "type": styles.type_badge_html("leave", i18n.t("inbox.type_leave")),
+            "employee": names.get(str(r.get("employee_id") or "")) or r.get("employee_id") or "—",
+            "request": _action_label(r),
+            "date": _friendly_when(r.get("created_at")) or "—",
+            "status": (r.get("status") or "pending").lower(),
+        }
 
-def _render_employee_profile(detail: dict) -> None:
-    st.markdown(f"#### {detail.get('full_name') or detail.get('employee_id')}")
-    st.caption(
-        " · ".join(
-            part
-            for part in (
-                detail.get("job_title"),
-                detail.get("department_name"),
-                str(detail.get("employment_status") or "").title() or None,
-            )
-            if part
-        )
-    )
+    def _approval_row(r: dict) -> dict:
+        return {
+            "_kind": "approval",
+            "_id": str(r.get("approval_id") or ""),
+            "type": styles.type_badge_html("approval", i18n.t("inbox.type_approval")),
+            "employee": names.get(str(r.get("employee_id") or "")) or r.get("employee_id") or "—",
+            "request": _action_label(r),
+            "date": _friendly_when(r.get("created_at")) or "—",
+            "status": (r.get("status") or "pending").lower(),
+        }
 
-    with st.expander("Profile details", expanded=True):
-        st.caption("Contact")
-        _kv_table(
-            [
-                ("Email", detail.get("email")),
-                ("Mobile", detail.get("mobile")),
-                ("City", detail.get("city")),
-                ("Address", detail.get("address")),
-            ]
-        )
-        st.caption("Employment")
-        _kv_table(
-            [
-                ("Employee ID", detail.get("employee_id")),
-                ("Hire date", _friendly_when(detail.get("hire_date")) or detail.get("hire_date")),
-                ("Manager", detail.get("manager_id")),
-                ("Nationality", detail.get("nationality")),
-                (
-                    "HR approver",
-                    "Yes" if detail.get("is_hr_approver") else "No",
-                ),
-            ]
-        )
-        if detail.get("bank_name") or detail.get("iban") or detail.get("basic_salary"):
-            st.caption("Compensation & banking")
-            _kv_table(
-                [
-                    ("Basic salary", detail.get("basic_salary")),
-                    ("Housing allowance", detail.get("housing_allowance")),
-                    ("Bank", detail.get("bank_name")),
-                    ("Bank code", detail.get("bank_code")),
-                    ("IBAN", detail.get("iban")),
-                ]
-            )
+    def _grievance_row(g: dict) -> dict:
+        eid = str(g.get("employee_id") or "")
+        employee_label = (names.get(eid) or eid or "—") if g.get("identity_visible") else i18n.t("inbox.anonymous")
+        return {
+            "_kind": "grievance",
+            "_id": str(g.get("grievance_id") or ""),
+            "type": styles.type_badge_html("grievance", i18n.t("inbox.type_grievance")),
+            "employee": employee_label,
+            "request": _grievance_subject(g),
+            "date": _friendly_when(g.get("submitted_at")) or "—",
+            "status": "pending",
+        }
 
-def page_team_insights() -> None:
-    """Manager/Admin view for synthetic Experience Gap insights."""
-
-    role = (st.session_state.get("me") or {}).get("role")
-
-    if role not in {"hr_manager", "admin"}:
-        st.error("Team Insights is available to HR managers and admins only.")
-        return
-
-    styles.hero(
-        "HR manager",
-        "Team Insights",
-        "See which experience titles are missing or under-covered "
-        "across your teams.",
-    )
-
-    dept_response = api.request("GET", "/experience-gap/departments")
-
-    try:
-        dept_data = api.raise_for_api(dept_response)
-    except RuntimeError as exc:
-        st.error(str(exc))
-        return
-
-    departments = (dept_data or {}).get("departments") or []
-
-    if not departments:
-        st.info("No departments found.")
-        return
-
-    name_to_id = {
-        d.get("department_name"): d.get("department_id")
-        for d in departments
+    rows_by_tab: dict[str, list[dict]] = {
+        "leave": [_leave_row(r) for r in leave_items],
+        "approval": [_approval_row(r) for r in other_approval_items],
+        "grievance": [_grievance_row(g) for g in pending_grievances],
     }
-    names = list(name_to_id.keys())
-    default_index = next(
-        (i for i, n in enumerate(names) if name_to_id[n] == "DEP-06"),
-        0,
+    rows_by_tab["all"] = rows_by_tab["leave"] + rows_by_tab["approval"] + rows_by_tab["grievance"]
+
+    tabs = [("all", i18n.t("inbox.tab_all"))]
+    if can_approvals:
+        tabs += [("leave", i18n.t("inbox.tab_leave")), ("approval", i18n.t("inbox.tab_approval"))]
+    if can_grievances:
+        tabs.append(("grievance", i18n.t("inbox.tab_grievance")))
+
+    tab_full_labels = [f"{label} ({len(rows_by_tab[key])})" for key, label in tabs]
+    chosen_full_label = st.radio(
+        "Inbox filter", tab_full_labels, horizontal=True, key="inbox_tab", label_visibility="collapsed"
+    )
+    chosen_key = dict(zip(tab_full_labels, [k for k, _ in tabs])).get(chosen_full_label, "all")
+    visible_rows = rows_by_tab.get(chosen_key, [])
+
+    def _open_review(row: dict) -> None:
+        st.session_state["inbox_open"] = (row["_kind"], row["_id"])
+
+    styles.data_table(
+        visible_rows,
+        [
+            ("type", i18n.t("inbox.col_type")),
+            ("employee", i18n.t("inbox.col_employee")),
+            ("request", i18n.t("inbox.col_request")),
+            ("date", i18n.t("inbox.col_date")),
+            ("status", i18n.t("inbox.col_status")),
+        ],
+        status_key="status",
+        raw_html_keys={"type"},
+        on_view=_open_review,
+        view_label=i18n.t("inbox.review"),
+        key="inbox",
+        empty_message=i18n.t("inbox.empty"),
     )
 
-    department_name = st.selectbox(
-        "Department",
-        names,
-        index=default_index,
-    )
-    department_id = name_to_id[department_name]
-
-    st.caption(
-        "Coverage is derived from job title, not an individual "
-        "employee assessment. Synthetic placeholder data for this demo."
-    )
-
-    response = api.request(
-        "GET",
-        f"/experience-gap/{department_id}",
-    )
-
-    try:
-        data = api.raise_for_api(response)
-    except RuntimeError as exc:
-        st.error(str(exc))
-        return
-
-    if not isinstance(data, dict):
-        st.error("Unexpected Experience Gap response.")
-        return
-
-    titles = data.get("skills") or []
-
-    if not titles:
-        st.info("No experience title requirements found for this department.")
-        return
-
-    missing = [
-        item for item in titles
-        if str(item.get("status") or "").upper() == "MISSING"
-    ]
-
-    low = [
-        item for item in titles
-        if str(item.get("status") or "").upper() == "LOW"
-    ]
-
-    ok = [
-        item for item in titles
-        if str(item.get("status") or "").upper() == "OK"
-    ]
-
-    c1, c2, c3 = st.columns(3)
-
-    c1.metric("Missing", len(missing))
-    c2.metric("Low coverage", len(low))
-    c3.metric("Covered", len(ok))
-
-    if missing:
-        st.subheader("🔴 Missing experience titles")
-
-        st.dataframe(
-            [
-                {
-                    "Experience Title": item.get("skill_name"),
-                    "Required Employees": item.get("required_headcount"),
-                    "Current Employees": item.get("current_headcount"),
-                    "Critical": (
-                        "Yes"
-                        if item.get("is_critical")
-                        else "No"
-                    ),
-                }
-                for item in missing
-            ],
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        for item in missing:
-            if item.get("recommendation"):
-                badge = "🛑 **Hire recommended** — " if item.get("hire_recommended") else ""
-                st.caption(
-                    f"{badge}**{item.get('skill_name')}:** "
-                    f"{item.get('recommendation')}"
-                )
-
-    if low:
-        st.subheader("🟡 Low coverage")
-
-        st.dataframe(
-            [
-                {
-                    "Experience Title": item.get("skill_name"),
-                    "Required Employees": item.get("required_headcount"),
-                    "Current Employees": item.get("current_headcount"),
-                    "Gap": (
-                        int(item.get("required_headcount") or 0)
-                        - int(item.get("current_headcount") or 0)
-                    ),
-                    "Critical": (
-                        "Yes"
-                        if item.get("is_critical")
-                        else "No"
-                    ),
-                }
-                for item in low
-            ],
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        for item in low:
-            if item.get("recommendation"):
-                badge = "🛑 **Hire recommended** — " if item.get("hire_recommended") else ""
-                st.caption(
-                    f"{badge}**{item.get('skill_name')}:** "
-                    f"{item.get('recommendation')}"
-                )
-
-    if ok:
-        with st.expander(f"Covered experience titles ({len(ok)})"):
-            st.caption(
-                "Already covered — shown as current department "
-                "structure, no action needed."
+    opened = st.session_state.get("inbox_open")
+    if opened:
+        kind, item_id = opened
+        st.divider()
+        if kind == "approval":
+            row = next(
+                (r for r in pending_approvals if str(r.get("approval_id") or "") == item_id), None
             )
-            st.dataframe(
-                [
-                    {
-                        "Experience Title": item.get("skill_name"),
-                        "Current Employees": item.get("current_headcount"),
-                    }
-                    for item in ok
-                ],
-                use_container_width=True,
-                hide_index=True,
+            if row:
+                _render_approval_review(row, names, proposals)
+        elif kind == "grievance":
+            g = next(
+                (g for g in pending_grievances if str(g.get("grievance_id") or "") == item_id), None
             )
+            if g:
+                _render_grievance_review(g, names)
 
-def page_growth_opportunities() -> None:
-    """
-    Employee view: department experience gaps this employee is a
-    close-fit candidate for, with a CV upload that generates a
-    personalized development plan. Empty for anyone not currently a
-    candidate for anything.
-    """
 
-    styles.hero(
-        "Career Development",
-        "Growth Opportunities",
-        "Your department's missing or under-covered experience titles "
-        "that your current role is closest to — upload your CV for a "
-        "personalized plan to grow into one.",
-    )
+def _render_approval_review(row: dict, names: dict, proposals: dict) -> None:
+    approval_id = str(row.get("approval_id") or "")
+    employee_id = str(row.get("employee_id") or "")
+    person = names.get(employee_id) or employee_id or "—"
+    status = (row.get("status") or "pending").lower()
 
-    response = api.request("GET", "/growth/opportunities")
+    with st.container(key=f"inbox_review_{approval_id}"):
+        top_l, top_r = st.columns([5, 1])
+        with top_l:
+            st.markdown(f"#### {html.escape(person)}")
+        with top_r:
+            if st.button(i18n.t("inbox.close"), key=f"close_{approval_id}", use_container_width=True):
+                st.session_state.pop("inbox_open", None)
+                st.rerun()
 
-    try:
-        data = api.raise_for_api(response)
-    except RuntimeError as exc:
-        st.error(str(exc))
-        return
+        st.markdown(_approval_card_html(row, person), unsafe_allow_html=True)
 
-    opportunities = (data or {}).get("opportunities") or []
-
-    if not opportunities:
-        st.info(
-            "No development opportunities right now — check back as "
-            "your department's needs change."
-        )
-        return
-
-    for item in opportunities:
-        skill_id = item.get("skill_id")
-        skill_name = item.get("skill_name")
-        status_label = "Missing" if item.get("status") == "MISSING" else "Low coverage"
-
-        with st.container(border=True):
-            st.subheader(skill_name)
-
-            st.caption(
-                f"{status_label} in your department · "
-                f"{item.get('current_headcount')} of "
-                f"{item.get('required_headcount')} employees covered · "
-                f"you're a close fit from your current role as "
-                f"{item.get('current_job_title')}."
-            )
-
-            existing_plan = item.get("plan")
-
-            if existing_plan:
-                st.markdown(existing_plan.get("plan_text"))
-                st.caption(
-                    f"Generated from {existing_plan.get('cv_filename') or 'your CV'} "
-                    f"on {existing_plan.get('created_at')}."
-                )
-                upload_label = "Replace with a new CV"
-            else:
-                upload_label = "Upload your CV (PDF)"
-
-            cv_file = st.file_uploader(
-                upload_label,
-                type="pdf",
-                key=f"cv_upload_{skill_id}",
-            )
-
-            if st.button(
-                "Generate my growth plan",
-                key=f"generate_plan_{skill_id}",
-                disabled=cv_file is None,
-            ):
-                upload_response = api.request(
-                    "POST",
-                    f"/growth/opportunities/{skill_id}/cv",
-                    files={
-                        "cv": (
-                            cv_file.name,
-                            cv_file.getvalue(),
-                            "application/pdf",
-                        )
-                    },
-                    timeout=120.0,
-                )
-
+        if status == "pending":
+            if st.button(i18n.t("inbox.explain_this"), key=f"explain_{approval_id}", use_container_width=True):
                 try:
-                    api.raise_for_api(upload_response)
+                    brief_response = api.request("GET", f"/approvals/{approval_id}/brief", timeout=120.0)
+                    brief = api.raise_for_api(brief_response)
+                    if isinstance(brief, dict):
+                        st.session_state[f"approval_brief_{approval_id}"] = brief
+                    else:
+                        st.error("Unexpected Decision Brief response.")
                 except RuntimeError as exc:
                     st.error(str(exc))
-                else:
-                    st.rerun()
+
+        brief = st.session_state.get(f"approval_brief_{approval_id}")
+        if brief:
+            _render_decision_brief(brief.get("brief") or {}, approval_id)
+
+        proposal = proposals.get(row.get("proposal_id"))
+        _render_proposal_details(proposal)
+
+        if status != "pending":
+            # Already decided — no decision form. Re-showing Approve/Send
+            # back here previously let a stray click re-run the decision
+            # (duplicate leave request, double-deducted balance).
+            st.caption(
+                f"{_status_label(status)} by {row.get('decided_by') or '—'} "
+                f"on {row.get('decided_at') or '—'}"
+            )
+            if row.get("decision_note"):
+                st.caption(f"Note: {row['decision_note']}")
+        else:
+            cover_options = _cover_candidate_options(proposal)
+            with st.form(f"decide_{approval_id}"):
+                cover_employee_id = None
+                if cover_options:
+                    ids, labels, default_index = cover_options
+                    cover_employee_id = st.selectbox(
+                        "Cover employee", ids, index=default_index, format_func=lambda eid: labels.get(eid, eid)
+                    )
+                note = st.text_area(
+                    "Note", placeholder=i18n.t("inbox.note_placeholder"), label_visibility="collapsed"
+                )
+                st.caption(i18n.t("inbox.note_optional"))
+                col_a, col_b = st.columns(2)
+                approve = col_a.form_submit_button(i18n.t("inbox.approve"), type="primary", use_container_width=True)
+                reject = col_b.form_submit_button(i18n.t("inbox.send_back"), use_container_width=True)
+            if approve:
+                _decide(approval_id, "approve", note, person, cover_employee_id)
+            elif reject:
+                _decide(approval_id, "reject", note, person, cover_employee_id)
 
 
-def page_approvals() -> None:
-    styles.hero(
-        "HR manager",
-        "Waiting on you",
-        "These are the requests that need a person — not the system — to decide. "
-        "Read the person first, then the risk.",
+_POLICY_HEADING_STOP_WORDS = {"summary", "key points", "citations", "policy sources", "request details"}
+_POLICY_SUBSECTION_RE = re.compile(
+    r"^[-•]?\s*[^:–—]+\s*[-–—]\s*(Rule|Process|Conditions|Eligibility)",
+    re.IGNORECASE,
+)
+_POLICY_HEADING_RE = re.compile(r"^#{1,6}\s*")
+_MANAGER_RECOMMENDATION_KEYWORDS = ("MANAGER REVIEW", "APPROVE", "REJECT")
+_MANAGER_RECOMMENDATION_RE = re.compile(
+    r"\b(" + "|".join(_MANAGER_RECOMMENDATION_KEYWORDS) + r")\b", re.IGNORECASE
+)
+
+
+def _clean_policy_summary(policy_text: str, max_sentences: int = 4) -> str:
+    """Trim a real LLM-generated policy recommendation to a short, clean
+    summary — strips markdown bold/headings, tables, source-reference
+    lines, and per-clause "Rule/Process/Conditions" subsection lines, then
+    keeps only the first few complete sentences. Merged in from a
+    teammate's fix on main (real LLM prose can run long and noisy); the
+    raw text is still fully available via styles.render_sources()'s "Show
+    full text" expander for the policy sources themselves — this only
+    trims the one-line recommendation summary."""
+    clean = policy_text.replace(r"\*\*", "").replace("**", "")
+    lines: list[str] = []
+    for line in clean.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        line = _POLICY_HEADING_RE.sub("", line)
+        if line.lower() in _POLICY_HEADING_STOP_WORDS:
+            break
+        if line.startswith("|"):
+            continue
+        if line.startswith("[Source:") or line.startswith("- Reference:"):
+            continue
+        if _POLICY_SUBSECTION_RE.match(line):
+            continue
+        lines.append(line)
+    clean_policy = " ".join(lines)
+    sentences = re.split(r"(?<=[.!?])\s+", clean_policy)
+    return " ".join(s.strip() for s in sentences[:max_sentences] if s.strip())
+
+
+def _extract_manager_recommendation(manager_response: str) -> tuple[str | None, str]:
+    """Pull an APPROVE/REJECT/MANAGER REVIEW keyword out of the manager
+    agent's free-text response for a prominent heading, returning it
+    alongside the remaining explanation with that keyword stripped.
+    Merged in from a teammate's fix on main — reworked from a plain
+    substring check to a word-boundary regex, since the original matched
+    "APPROVE" inside "0 approved, 2 denied" (a real historical-precedent
+    line) and misreported a MANAGER REVIEW case as APPROVE."""
+    match = _MANAGER_RECOMMENDATION_RE.search(manager_response)
+    if not match:
+        return None, manager_response
+    recommendation = match.group(1).upper()
+    explanation = (manager_response[: match.start()] + manager_response[match.end() :]).strip(" :-\n")
+    return recommendation, explanation
+
+
+def _render_decision_brief(decision_brief: dict, approval_id: str) -> None:
+    st.markdown(f"### {i18n.t('inbox.decision_brief')}")
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown(f"**{i18n.t('inbox.action')}**")
+        st.write(str(decision_brief.get("action_type") or "—").replace("_", " ").title())
+    with col_b:
+        st.markdown(f"**{i18n.t('inbox.risk')}**")
+        st.write(str(decision_brief.get("risk_level") or "—").upper())
+
+    precedent = decision_brief.get("historical_precedent")
+    if precedent:
+        st.markdown(f"**{i18n.t('inbox.historical_precedent')}**")
+        styles.detail_card(
+            [
+                (i18n.t("detail.approved"), precedent.get("approved_count", 0)),
+                (i18n.t("detail.denied"), precedent.get("denied_count", 0)),
+                (i18n.t("detail.total"), precedent.get("total_count", 0)),
+            ]
+        )
+
+    policy = decision_brief.get("policy") or {}
+    recommendation = str(policy.get("recommendation") or "").strip()
+    if recommendation:
+        st.markdown(f"**{i18n.t('inbox.policy')}**")
+        st.write(_clean_policy_summary(recommendation))
+
+    styles.render_sources(policy.get("sources") or [], key=f"brief_{approval_id}")
+
+    manager = decision_brief.get("manager") or {}
+    manager_response = str(manager.get("response") or "").strip()
+    if manager_response:
+        st.markdown(f"**{i18n.t('inbox.ai_recommendation')}**")
+        keyword, explanation = _extract_manager_recommendation(manager_response)
+        if keyword:
+            st.markdown(f"#### {keyword}")
+        if explanation:
+            st.caption(i18n.t("inbox.reason"))
+            st.write(explanation)
+
+    reasons = manager.get("reasons") or []
+    if reasons:
+        st.markdown(f"**{i18n.t('inbox.notes')}**")
+        for reason in reasons:
+            st.write(f"- {reason}")
+
+
+def _render_grievance_review(g: dict, names: dict) -> None:
+    grievance_id = str(g.get("grievance_id") or "")
+    identity_visible = bool(g.get("identity_visible"))
+    if identity_visible:
+        employee_id = str(g.get("employee_id") or "")
+        person = names.get(employee_id) or employee_id or "—"
+    else:
+        person = i18n.t("inbox.anonymous")
+
+    with st.container(key=f"inbox_review_g_{grievance_id}"):
+        top_l, top_r = st.columns([5, 1])
+        with top_l:
+            st.markdown(f"#### {html.escape(person)} · {html.escape(grievance_id)}")
+        with top_r:
+            if st.button(i18n.t("inbox.close"), key=f"close_g_{grievance_id}", use_container_width=True):
+                st.session_state.pop("inbox_open", None)
+                st.rerun()
+
+        styles.detail_card(
+            [
+                (i18n.t("detail.identity"), person),
+                (i18n.t("detail.submitted"), _friendly_when(g.get("submitted_at")) or "—"),
+            ]
+        )
+        st.write(g.get("complaint") or "No complaint provided.")
+
+        if st.button(
+            i18n.t("inbox.explain_this"), key=f"explain_grievance_{grievance_id}", use_container_width=True
+        ):
+            st.session_state[f"grievance_brief_{grievance_id}"] = {
+                "recommendation": g.get("consultant_recommendation") or "",
+                "sources": g.get("sources"),
+            }
+
+        brief = st.session_state.get(f"grievance_brief_{grievance_id}")
+        if brief:
+            st.markdown(f"### {i18n.t('inbox.decision_brief')}")
+            recommendation = str(brief.get("recommendation") or "").strip()
+            if recommendation:
+                st.markdown(f"**{i18n.t('inbox.consultant_assessment')}**")
+                st.write(recommendation)
+            styles.render_sources(brief.get("sources") or [], key=f"grievance_brief_{grievance_id}")
+
+        with st.form(f"grievance_decision_{grievance_id}"):
+            response_note = st.text_area("Note", placeholder=i18n.t("inbox.note_placeholder"))
+            col_a, col_b = st.columns(2)
+            accept = col_a.form_submit_button(i18n.t("inbox.accept"), type="primary", use_container_width=True)
+            reject = col_b.form_submit_button(i18n.t("inbox.send_back"), use_container_width=True)
+        if accept:
+            _decide_grievance(grievance_id, "accept", response_note)
+        elif reject:
+            _decide_grievance(grievance_id, "reject", response_note)
+
+
+def _grievance_status_styles() -> dict:
+    return {
+        "pending_hr_review": (i18n.t("status.open"), "◔", "#EDE6DA", "#5E5241"),
+        "sent_back": (i18n.t("status.in_progress"), "↩", "#F6E7CF", "#7A4E12"),
+        "submitted": (i18n.t("status.closed"), "✓", "#E3EEDC", "#35592A"),
+    }
+
+
+def _grievance_subject(g: dict) -> str:
+    """Grievances have no subject/title field in the backend (confirmed:
+    the table is grievance_id/employee_id/identity_visible/complaint/
+    consultant_recommendation/sources/status/submitted_at/decided_at/
+    decided_by/hr_response, SELECT * — nothing else). Derived client-side
+    by truncating the complaint text, since a real backend field doesn't
+    exist to use instead."""
+    complaint = str(g.get("complaint") or "").strip()
+    if not complaint:
+        return "—"
+    return complaint[:60] + "…" if len(complaint) > 60 else complaint
+
+
+def page_grievances() -> None:
+    """The full grievance record — every case regardless of status, unlike
+    page_inbox()'s Grievances tab which only shows PENDING_HR_REVIEW ones.
+
+    Tab mapping note: the backend only has 3 real grievance statuses —
+    PENDING_HR_REVIEW, SUBMITTED, SENT_BACK (confirmed against the live DB
+    and the grievances router; there is no RESOLVED/CLOSED status at all).
+    "Open / In progress / Closed" are mapped onto those 3 real values as
+    the closest fit: Open = PENDING_HR_REVIEW (awaiting a first HR look),
+    In progress = SENT_BACK (sent back to the employee, not yet resolved),
+    Closed = SUBMITTED (HR accepted it — the backend has no further action
+    on a grievance once it leaves PENDING_HR_REVIEW either way, so this is
+    the closest real equivalent to "closed" that exists)."""
+    st.markdown(
+        f"""
+        <div class="yz-chat-header">
+          <div class="yz-chat-title">{html.escape(i18n.t("grievances.title"))}</div>
+          <div class="yz-chat-subtitle">{html.escape(i18n.t("grievances.subtitle"))}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
-    _left, _right = st.columns([5, 1])
-    with _right:
-        # A browser refresh (F5) tears down the Streamlit session and signs
-        # you out, because the auth tokens live only in st.session_state.
-        # This button re-runs the script in place instead, so new approvals
-        # show up without losing the signed-in session.
-        if st.button("Refresh", use_container_width=True):
-            st.rerun()
+
     try:
-        rows = api.raise_for_api(api.request("GET", "/approvals")) or []
+        grievances = api.raise_for_api(api.request("GET", "/grievances")) or []
     except RuntimeError as exc:
         st.error(str(exc))
         return
-    if not isinstance(rows, list):
-        rows = []
-    try:
-        grievances = api.raise_for_api(
-            api.request("GET", "/grievances")
-        ) or []
-        waiting_grievances = [
-            g for g in grievances
-            if str(g.get("status") or "").upper() == "PENDING_HR_REVIEW"
-        ]
-
-        submitted_grievances = [
-            g for g in grievances
-            if str(g.get("status") or "").upper() == "SUBMITTED"
-        ]
-
-        sent_back_grievances = [
-            g for g in grievances
-            if str(g.get("status") or "").upper() == "SENT_BACK"
-        ]
-
-        
-    except RuntimeError as exc:
-        st.error(str(exc))
-        grievances = []
-
     if not isinstance(grievances, list):
         grievances = []
 
-    waiting_grievances = [
-        g for g in grievances
-        if str(g.get("status") or "").upper() == "PENDING_HR_REVIEW"
-    ]
+    names = _employee_names([g.get("employee_id") for g in grievances if g.get("identity_visible")])
 
-    submitted_grievances = [
-        g for g in grievances
-        if str(g.get("status") or "").upper() == "SUBMITTED"
-    ]
+    def _bucket(status: str) -> str:
+        s = status.upper()
+        if s == "SENT_BACK":
+            return "in_progress"
+        if s == "SUBMITTED":
+            return "closed"
+        return "open"
 
-    sent_back_grievances = [
-        g for g in grievances
-        if str(g.get("status") or "").upper() == "SENT_BACK"
-    ]
+    groups: dict[str, list[dict]] = {"open": [], "in_progress": [], "closed": []}
+    for g in grievances:
+        groups[_bucket(str(g.get("status") or ""))].append(g)
 
-    waiting = [r for r in rows if (r.get("status") or "").lower() == "pending"]
-    approved = [r for r in rows if (r.get("status") or "").lower() == "approved"]
-    sent_back = [r for r in rows if (r.get("status") or "").lower() == "rejected"]
-    st.markdown(
-        styles.queue_stats(len(waiting), len(approved), len(sent_back)),
-        unsafe_allow_html=True,
+    tabs = [
+        ("all", i18n.t("grievances.tab_all"), grievances),
+        ("open", i18n.t("grievances.tab_open"), groups["open"]),
+        ("in_progress", i18n.t("grievances.tab_in_progress"), groups["in_progress"]),
+        ("closed", i18n.t("grievances.tab_closed"), groups["closed"]),
+    ]
+    tab_full_labels = [f"{label} ({len(items)})" for _, label, items in tabs]
+    chosen = st.radio(
+        "Grievance filter", tab_full_labels, horizontal=True, key="grievances_tab", label_visibility="collapsed"
     )
-        
-    filter_label = st.radio(
-    "Show",
-    ["Waiting", "Approved", "Sent back", "Everything"],
-    horizontal=True,
-)
-    visible = {
-        "Waiting": waiting,
-        "Approved": approved,
-        "Sent back": sent_back,
-        "Everything": rows,
-    }[filter_label]
+    chosen_items = next(items for (_, _, items), full in zip(tabs, tab_full_labels) if full == chosen)
 
-    if not visible:
-        empty_copy = {
-            "Waiting": (
-                "You're all caught up",
-                "Nothing is waiting for a decision right now. Enjoy the quiet.",
-            ),
-            "Approved": (
-                "No approvals in this list yet",
-                "When you say yes, those decisions will live here.",
-            ),
-            "Sent back": (
-                "You haven't sent anything back",
-                "If a request isn't ready, it will show up here with your note.",
-            ),
-            "Everything": (
-                "The queue is empty",
-                "When people submit something that needs a manager, it will land here.",
-            ),
-        }[filter_label]
-        title, body = empty_copy
-        st.markdown(
-            f'<div class="empty-catchup"><h3>{title}</h3><p>{body}</p></div>',
-            unsafe_allow_html=True,
-        )
-        return
-
-    names = _employee_names([r.get("employee_id") for r in visible])
-    proposals = _proposal_map()
-    st.caption("Open a case to read it, then approve or send it back with a short note.")
-    for index, row in enumerate(visible):
-        approval_id = str(row.get("approval_id") or "")
-        employee_id = str(row.get("employee_id") or "")
-        person = names.get(employee_id) or employee_id or "Someone on the team"
-        status = (row.get("status") or "pending").lower()
-        label = f"{person} · {_action_label(row)}"
-        if status != "pending":
-            label = f"{_status_label(status)} · {label}"
-        with st.expander(label, expanded=status == "pending" and index < 2):
-            st.markdown(_approval_card_html(row, person), unsafe_allow_html=True)
-
-            # Explain this pending approval
-            if status == "pending":
-                if st.button(
-                    "Explain this",
-                    key=f"explain_{approval_id}",
-                    use_container_width=True,
-                ):
-                    try:
-                        brief_response = api.request(
-                            "GET",
-                            f"/approvals/{approval_id}/brief",
-                            timeout=120.0,
-                        )
-                        brief = api.raise_for_api(brief_response)
-
-                        if not isinstance(brief, dict):
-                            st.error("Unexpected Decision Brief response.")
-                        else:
-                            st.session_state[
-                                f"approval_brief_{approval_id}"
-                            ] = brief
-
-                    except RuntimeError as exc:
-                        st.error(str(exc))
-
-            # Show Decision Brief if it was requested
-            brief = st.session_state.get(
-                f"approval_brief_{approval_id}"
+    rows = [
+        {
+            "id": g.get("grievance_id") or "—",
+            "employee": (
+                (names.get(str(g.get("employee_id") or "")) or g.get("employee_id"))
+                if g.get("identity_visible")
+                else i18n.t("inbox.anonymous")
             )
+            or "—",
+            "subject": _grievance_subject(g),
+            "date": _friendly_when(g.get("submitted_at")) or "—",
+            "status": str(g.get("status") or "").lower(),
+            "_gid": g.get("grievance_id"),
+        }
+        for g in chosen_items
+    ]
 
-            if brief:
-                decision_brief = brief.get("brief") or {}
+    def _open_view(row: dict) -> None:
+        st.session_state["grievance_view_id"] = row.get("_gid")
 
-                st.markdown("### Decision Brief")
-
-                st.caption(
-                    f"Action: {decision_brief.get('action_type') or '—'}"
-                )
-
-                risk = decision_brief.get("risk_level")
-                if risk:
-                    st.caption(f"Risk level: {risk}")
-
-                # Historical precedent
-                precedent = decision_brief.get(
-                    "historical_precedent"
-                )
-
-                if precedent:
-                    st.markdown("**Historical precedent**")
-                    _kv_table(
-                        [
-                            (
-                                "Approved",
-                                precedent.get("approved_count", 0),
-                            ),
-                            (
-                                "Denied",
-                                precedent.get("denied_count", 0),
-                            ),
-                            (
-                                "Total",
-                                precedent.get("total_count", 0),
-                            ),
-                        ]
-                    )
-
-                # Policy explanation
-                policy = decision_brief.get("policy") or {}
-
-                recommendation = str(
-                    policy.get("recommendation") or ""
-                ).strip()
-
-                if recommendation:
-                    st.markdown("**Policy**")
-                    st.write(recommendation)
-
-
-                sources = policy.get("sources") or []
-
-                if sources:
-                    show_sources = st.checkbox(
-                        "Show policy sources",
-                        key=f"policy_sources_{approval_id}",
-                    )
-
-                if show_sources:
-                    for source in sources:
-                        if isinstance(source, dict):
-                            sid = source.get("id") or "source"
-                            text = source.get("text") or ""
-
-                            article = ""
-                            title = ""
-
-                            for line in text.splitlines():
-                                if line.startswith("Article:"):
-                                    article = line.replace("Article:", "").strip()
-                                elif line.startswith("Title:"):
-                                    title = line.replace("Title:", "").strip()
-
-                            if article and title:
-                                st.markdown(
-                                    f"- **{sid} — Article {article}: {title}**"
-                                )
-                            elif title:
-                                st.markdown(
-                                    f"- **{sid} — {title}**"
-                                )
-                            else:
-                                st.markdown(f"- **{sid}**")
-                                
-                # Manager explanation
-                manager = decision_brief.get("manager") or {}
-
-                manager_response = str(
-                    manager.get("response") or ""
-                ).strip()
-
-                if manager_response:
-                    st.markdown("**Manager assessment**")
-                    st.write(manager_response)
-
-                reasons = manager.get("reasons") or []
-
-                if reasons:
-                    st.markdown("**Notes**")
-                    for reason in reasons:
-                        st.write(f"- {reason}")
-
-            proposal = proposals.get(row.get("proposal_id"))
-            _render_proposal_details(proposal)
-
-            if status != "pending":
-                # Already decided — no decision form. Re-showing Approve/
-                # Send back here previously let a stray click re-run the
-                # decision (duplicate leave request, double-deducted balance).
-                st.caption(
-                    f"{_status_label(status)} by {row.get('decided_by') or '—'} "
-                    f"on {row.get('decided_at') or '—'}"
-                )
-                if row.get("decision_note"):
-                    st.caption(f"Note: {row['decision_note']}")
-            else:
-                cover_options = _cover_candidate_options(proposal)
-                with st.form(f"decide_{approval_id}"):
-                    cover_employee_id = None
-                    if cover_options:
-                        ids, labels, default_index = cover_options
-                        cover_employee_id = st.selectbox(
-                            "Cover employee",
-                            ids,
-                            index=default_index,
-                            format_func=lambda eid: labels.get(eid, eid),
-                        )
-                    note = st.text_area(
-                        "Note",
-                        placeholder="A sentence of context helps — especially if you send this back.",
-                        label_visibility="collapsed",
-                    )
-                    st.caption("A note is optional for approve. Please add one if you send it back.")
-                    col_a, col_b = st.columns(2)
-                    approve = col_a.form_submit_button("Approve", type="primary", use_container_width=True)
-                    reject = col_b.form_submit_button("Send back", use_container_width=True)
-                if approve:
-                    _decide(approval_id, "approve", note, person, cover_employee_id)
-                elif reject:
-                    _decide(approval_id, "reject", note, person, cover_employee_id)
-
-        # Grievances
-   
-
-    st.markdown("<br><br>", unsafe_allow_html=True)
-
-    st.markdown("### Grievances")
-
-    st.markdown(
-        styles.grievance_queue_stats(
-            len(waiting_grievances),
-            len(submitted_grievances),
-            len(sent_back_grievances),
-        ),
-        unsafe_allow_html=True,
-    )
-    st.divider()
-    st.subheader("Employee Grievances")
-
-    grievance_tab = st.radio(
-        "Grievances",
-        ["Waiting", "Submitted", "Sent Back"],
-        horizontal=True,
-        key="grievance_filter",
+    styles.data_table(
+        rows,
+        [
+            ("id", i18n.t("grievances.col_id")),
+            ("employee", i18n.t("grievances.col_employee")),
+            ("subject", i18n.t("grievances.col_subject")),
+            ("date", i18n.t("grievances.col_date")),
+            ("status", i18n.t("grievances.col_status")),
+        ],
+        status_key="status",
+        status_styles=_grievance_status_styles(),
+        on_view=_open_view,
+        view_label=i18n.t("grievances.col_view"),
+        key="grievancesfull",
+        empty_message=i18n.t("grievances.empty"),
     )
 
-    grievance_groups = {
-        "Waiting": waiting_grievances,
-        "Submitted": submitted_grievances,
-        "Sent Back": sent_back_grievances,
-    }
+    view_id = st.session_state.get("grievance_view_id")
+    if view_id:
+        g = next((g for g in grievances if str(g.get("grievance_id") or "") == str(view_id)), None)
+        if g:
+            _render_grievance_readonly(g, names)
 
-    visible_grievances = grievance_groups[grievance_tab]
 
-    if not visible_grievances:
-        st.caption(
-            f"No grievances in {grievance_tab.lower()}."
-        )
+def _render_grievance_readonly(g: dict, names: dict) -> None:
+    grievance_id = str(g.get("grievance_id") or "")
+    identity_visible = bool(g.get("identity_visible"))
+    if identity_visible:
+        employee_id = str(g.get("employee_id") or "")
+        person = names.get(employee_id) or employee_id or "—"
     else:
-        for grievance in visible_grievances:
-            grievance_id = str(
-                grievance.get("grievance_id") or ""
-            )
+        person = i18n.t("inbox.anonymous")
 
-            identity_visible = bool(
-                grievance.get("identity_visible")
-            )
+    with st.container(key=f"grievance_readonly_{grievance_id}"):
+        top_l, top_r = st.columns([5, 1])
+        with top_l:
+            st.markdown(f"#### {html.escape(person)} · {html.escape(grievance_id)}")
+        with top_r:
+            if st.button(i18n.t("inbox.close"), key=f"close_gview_{grievance_id}", use_container_width=True):
+                st.session_state.pop("grievance_view_id", None)
+                st.rerun()
 
-            if identity_visible:
-                employee_id = str(
-                    grievance.get("employee_id") or ""
-                )
-                person = (
-                    _employee_names([employee_id]).get(employee_id)
-                    or employee_id
-                    or "Employee"
-                )
-            else:
-                person = "Anonymous employee"
+        st.write(g.get("complaint") or "—")
+        status_val = str(g.get("status") or "").lower()
+        styles.detail_card(
+            [
+                (
+                    i18n.t("detail.identity"),
+                    f"🔒 {i18n.t('inbox.anonymous')}" if not identity_visible else person,
+                ),
+                (i18n.t("detail.submitted"), _friendly_when(g.get("submitted_at")) or "—"),
+                (
+                    i18n.t("detail.status"),
+                    styles.raw(styles.status_pill_html(status_val, _grievance_status_styles())),
+                ),
+            ]
+        )
+        if g.get("hr_response"):
+            st.markdown("**HR note**")
+            st.write(g.get("hr_response"))
 
-            status = str(
-                grievance.get("status") or ""
-            ).upper()
-
-            with st.expander(
-                f"{person} · {grievance_id}",
-                expanded=status == "PENDING_HR_REVIEW",
-            ):
-                st.markdown("### Grievance")
-
-                st.write(
-                    grievance.get("complaint")
-                    or "No complaint provided."
-                )
-
-                _kv_table(
-                    [
-                        (
-                            "Grievance ID",
-                            grievance.get("grievance_id"),
-                        ),
-                        (
-                            "Identity",
-                            "Shown"
-                            if identity_visible
-                            else "Hidden",
-                        ),
-                        (
-                            "Submitted",
-                            _friendly_when(
-                                grievance.get("submitted_at")
-                            ),
-                        ),
-                        (
-                            "Status",
-                            status.replace("_", " ").title(),
-                        ),
-                    ]
-                )
-
-                if status == "PENDING_HR_REVIEW":
-
-                    if st.button(
-                        "Explain this",
-                        key=f"explain_grievance_{grievance_id}",
-                        use_container_width=True,
-                    ):
-                        st.session_state[
-                            f"grievance_brief_{grievance_id}"
-                        ] = {
-                            "recommendation": (
-                                grievance.get(
-                                    "consultant_recommendation"
-                                )
-                                or ""
-                            ),
-                            "sources": grievance.get(
-                                "sources"
-                            ),
-                        }
-
-                    brief = st.session_state.get(
-                        f"grievance_brief_{grievance_id}"
-                    )
-
-                    if brief:
-                        st.markdown("### Decision Brief")
-
-                        recommendation = str(
-                            brief.get("recommendation") or ""
-                        ).strip()
-
-                        if recommendation:
-                            st.markdown(
-                                "**Consultant assessment**"
-                            )
-                            st.write(recommendation)
-
-                        sources = brief.get("sources")
-
-                        if sources:
-                            st.markdown(
-                                "**Policy / Law sources**"
-                            )
-                            st.write(sources)
-
-                    with st.form(
-                        f"grievance_decision_{grievance_id}"
-                    ):
-                        response_note = st.text_area(
-                            "Note",
-                            placeholder=(
-                                "Add a note for the grievance decision."
-                            ),
-                        )
-
-                        col_a, col_b = st.columns(2)
-
-                        accept = col_a.form_submit_button(
-                            "Accept",
-                            type="primary",
-                            use_container_width=True,
-                        )
-
-                        reject = col_b.form_submit_button(
-                            "Send back",
-                            use_container_width=True,
-                        )
-
-                    if accept:
-                        _decide_grievance(
-                            grievance_id,
-                            "accept",
-                            response_note,
-                        )
-
-                    elif reject:
-                        _decide_grievance(
-                            grievance_id,
-                            "reject",
-                            response_note,
-                        )
-
-                else:
-                    if grievance.get("hr_response"):
-                        st.markdown("**HR note**")
-                        st.write(
-                            grievance.get("hr_response")
-                        )     
 
 def _decide_grievance(
     grievance_id: str,
@@ -1221,18 +910,11 @@ def _decide_grievance(
 
     try:
         api.raise_for_api(resp)
-
         if decision == "accept":
-            st.success(
-                "Grievance accepted and submitted for HR review."
-            )
+            st.success(i18n.t("inbox.grievance_accepted_msg"))
         else:
-            st.success(
-                "Grievance sent back."
-            )
-
+            st.success(i18n.t("inbox.grievance_sent_back_msg"))
         st.rerun()
-
     except RuntimeError as exc:
         st.error(str(exc))
 
@@ -1281,9 +963,9 @@ def _decide(
         api.raise_for_api(resp)
         who = person or "this request"
         if decision == "approve":
-            st.success(f"Approved for {who}. They can move forward.")
+            st.success(i18n.t("inbox.approved_msg", who=who))
         else:
-            st.success(f"Sent back to {who}. Your note is on the record.")
+            st.success(i18n.t("inbox.sent_back_msg", who=who))
         st.rerun()
     except RuntimeError as exc:
         st.error(str(exc))
@@ -1316,24 +998,25 @@ def _action_label(row: dict) -> str:
     summary = str(row.get("action_summary") or "").strip()
     if summary:
         return summary
-    return "Needs a decision"
+    return i18n.t("inbox.needs_decision")
 
 
 def _status_label(status: str) -> str:
-    return {"pending": "Waiting", "approved": "Approved", "rejected": "Sent back"}.get(
-        status, status.title()
-    )
+    key = {"pending": "status.pending", "approved": "status.approved", "rejected": "status.sent_back"}.get(status)
+    if key:
+        return i18n.t(key)
+    return status.title()
 
 
 def _risk_label(level: str | None) -> tuple[str, str]:
     key = (level or "").strip().lower()
     if key == "high":
-        return "High impact", "high"
+        return i18n.t("risk.high"), "high"
     if key == "medium":
-        return "Needs review", "medium"
+        return i18n.t("risk.medium"), "medium"
     if key == "low":
-        return "Low risk", "low"
-    return (level or "Risk unknown"), "low"
+        return i18n.t("risk.low"), "low"
+    return (level or i18n.t("risk.unknown")), "low"
 
 
 def _friendly_when(raw: str | None) -> str:
@@ -1352,19 +1035,19 @@ def _approval_card_html(row: dict, person: str) -> str:
     when = _friendly_when(row.get("created_at"))
     employee_id = html.escape(str(row.get("employee_id") or ""))
     summary = html.escape(_action_label(row))
-    status = _status_label(str(row.get("status") or "pending"))
+    status_pill = styles.status_pill_html(row.get("status") or "pending", styles.status_pills())
     decided = _friendly_when(row.get("decided_at"))
-    meta_bits = [f"Employee {employee_id}" if employee_id else ""]
+    meta_bits = [i18n.t("inbox.meta_employee", id=employee_id) if employee_id else ""]
     if when:
-        meta_bits.append(f"Raised {when}")
+        meta_bits.append(i18n.t("inbox.meta_raised", when=when))
     if decided:
-        meta_bits.append(f"Decided {decided}")
+        meta_bits.append(i18n.t("inbox.meta_decided", when=decided))
     meta = " · ".join(bit for bit in meta_bits if bit)
     return (
         '<div class="approval-card">'
         '<div class="approval-card-top">'
         f'<span class="risk-pill risk-pill--{risk_class}">{html.escape(risk_text)}</span>'
-        f'<span class="status-pill">{html.escape(status)}</span>'
+        f"{status_pill}"
         "</div>"
         f'<div class="approval-who">{html.escape(person)}</div>'
         f'<p class="approval-summary">{summary}</p>'
@@ -1393,10 +1076,11 @@ def _render_proposal_details(item: dict | None) -> None:
     payload = item.get("payload_json")
     payload = payload if isinstance(payload, dict) else {}
     action_type = str(item.get("action_type") or "")
+    key_prefix = str(item.get("proposal_id") or "proposal")
 
     st.caption("Request details")
     if action_type == "leave_request":
-        _render_leave_proposal_details(payload)
+        _render_leave_proposal_details(payload, key_prefix)
     else:
         _render_generic_proposal_details(payload)
 
@@ -1405,18 +1089,18 @@ def _render_proposal_details(item: dict | None) -> None:
         st.caption(f"Linked leave request: {related}")
 
 
-def _render_leave_proposal_details(payload: dict) -> None:
+def _render_leave_proposal_details(payload: dict, key_prefix: str) -> None:
     rows = [
-        ("Leave type", str(payload.get("leave_type") or "").title()),
-        ("Start date", payload.get("start_date")),
-        ("End date", payload.get("end_date")),
-        ("Days", payload.get("days")),
-        ("Reason", payload.get("reason")),
-        ("Suggested cover", payload.get("suggested_cover_employee_name")),
+        (i18n.t("detail.leave_type"), str(payload.get("leave_type") or "").title()),
+        (i18n.t("detail.start_date"), payload.get("start_date")),
+        (i18n.t("detail.end_date"), payload.get("end_date")),
+        (i18n.t("detail.days"), payload.get("days")),
+        (i18n.t("detail.reason"), payload.get("reason")),
+        (i18n.t("detail.suggested_cover"), payload.get("suggested_cover_employee_name")),
     ]
     if payload.get("assigned_cover_employee_name"):
-        rows.append(("Assigned cover", payload.get("assigned_cover_employee_name")))
-    _kv_table(rows)
+        rows.append((i18n.t("detail.assigned_cover"), payload.get("assigned_cover_employee_name")))
+    styles.detail_card(rows)
     candidates = payload.get("cover_candidates")
     if isinstance(candidates, list):
         suggested_id = payload.get("suggested_cover_employee_id")
@@ -1426,14 +1110,11 @@ def _render_leave_proposal_details(payload: dict) -> None:
             if isinstance(c, dict) and c.get("employee_id") != suggested_id
         ]
         if others:
-            with st.popover(f"Other cover options ({len(others)})"):
-                st.dataframe(
-                    [
-                        {"Name": c.get("full_name"), "Role": c.get("job_title")}
-                        for c in others
-                    ],
-                    use_container_width=True,
-                    hide_index=True,
+            with st.popover(i18n.t("detail.other_cover_options", n=len(others))):
+                styles.data_table(
+                    [{"name": c.get("full_name") or "—", "role": c.get("job_title") or "—"} for c in others],
+                    [("name", i18n.t("detail.col_name")), ("role", i18n.t("detail.col_role"))],
+                    key=f"covercandidates_{key_prefix}",
                 )
 
 
@@ -1444,14 +1125,18 @@ def _render_generic_proposal_details(payload: dict) -> None:
         if value not in (None, "")
     ]
     if pairs:
-        _kv_table(pairs)
+        styles.detail_card(pairs)
 
 
 def page_users() -> None:
-    styles.hero(
-        "Admin",
-        "Users & roles",
-        "Manage account roles and active status. Password hashes are never shown.",
+    st.markdown(
+        f"""
+        <div class="yz-chat-header">
+          <div class="yz-chat-title">{html.escape(i18n.t("users.title"))}</div>
+          <div class="yz-chat-subtitle">{html.escape(i18n.t("users.subtitle"))}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
     try:
         users = api.raise_for_api(api.request("GET", "/users"))
@@ -1459,13 +1144,38 @@ def page_users() -> None:
     except RuntimeError as exc:
         st.error(str(exc))
         return
-    st.dataframe(users or [], use_container_width=True, hide_index=True)
-    st.caption("Roles: " + ", ".join(r["role_name"] for r in (roles or [])))
+
+    rows = [
+        {
+            "user_id": u.get("user_id") or "—",
+            "employee_id": u.get("employee_id") or "—",
+            "username": u.get("username") or "—",
+            "role": str(u.get("role") or "").replace("_", " ").title() or "—",
+            "status": "active" if u.get("is_active") else "inactive",
+            "last_login_at": _friendly_when(u.get("last_login_at")) or "Never",
+        }
+        for u in (users or [])
+    ]
+    styles.data_table(
+        rows,
+        [
+            ("user_id", i18n.t("users.col_user_id")),
+            ("employee_id", i18n.t("users.col_employee_id")),
+            ("username", i18n.t("users.col_username")),
+            ("role", i18n.t("users.col_role")),
+            ("status", i18n.t("users.col_status")),
+            ("last_login_at", i18n.t("users.col_last_login")),
+        ],
+        status_key="status",
+        key="users",
+        empty_message=i18n.t("users.empty"),
+    )
+    st.caption(i18n.t("users.roles_caption", roles=", ".join(r["role_name"] for r in (roles or []))))
     c1, c2, c3 = st.columns(3)
-    user_id = c1.text_input("User ID")
-    role = c2.selectbox("Role", ["employee", "hr_specialist", "hr_manager", "admin"])
-    active = c3.checkbox("Active", value=True)
-    if st.button("Update user", type="primary") and user_id:
+    user_id = c1.text_input(i18n.t("users.field_user_id"))
+    role = c2.selectbox(i18n.t("users.field_role"), ["employee", "hr_specialist", "hr_manager", "admin"])
+    active = c3.checkbox(i18n.t("users.field_active"), value=True)
+    if st.button(i18n.t("users.update_button"), type="primary") and user_id:
         resp = api.request(
             "PATCH",
             f"/users/{user_id}",
@@ -1473,21 +1183,215 @@ def page_users() -> None:
         )
         try:
             api.raise_for_api(resp)
-            st.success("Saved")
+            st.success(i18n.t("users.saved"))
             st.rerun()
         except RuntimeError as exc:
             st.error(str(exc))
 
 
 def page_audit() -> None:
-    styles.hero(
-        "Admin",
-        "Audit log",
-        "Every login, profile update, leave submit, and approval decision lands here.",
+    st.markdown(
+        f"""
+        <div class="yz-chat-header">
+          <div class="yz-chat-title">{html.escape(i18n.t("audit.title"))}</div>
+          <div class="yz-chat-subtitle">{html.escape(i18n.t("audit.subtitle"))}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
     try:
-        rows = api.raise_for_api(api.request("GET", "/audit"))
+        entries = api.raise_for_api(api.request("GET", "/audit"))
     except RuntimeError as exc:
         st.error(str(exc))
         return
-    st.dataframe(rows or [], use_container_width=True, hide_index=True)
+
+    rows = [
+        {
+            "timestamp": _friendly_when(e.get("timestamp")) or e.get("timestamp") or "—",
+            "actor": e.get("actor") or "—",
+            "event_type": str(e.get("event_type") or "").replace("_", " ").title() or "—",
+            "employee_id": e.get("employee_id") or "—",
+            "details": e.get("details") or "—",
+        }
+        for e in (entries or [])
+    ]
+    styles.data_table(
+        rows,
+        [
+            ("timestamp", i18n.t("audit.col_time")),
+            ("actor", i18n.t("audit.col_user")),
+            ("event_type", i18n.t("audit.col_event")),
+            ("employee_id", i18n.t("audit.col_employee")),
+            ("details", i18n.t("audit.col_details")),
+        ],
+        key="audit",
+        empty_message=i18n.t("audit.empty"),
+    )
+
+
+def page_payroll() -> None:
+    """HR manager/admin: download the all-employee payroll PDF for a
+    chosen month. Restored from commit 354eb95 ("Payroll feature") — real
+    GET /payroll/periods + GET /payroll/monthly/{period}/pdf, unchanged;
+    only the UI chrome is new (month shown as "June 2026", a single
+    Download PDF control, a file card, a confidentiality banner)."""
+    st.markdown(
+        f"""
+        <div class="yz-chat-header">
+          <div class="yz-chat-title">{html.escape(i18n.t("payroll.title"))}</div>
+          <div class="yz-chat-subtitle">{html.escape(i18n.t("payroll.subtitle"))}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        '<div class="yz-confidential-banner">'
+        f'<strong>{html.escape(i18n.t("payroll.confidentiality_title"))}</strong> '
+        f'{html.escape(i18n.t("payroll.confidentiality_body"))}'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    try:
+        periods_data = api.raise_for_api(api.request("GET", "/payroll/periods"))
+    except RuntimeError as exc:
+        st.error(str(exc))
+        return
+    periods = (periods_data or {}).get("periods") or []
+    if not periods:
+        st.info(i18n.t("payroll.empty"))
+        return
+
+    def _format_period(p: str) -> str:
+        try:
+            return datetime.strptime(p, "%Y-%m").strftime("%B %Y")
+        except ValueError:
+            return p
+
+    period = st.selectbox(i18n.t("payroll.month_label"), periods, index=0, format_func=_format_period)
+
+    # A generated PDF is only valid for the period it was generated for —
+    # drop it the moment the month selection changes, so the "one Download
+    # PDF control" never silently offers stale bytes for a different month.
+    generated = st.session_state.get("payroll_pdf")
+    if generated and generated.get("period") != period:
+        st.session_state.pop("payroll_pdf", None)
+        generated = None
+
+    if generated:
+        file_name = i18n.t("payroll.file_name", period=period)
+        st.markdown(
+            '<div class="yz-file-card">'
+            '<div class="yz-file-card-icon">📄</div>'
+            "<div>"
+            f'<div class="yz-file-card-name">{html.escape(file_name)}</div>'
+            f'<div class="yz-file-card-status">{html.escape(i18n.t("payroll.file_ready"))}</div>'
+            "</div>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        st.download_button(
+            i18n.t("payroll.download_button"),
+            data=generated["bytes"],
+            file_name=file_name,
+            mime="application/pdf",
+            use_container_width=True,
+        )
+    else:
+        # One button, one label, throughout: this same control fetches the
+        # real PDF on first click, then (after the resulting rerun) the
+        # branch above takes over and renders it as a real download button
+        # under the identical "Download PDF" label — st.download_button
+        # can't lazily fetch on its own click, so this is the honest
+        # two-step-but-one-visible-control shape Streamlit allows.
+        if st.button(i18n.t("payroll.download_button"), use_container_width=True):
+            with st.spinner(i18n.t("payroll.generating")):
+                pdf_response = api.request("GET", f"/payroll/monthly/{period}/pdf")
+            if pdf_response.status_code >= 400:
+                try:
+                    detail = pdf_response.json().get("detail", pdf_response.text)
+                except Exception:
+                    detail = pdf_response.text
+                st.error(f"{pdf_response.status_code}: {detail}")
+            else:
+                st.session_state["payroll_pdf"] = {"period": period, "bytes": pdf_response.content}
+                st.rerun()
+
+
+def page_growth_opportunities() -> None:
+    """Employee: department experience gaps this employee is a close-fit
+    candidate for, with a CV upload that generates a personalized
+    development plan. Restored from commit 354eb95 — real
+    GET /growth/opportunities + POST /growth/opportunities/{skill_id}/cv,
+    unchanged; only the UI chrome is new."""
+    st.markdown(
+        f"""
+        <div class="yz-chat-header">
+          <div class="yz-chat-title">{html.escape(i18n.t("growth.title"))}</div>
+          <div class="yz-chat-subtitle">{html.escape(i18n.t("growth.subtitle"))}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    try:
+        data = api.raise_for_api(api.request("GET", "/growth/opportunities"))
+    except RuntimeError as exc:
+        st.error(str(exc))
+        return
+    opportunities = (data or {}).get("opportunities") or []
+    if not opportunities:
+        st.info(i18n.t("growth.empty"))
+        return
+
+    for item in opportunities:
+        skill_id = item.get("skill_id")
+        skill_name = item.get("skill_name") or "—"
+        with st.container(key=f"growth_card_{skill_id}"):
+            st.markdown(
+                f'<div class="yz-growth-card-title">{html.escape(skill_name)}</div>',
+                unsafe_allow_html=True,
+            )
+            st.caption(
+                i18n.t(
+                    "growth.missing_note",
+                    current=item.get("current_headcount"),
+                    job_title=item.get("current_job_title") or "—",
+                )
+            )
+
+            existing_plan = item.get("plan")
+            if existing_plan:
+                st.markdown(existing_plan.get("plan_text") or "")
+                st.caption(
+                    i18n.t(
+                        "growth.generated_from",
+                        filename=existing_plan.get("cv_filename") or "your CV",
+                        date=existing_plan.get("created_at") or "—",
+                    )
+                )
+                upload_label = i18n.t("growth.upload_replace")
+            else:
+                upload_label = i18n.t("growth.upload_new")
+
+            cv_file = st.file_uploader(upload_label, type="pdf", key=f"cv_upload_{skill_id}")
+
+            if st.button(
+                i18n.t("growth.generate_button"),
+                key=f"generate_plan_{skill_id}",
+                disabled=cv_file is None,
+            ):
+                upload_response = api.request(
+                    "POST",
+                    f"/growth/opportunities/{skill_id}/cv",
+                    files={"cv": (cv_file.name, cv_file.getvalue(), "application/pdf")},
+                    timeout=120.0,
+                )
+                try:
+                    api.raise_for_api(upload_response)
+                except RuntimeError as exc:
+                    st.error(str(exc))
+                else:
+                    st.rerun()
+        st.write("")

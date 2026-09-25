@@ -1,0 +1,7 @@
+id: WPS006
+category: Upload
+topic: Upload report
+rule: The system provides information about the result of the uploaded wage file
+conditions: After file processing
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

@@ -1,0 +1,7 @@
+id: WPS024
+category: Wage data
+topic: Bank identifier
+rule: The wage record identifies the relevant bank
+conditions: For each applicable payment record
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

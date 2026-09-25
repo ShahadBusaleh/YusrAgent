@@ -1,0 +1,7 @@
+id: WPS048
+category: Justifications
+topic: Rejected justification
+rule: An employee may reject an employer justification through the platform
+conditions: When the employee rejects the justification
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

@@ -1,0 +1,7 @@
+id: WPS021
+category: Wage data
+topic: Paid amount
+rule: The wage record includes the amount actually paid to the employee
+conditions: For each covered employee
+exceptions: —
+source: HRSD – Wage Protection Program / Mudad

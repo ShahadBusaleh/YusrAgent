@@ -1,7 +1,7 @@
 import json
-
+import logging
+from concurrent.futures import ThreadPoolExecutor
 from openai import OpenAI
-
 from app.agents.hr_agent import HRAgent
 from app.agents.consultant_agent import ConsultantAgent
 from app.agents.manager_agent import ManagerAgent
@@ -19,6 +19,32 @@ from app.db.approvals import list_pending_approvals
 from app.db.grievances import create_grievance
 from app.db.proposed_actions import get_proposed_action
 from app.agents.hr_agent import get_historical_precedent
+
+
+logger = logging.getLogger(__name__)
+
+_EMPTY_HR_RESULT = {
+    "facts": {},
+    "proposed_action": None,
+    "sources": [],
+}
+
+
+def _failed_consultant_result(message: str) -> dict:
+    """Consultant-shaped result for a crashed Consultant call, so Manager
+    can still answer from HR facts (see Manager's `success is False`)."""
+    return {
+        "recommendation": "",
+        "conflicts": [],
+        "sources": [],
+        "success": False,
+        "error": {
+            "type": "agent_exception",
+            "stage": "ORCHESTRATOR",
+            "message": message,
+            "retryable": True,
+        },
+    }
 
 
 class OrchestratorAgent:
@@ -79,6 +105,18 @@ class OrchestratorAgent:
             "bypass access control",
             "bypass authentication",
             "change my role to admin",
+            # Arabic equivalents: checked on the original prompt before
+            # it is sent to the translation LLM.
+            "تجاهل التعليمات",
+            "تجاهل جميع التعليمات",
+            "تجاهل كل التعليمات",
+            "تجاهل التعليمات السابقة",
+            "موجه النظام",
+            "تعليمات النظام",
+            "اكشف تعليماتك",
+            "تجاوز الأمان",
+            "تجاوز الصلاحيات",
+            "اجعلني مسؤول",
         ]
 
         medium_risk_patterns = [
@@ -152,6 +190,56 @@ class OrchestratorAgent:
         personal-info updates, bank changes, and certificate
         requests are routed through the existing HR intent.
         """
+
+                # Fast path for obvious intent matches.
+        normalized = str(query or "").strip().lower()
+
+        fast_paths = [
+            (
+                "GRIEVANCE",
+                [
+                    "submit a complaint",
+                    "file a complaint",
+                    "submit a grievance",
+                    "file a grievance",
+                    "workplace complaint",
+                    "workplace grievance",
+                ],
+            ),
+            (
+                "HR",
+                [
+                    "show my leave balance",
+                    "check my leave balance",
+                    "my leave balance",
+                    "submit a leave request",
+                    "show my attendance",
+                    "show my payroll",
+                    "my payroll information",
+                    "update my phone number",
+                    "update my email",
+                    "update my address",
+                    "change my iban",
+                    "change my bank account",
+                    "request an employment certificate",
+                ],
+            ),
+            (
+                "CONSULTANT",
+                [
+                    "what does article",
+                    "what does the law say",
+                    "according to saudi labor law",
+                    "according to company policy",
+                    "what is the company policy",
+                    "what does company policy say",
+                ],
+            ),
+        ]
+
+        for intent, phrases in fast_paths:
+            if any(phrase in normalized for phrase in phrases):
+                return intent
 
         prompt = f"""
 You are an intent classifier for an HR assistant.
@@ -263,135 +351,79 @@ User request:
 {query}
 """
 
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You classify HR requests. "
-                            "Return JSON only."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt,
-                    },
-                ],
-                temperature=0,
-            )
-
-            content = (
-                response.choices[0]
-                .message.content
-                .strip()
-            )
-
-            # Remove markdown code fences if returned
-            if content.startswith("```"):
-                content = content.replace(
-                    "```json",
-                    "",
+        # One retry: a transient LLM/JSON failure used to silently turn
+        # a clear HR question into OTHER (seen in the eval baseline).
+        for attempt in range(2):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "You classify HR requests. "
+                                "Return JSON only."
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": prompt,
+                        },
+                    ],
+                    temperature=0,
                 )
-                content = content.replace(
-                    "```",
-                    "",
+
+                content = (
+                    response.choices[0]
+                    .message.content
+                    .strip()
                 )
-                content = content.strip()
 
-            result = json.loads(content)
+                # Remove markdown code fences if returned
+                if content.startswith("```"):
+                    content = content.replace(
+                        "```json",
+                        "",
+                    )
+                    content = content.replace(
+                        "```",
+                        "",
+                    )
+                    content = content.strip()
 
-            intent = result.get(
-                "intent",
-                "OTHER",
-            )
+                result = json.loads(content)
 
-            allowed_intents = {
-                "HR",
-                "CONSULTANT",
-                "BOTH",
-                "GRIEVANCE",
-                "OTHER",
-            }
+                intent = result.get(
+                    "intent",
+                    "OTHER",
+                )
 
-            if intent not in allowed_intents:
-                return "OTHER"
+                allowed_intents = {
+                    "HR",
+                    "CONSULTANT",
+                    "BOTH",
+                    "GRIEVANCE",
+                    "OTHER",
+                }
 
-            return intent
+                if intent not in allowed_intents:
+                    return "OTHER"
 
-        except Exception:
-            return "OTHER"
+                return intent
+
+            except Exception:
+                logger.warning(
+                    "Intent classification failed (attempt %d/2)",
+                    attempt + 1,
+                    exc_info=True,
+                )
+
+        return "OTHER"
 
     # =========================================================
     # 3. BOTH REQUEST ORDER
     # =========================================================
 
-    def detect_order(self, query: str) -> str:
-        """
-        Detect which part appears first in a BOTH request.
-
-        Returns:
-            HR_FIRST
-            CONSULTANT_FIRST
-        """
-
-        query_lower = query.lower()
-
-        hr_keywords = [
-            "do i have",
-            "how many",
-            "my balance",
-            "my remaining",
-            "am i entitled",
-            "my leave",
-            "my employee",
-            "my status",
-            "submit",
-            "update my",
-        ]
-
-        consultant_keywords = [
-            "article",
-            "law",
-            "policy",
-            "rule",
-            "rules",
-            "according to",
-            "what does",
-            "requirements",
-            "conditions",
-            "exceptions",
-        ]
-
-        hr_positions = [
-            query_lower.find(keyword)
-            for keyword in hr_keywords
-            if query_lower.find(keyword) != -1
-        ]
-
-        consultant_positions = [
-            query_lower.find(keyword)
-            for keyword in consultant_keywords
-            if query_lower.find(keyword) != -1
-        ]
-
-        hr_position = (
-            min(hr_positions)
-            if hr_positions
-            else float("inf")
-        )
-
-        consultant_position = (
-            min(consultant_positions)
-            if consultant_positions
-            else float("inf")
-        )
-
-        if hr_position < consultant_position:
-            return "HR_FIRST"
-
-        return "CONSULTANT_FIRST"
 
     # =========================================================
     # 4. HIGH-RISK SECURITY ACTION
@@ -408,7 +440,7 @@ User request:
         The Manager decides the security action.
         """
 
-        manager_result = self.manager_agent.run({
+        manager_result = self._run_manager({
             "query": query,
             "user": user,
             "hr_result": {},
@@ -423,27 +455,14 @@ User request:
                 "decision",
                 "FAIL",
             ),
-            "response": manager_result.get(
-                "response",
+            "response": manager_result.get("response") or (
                 "Your request was blocked because a "
-                "high-risk security threat was detected.",
+                "high-risk security threat was detected."
             ),
             "sources": [],
             "intent": "SECURITY_BLOCK",
             "execution_order": ["MANAGER"],
             "security": security_result,
-
-            # Manager's security decision
-            "security_action": manager_result.get(
-                "security_action"
-            ),
-            "account_action": manager_result.get(
-                "account_action"
-            ),
-            "hr_notification": manager_result.get(
-                "hr_notification"
-            ),
-
             "employee_id": user.get(
                 "employee_id"
             ),
@@ -459,13 +478,17 @@ User request:
         user: dict,
     ) -> dict:
 
-        return self.hr_agent.run({
-            "query": query,
-            "user": user,
-            "employee_id": user.get(
-                "employee_id"
-            ),
-        })
+        try:
+            return self.hr_agent.run({
+                "query": query,
+                "user": user,
+                "employee_id": user.get(
+                    "employee_id"
+                ),
+            })
+        except Exception:
+            logger.exception("HR Agent failed")
+            return dict(_EMPTY_HR_RESULT)
 
     # =========================================================
     # 6. ROUTE TO CONSULTANT
@@ -476,9 +499,35 @@ User request:
         query: str,
     ) -> dict:
 
-        return self.consultant_agent.run({
-            "query": query,
-        })
+        try:
+            return self.consultant_agent.run({
+                "query": query,
+            })
+        except Exception as exc:
+            logger.exception("Consultant Agent failed")
+            return _failed_consultant_result(str(exc))
+
+    def _run_manager(self, manager_input: dict) -> dict:
+        """Manager is the final gate, so a crash there must still produce
+        a well-formed FAIL instead of a 500 / KeyError on "decision"."""
+
+        try:
+            result = self.manager_agent.run(manager_input)
+        except Exception:
+            logger.exception("Manager Agent failed")
+            result = {}
+
+        if not isinstance(result, dict) or "decision" not in result:
+            return {
+                "decision": "FAIL",
+                "reasons": ["Manager Agent failed."],
+                "response": (
+                    "Something went wrong while checking your request. "
+                    "Please try again."
+                ),
+            }
+
+        return result
     # =========================================================
     # 6.5 EXPLAIN PENDING APPROVAL
     # =========================================================
@@ -707,6 +756,23 @@ User request:
 
         translated_query = original_query
 
+        # Screen the raw prompt before it reaches the translation LLM, so an
+        # Arabic injection attempt is blocked instead of being "translated".
+        # English prompts are screened again (identically) inside `_run`.
+        if language == "ar":
+            original_risk = self.assess_query_risk(original_query)
+            if original_risk["risk"] == "HIGH":
+                result = self.handle_high_risk(
+                    query=original_query,
+                    user=input.get("user") or {},
+                    security_result=original_risk,
+                )
+                try:
+                    result["response"] = translate_to_arabic(result["response"])
+                except Exception:
+                    pass
+                return result
+
         if language == "ar" and original_query.strip():
             try:
                 translated_query = translate_to_english(original_query)
@@ -717,6 +783,7 @@ User request:
 
         internal_input = dict(input)
         internal_input["query"] = translated_query
+        internal_input["original_query"] = original_query
 
         result = self._run(internal_input)
 
@@ -731,7 +798,6 @@ User request:
         return result
 
     def _run(self, input: dict) -> dict:
-        identity_visible = input.get("identity_visible")
         """
         Main orchestration workflow:
 
@@ -742,6 +808,8 @@ User request:
         5. Send results to Manager
         6. Return final response
         """
+
+        identity_visible = input.get("identity_visible")
 
         query = str(
             input.get("query") or ""
@@ -808,40 +876,24 @@ User request:
             consultant_result = self.run_consultant(
                 query=query,
             )
-
         elif intent == "BOTH":
 
-            order = self.detect_order(query)
+            execution_order.extend(["HR", "CONSULTANT"])
 
-            if order == "HR_FIRST":
-
-                execution_order.append("HR")
-
-                hr_result = self.run_hr(
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                hr_future = executor.submit(
+                    self.run_hr,
                     query=query,
                     user=user,
                 )
-
-                execution_order.append("CONSULTANT")
-
-                consultant_result = self.run_consultant(
+                consultant_future = executor.submit(
+                    self.run_consultant,
                     query=query,
                 )
 
-            else:
+                hr_result = hr_future.result()
+                consultant_result = consultant_future.result()
 
-                execution_order.append("CONSULTANT")
-
-                consultant_result = self.run_consultant(
-                    query=query,
-                )
-
-                execution_order.append("HR")
-
-                hr_result = self.run_hr(
-                    query=query,
-                    user=user,
-                )
         elif intent == "GRIEVANCE":
 
             # The orchestrator detected a grievance.
@@ -849,7 +901,7 @@ User request:
             # stop here and ask the UI to show Hide / Show.
             if identity_visible is None:
                 return {
-                    "status": "IDENTITY_REQUIRED",
+                    "status": "REPLAN",
                     "response": "",
                     "sources": [],
                     "intent": "GRIEVANCE",
@@ -884,7 +936,7 @@ User request:
                 }
 
             # Governance checks the grievance workflow.
-            manager_result = self.manager_agent.run({
+            manager_result = self._run_manager({
                 "query": query,
                 "user": user,
                 "security": security_result,
@@ -905,7 +957,7 @@ User request:
                         conn,
                         employee_id=user.get("employee_id"),
                         identity_visible=bool(identity_visible),
-                        complaint=query,
+                        complaint=input.get("original_query") or query,
                         consultant_recommendation=consultant_result.get(
                             "recommendation",
                             "",
@@ -922,7 +974,7 @@ User request:
                     conn.close()
 
                 return {
-                    "status": "PENDING_HR_REVIEW",
+                    "status": "REPLAN",
                     "response": (
                         "Your grievance has been submitted successfully. "
                         "HR will review your case."
@@ -940,7 +992,7 @@ User request:
                 }
 
             return {
-                "status": "BLOCKED",
+                "status": "FAIL",
                 "response": manager_result.get(
                     "response",
                     "Your grievance could not be submitted.",
@@ -961,7 +1013,7 @@ User request:
         # STEP 5 — MANAGER
         # =====================================================
 
-        manager_result = self.manager_agent.run({
+        manager_result = self._run_manager({
             "query": query,
             "user": user,
 
@@ -984,8 +1036,8 @@ User request:
         # =====================================================
 
         return {
-            "status": manager_result["decision"],
-            "response": manager_result["response"],
+            "status": manager_result.get("decision", "FAIL"),
+            "response": manager_result.get("response", ""),
             "sources": (
                 hr_result.get("sources", [])
                 + consultant_result.get("sources", [])

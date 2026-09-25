@@ -103,7 +103,7 @@ Employee:
 - Department: {employee.get('department_name')}
 
 Target experience title the department needs: {gap.get('skill_name')} ({gap.get('category')})
-Current coverage: {gap.get('current_headcount')} of {gap.get('required_headcount')} required employees ({gap.get('status')})
+Current coverage: {gap.get('current_headcount')} employees in the department currently hold this experience title ({gap.get('status')})
 
 CV text:
 {cv_text}
