@@ -1,8 +1,7 @@
 import json
 import logging
-
+from concurrent.futures import ThreadPoolExecutor
 from openai import OpenAI
-
 from app.agents.hr_agent import HRAgent
 from app.agents.consultant_agent import ConsultantAgent
 from app.agents.manager_agent import ManagerAgent
@@ -192,6 +191,56 @@ class OrchestratorAgent:
         requests are routed through the existing HR intent.
         """
 
+                # Fast path for obvious intent matches.
+        normalized = str(query or "").strip().lower()
+
+        fast_paths = [
+            (
+                "GRIEVANCE",
+                [
+                    "submit a complaint",
+                    "file a complaint",
+                    "submit a grievance",
+                    "file a grievance",
+                    "workplace complaint",
+                    "workplace grievance",
+                ],
+            ),
+            (
+                "HR",
+                [
+                    "show my leave balance",
+                    "check my leave balance",
+                    "my leave balance",
+                    "submit a leave request",
+                    "show my attendance",
+                    "show my payroll",
+                    "my payroll information",
+                    "update my phone number",
+                    "update my email",
+                    "update my address",
+                    "change my iban",
+                    "change my bank account",
+                    "request an employment certificate",
+                ],
+            ),
+            (
+                "CONSULTANT",
+                [
+                    "what does article",
+                    "what does the law say",
+                    "according to saudi labor law",
+                    "according to company policy",
+                    "what is the company policy",
+                    "what does company policy say",
+                ],
+            ),
+        ]
+
+        for intent, phrases in fast_paths:
+            if any(phrase in normalized for phrase in phrases):
+                return intent
+
         prompt = f"""
 You are an intent classifier for an HR assistant.
 
@@ -375,71 +424,6 @@ User request:
     # 3. BOTH REQUEST ORDER
     # =========================================================
 
-    def detect_order(self, query: str) -> str:
-        """
-        Detect which part appears first in a BOTH request.
-
-        Returns:
-            HR_FIRST
-            CONSULTANT_FIRST
-        """
-
-        query_lower = query.lower()
-
-        hr_keywords = [
-            "do i have",
-            "how many",
-            "my balance",
-            "my remaining",
-            "am i entitled",
-            "my leave",
-            "my employee",
-            "my status",
-            "submit",
-            "update my",
-        ]
-
-        consultant_keywords = [
-            "article",
-            "law",
-            "policy",
-            "rule",
-            "rules",
-            "according to",
-            "what does",
-            "requirements",
-            "conditions",
-            "exceptions",
-        ]
-
-        hr_positions = [
-            query_lower.find(keyword)
-            for keyword in hr_keywords
-            if query_lower.find(keyword) != -1
-        ]
-
-        consultant_positions = [
-            query_lower.find(keyword)
-            for keyword in consultant_keywords
-            if query_lower.find(keyword) != -1
-        ]
-
-        hr_position = (
-            min(hr_positions)
-            if hr_positions
-            else float("inf")
-        )
-
-        consultant_position = (
-            min(consultant_positions)
-            if consultant_positions
-            else float("inf")
-        )
-
-        if hr_position < consultant_position:
-            return "HR_FIRST"
-
-        return "CONSULTANT_FIRST"
 
     # =========================================================
     # 4. HIGH-RISK SECURITY ACTION
@@ -799,6 +783,7 @@ User request:
 
         internal_input = dict(input)
         internal_input["query"] = translated_query
+        internal_input["original_query"] = original_query
 
         result = self._run(internal_input)
 
@@ -891,40 +876,24 @@ User request:
             consultant_result = self.run_consultant(
                 query=query,
             )
-
         elif intent == "BOTH":
 
-            order = self.detect_order(query)
+            execution_order.extend(["HR", "CONSULTANT"])
 
-            if order == "HR_FIRST":
-
-                execution_order.append("HR")
-
-                hr_result = self.run_hr(
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                hr_future = executor.submit(
+                    self.run_hr,
                     query=query,
                     user=user,
                 )
-
-                execution_order.append("CONSULTANT")
-
-                consultant_result = self.run_consultant(
+                consultant_future = executor.submit(
+                    self.run_consultant,
                     query=query,
                 )
 
-            else:
+                hr_result = hr_future.result()
+                consultant_result = consultant_future.result()
 
-                execution_order.append("CONSULTANT")
-
-                consultant_result = self.run_consultant(
-                    query=query,
-                )
-
-                execution_order.append("HR")
-
-                hr_result = self.run_hr(
-                    query=query,
-                    user=user,
-                )
         elif intent == "GRIEVANCE":
 
             # The orchestrator detected a grievance.
@@ -932,7 +901,7 @@ User request:
             # stop here and ask the UI to show Hide / Show.
             if identity_visible is None:
                 return {
-                    "status": "IDENTITY_REQUIRED",
+                    "status": "REPLAN",
                     "response": "",
                     "sources": [],
                     "intent": "GRIEVANCE",
@@ -988,7 +957,7 @@ User request:
                         conn,
                         employee_id=user.get("employee_id"),
                         identity_visible=bool(identity_visible),
-                        complaint=query,
+                        complaint=input.get("original_query") or query,
                         consultant_recommendation=consultant_result.get(
                             "recommendation",
                             "",
@@ -1005,7 +974,7 @@ User request:
                     conn.close()
 
                 return {
-                    "status": "PENDING_HR_REVIEW",
+                    "status": "REPLAN",
                     "response": (
                         "Your grievance has been submitted successfully. "
                         "HR will review your case."
@@ -1023,7 +992,7 @@ User request:
                 }
 
             return {
-                "status": "BLOCKED",
+                "status": "FAIL",
                 "response": manager_result.get(
                     "response",
                     "Your grievance could not be submitted.",
