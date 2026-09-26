@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import html
+import json
 import re
 from datetime import date, datetime, timedelta
 from fractions import Fraction
 from typing import Callable
 
+import uuid
+
 import httpx
 import streamlit as st
+import streamlit.components.v1 as components
 
 from app.ui import api_client as api
+from app.ui import exports
 from app.ui import i18n
 from app.ui import styles
 
@@ -310,6 +315,31 @@ def _load_departments() -> list[dict] | None:
     return st.session_state["staff_departments"]
 
 
+def _department_names_ar() -> dict[str, str]:
+    """department_id -> department_name_ar (GET /records/facets, which the
+    staffing roles can read). Empty when unavailable."""
+    if "dept_names_ar" not in st.session_state:
+        try:
+            facets = api.raise_for_api(api.request("GET", "/records/facets")) or {}
+        except RuntimeError:
+            return {}
+        st.session_state["dept_names_ar"] = {
+            d["department_id"]: d.get("department_name_ar")
+            for d in facets.get("departments") or []
+            if d.get("department_name_ar")
+        }
+    return st.session_state["dept_names_ar"]
+
+
+def _department_label(department_id: str | None, name_en: str | None, name_ar: str | None = None) -> str:
+    """Arabic department name in the Arabic UI, English otherwise."""
+    if i18n.is_rtl():
+        name_ar = name_ar or _department_names_ar().get(department_id or "")
+        if name_ar:
+            return name_ar
+    return name_en or department_id or ""
+
+
 def _open_terminations() -> dict[str, dict]:
     """employee_id -> the termination still in progress (pending approval, or
     approved and not yet finalized), from GET /proposed-actions. This is the
@@ -391,7 +421,7 @@ def _employee_picker(
             return i18n.t("staff.none")
         text = f"{eid} — {by_id[eid].get('full_name') or ''} — {by_id[eid].get('job_title') or ''}"
         until = _notice_until(open_terms or {}, eid)
-        return f"{text} · {i18n.t('notice.until', date=until)}" if until else text
+        return f"{text} · {i18n.t('notice.until', date=_friendly_when(until))}" if until else text
 
     chosen = st.selectbox(label, options, key=f"{key}_pick", format_func=_label)
     return by_id.get(chosen)
@@ -505,7 +535,7 @@ def _render_new_hire_form(open_terms: dict) -> None:
         departments = _load_departments()
         department_id = None
         if departments:
-            names = {d["department_id"]: d.get("department_name") for d in departments}
+            names = {d["department_id"]: _department_label(d["department_id"], d.get("department_name")) for d in departments}
             department_id = st.selectbox(
                 i18n.t("staff.department"),
                 list(names),
@@ -526,12 +556,12 @@ def _render_new_hire_form(open_terms: dict) -> None:
                 st.caption(
                     i18n.t(
                         "staff.department_from_manager",
-                        department=f"{manager.get('department_name')} ({department_id})",
+                        department=f"{_department_label(department_id, manager.get('department_name'))} ({department_id})",
                     )
                 )
         manager_until = _notice_until(open_terms, (manager or {}).get("employee_id"))
         if manager_until:
-            st.warning(i18n.t("notice.manager_warning", date=manager_until))
+            st.warning(i18n.t("notice.manager_warning", date=_friendly_when(manager_until)))
 
         c3, c4 = st.columns(2)
         employment_type = c3.selectbox(
@@ -618,7 +648,7 @@ def _render_termination_form(open_terms: dict) -> None:
                     key,
                     employee=(employee or {}).get("employee_id"),
                     proposal=existing["proposal_id"],
-                    date=existing["termination_date"] or "—",
+                    date=_friendly_when(existing["termination_date"]) or "—",
                 )
             )
         c1, c2 = st.columns(2)
@@ -646,7 +676,7 @@ def _render_termination_form(open_terms: dict) -> None:
         if termination_type == "article_80":
             st.caption(i18n.t("notice.art80_immediate"))
         elif notice_days:
-            st.caption(i18n.t("notice.required", days=notice_days, date=earliest.strftime("%d-%m-%Y")))
+            st.caption(i18n.t("notice.required", days=notice_days, date=_friendly_when(earliest.isoformat())))
             waived = st.checkbox(i18n.t("notice.waived"), key="term_notice_waived")
             if waived:
                 waiver_note = st.text_area(i18n.t("notice.waiver_note"), key="term_waiver_note")
@@ -673,7 +703,7 @@ def _render_termination_form(open_terms: dict) -> None:
         return
     early = bool(notice_days) and termination_date < earliest
     if early and not waived:
-        st.error(i18n.t("notice.too_early", days=notice_days, date=earliest.strftime("%d-%m-%Y")))
+        st.error(i18n.t("notice.too_early", days=notice_days, date=_friendly_when(earliest.isoformat())))
         return
     if early and not waiver_note.strip():
         st.error(i18n.t("notice.note_required"))
@@ -697,157 +727,20 @@ def _render_termination_form(open_terms: dict) -> None:
     _submit_staffing(query, "term_")
 
 
-def _render_my_staffing_requests() -> None:
-    """New-hire / termination requests this user submitted, from the real
-    GET /proposed-actions (staff roles get every proposal; payload.requested_by
-    identifies the submitter). A row's View button opens its details below."""
-    me_id = (st.session_state.get("me") or {}).get("employee_id")
-    try:
-        items = api.raise_for_api(api.request("GET", "/proposed-actions")) or []
-    except RuntimeError as exc:
-        st.error(str(exc))
-        items = []
-
-    mine = []
-    for item in items if isinstance(items, list) else []:
-        payload = item.get("payload_json")
-        payload = payload if isinstance(payload, dict) else {}
-        if item.get("action_type") in {"new_hire", "termination"} and payload.get("requested_by") == me_id:
-            mine.append((item, payload))
-
-    names = _employee_names(
-        [payload.get("employee_id") for item, payload in mine if item.get("action_type") == "termination"]
-        + [(payload.get("decision") or {}).get("decided_by") for _, payload in mine]
-        + [(payload.get("new_employee") or {}).get("manager_id") for _, payload in mine]
-    )
-    rows = []
-    for item, payload in mine:
-        if item.get("action_type") == "new_hire":
-            kind = i18n.t("staffing.tab_hire")
-            person = (payload.get("new_employee") or {}).get("full_name")
-        else:
-            kind = i18n.t("staffing.tab_term")
-            eid = str(payload.get("employee_id") or "")
-            person = f"{names.get(eid) or eid} ({eid})" if eid else None
-        rows.append(
-            {
-                "id": item.get("proposal_id"),
-                "type": kind,
-                "employee": person,
-                "date": _friendly_when(item.get("created_at")),
-                "status": item.get("status"),
-            }
+def _notice_basis(notice: dict) -> str:
+    required = notice.get("required_days")
+    if required is None:
+        return i18n.t("profile.notice_by_agreement")
+    if required == 0:
+        return i18n.t("profile.notice_na")
+    if notice.get("waived"):
+        return i18n.t(
+            "settlement.notice_waived",
+            given=notice.get("days_given"),
+            required=required,
+            note=notice.get("waiver_note") or "—",
         )
-
-    def _open(row: dict) -> None:
-        st.session_state["staff_open_request"] = row.get("id")
-
-    with st.container(key="staff_requests_card"):
-        styles.data_table(
-            rows,
-            [
-                ("type", i18n.t("staffing.col_type")),
-                ("employee", i18n.t("staffing.col_employee")),
-                ("date", i18n.t("staffing.col_date")),
-                ("status", i18n.t("staffing.col_status")),
-            ],
-            status_key="status",
-            # proposed_actions uses "pending_approval" until decided.
-            status_styles={"pending_approval": styles.status_pills()["pending"]},
-            on_view=_open,
-            view_label=i18n.t("staffing.view"),
-            key="staffing_requests",
-            empty_message=i18n.t("staffing.empty"),
-        )
-
-        opened = st.session_state.get("staff_open_request")
-        match = next(((item, payload) for item, payload in mine if item.get("proposal_id") == opened), None)
-        if match:
-            st.divider()
-            _render_staffing_request_details(*match, names)
-
-
-def _decision_caption(decision: dict, names: dict) -> None:
-    if not decision.get("decided_by") and not decision.get("decided_at"):
-        return
-    who = decision.get("decided_by") or ""
-    st.caption(
-        i18n.t(
-            "details.decided",
-            who=f"{names.get(who) or who} ({who})" if who else "—",
-            when=_friendly_when(decision.get("decided_at")) or "—",
-        )
-    )
-
-
-def _render_staffing_request_details(item: dict, payload: dict, names: dict) -> None:
-    status = str(item.get("status") or "")
-    decision = payload.get("decision") or {}
-    top_l, top_r = st.columns([5, 1])
-    with top_l:
-        st.markdown(f"**{html.escape(_staffing_label(item))}**")
-        st.markdown(
-            styles.status_pill_html(
-                status, {**styles.status_pills(), "pending_approval": styles.status_pills()["pending"]}
-            ),
-            unsafe_allow_html=True,
-        )
-    with top_r:
-        if st.button(i18n.t("inbox.close"), key="staff_close_request", use_container_width=True):
-            st.session_state.pop("staff_open_request", None)
-            st.rerun()
-
-    if status == "pending_approval":
-        st.caption(i18n.t("details.pending"))
-    elif status == "rejected":
-        st.markdown(f"**{i18n.t('details.sent_back_note')}**")
-        st.write(decision.get("note") or i18n.t("details.no_note"))
-        _decision_caption(decision, names)
-        return
-
-    if item.get("action_type") == "termination":
-        if status == "approved":
-            if payload.get("finalized_at"):
-                st.caption(i18n.t("notice.finalized", date=_friendly_when(payload["finalized_at"]) or "—"))
-            else:
-                st.info(i18n.t("notice.until", date=payload.get("termination_date") or "—"))
-            settlement = payload.get("final_settlement")
-            if settlement:
-                _render_final_settlement(settlement)
-            else:
-                st.info(i18n.t("settlement.not_recorded"))
-            _decision_caption(decision, names)
-        else:
-            _render_termination_details(payload)
-        return
-
-    hire = payload.get("new_employee") or {}
-    if status == "approved":
-        manager_id = hire.get("manager_id")
-        salary = [hire.get(k) or 0 for k in ("basic_salary", "housing_allowance", "transport_allowance")]
-        styles.detail_card(
-            [
-                (i18n.t("details.employee_id_created"), item.get("related_request_id")),
-                (i18n.t("staff.department"), f"{hire.get('department_name') or ''} ({hire.get('department_id')})"),
-                (
-                    i18n.t("staff.manager"),
-                    f"{names.get(manager_id) or manager_id} ({manager_id})" if manager_id else None,
-                ),
-                (
-                    i18n.t("details.salary"),
-                    i18n.t(
-                        "details.salary_value",
-                        basic=_money(salary[0]),
-                        housing=_money(salary[1]),
-                        transport=_money(salary[2]),
-                        total=_money(sum(salary)),
-                    ),
-                ),
-            ]
-        )
-        _decision_caption(decision, names)
-    else:
-        _render_new_hire_details(payload)
+    return i18n.t("profile.notice_value", required=required, given=notice.get("days_given"))
 
 
 def _render_final_settlement(settlement: dict) -> None:
@@ -869,20 +762,7 @@ def _render_final_settlement(settlement: dict) -> None:
         "transport_allowance_sar": i18n.t("settlement.transport"),
     }
 
-    required = notice.get("required_days")
-    if required is None:
-        notice_basis = i18n.t("profile.notice_by_agreement")
-    elif required == 0:
-        notice_basis = i18n.t("profile.notice_na")
-    elif notice.get("waived"):
-        notice_basis = i18n.t(
-            "settlement.notice_waived",
-            given=notice.get("days_given"),
-            required=required,
-            note=notice.get("waiver_note") or "—",
-        )
-    else:
-        notice_basis = i18n.t("profile.notice_value", required=required, given=notice.get("days_given"))
+    notice_basis = _notice_basis(notice)
 
     rows = [
         {
@@ -962,8 +842,8 @@ def _render_final_settlement(settlement: dict) -> None:
     st.caption(
         i18n.t(
             "settlement.meta",
-            last_day=settlement.get("termination_date") or "—",
-            deadline=deadline.get("deadline") or "—",
+            last_day=_friendly_when(settlement.get("termination_date")) or "—",
+            deadline=_friendly_when(deadline.get("deadline")) or "—",
             deadline_cite=_cite(deadline),
             articles=", ".join(_cite(a) for a in settlement.get("articles") or []),
         )
@@ -993,6 +873,29 @@ def _staffing_switcher() -> str:
     return current
 
 
+def _render_my_pending_line() -> None:
+    """"Pending: N — open Records": my own submitted hires/terminations still
+    waiting for a decision (GET /records?mine=1)."""
+    try:
+        data = api.raise_for_api(
+            api.request(
+                "GET",
+                "/records",
+                params={"type": "new_hire,termination", "status": "pending", "mine": "true", "page_size": 1},
+            )
+        ) or {}
+    except RuntimeError as exc:
+        st.caption(str(exc))
+        return
+    left, right = st.columns([3, 1])
+    left.markdown(i18n.t("staffing.pending_line", n=int(data.get("total") or 0)))
+    with right, st.container(key="yz_btn_secondary_open_records"):
+        if st.button(i18n.t("staffing.open_records"), key="staff_open_records", use_container_width=True):
+            _preset_records_filters(types=["new_hire", "termination"], status="pending", mine=True)
+            st.session_state["_yz_pending_nav"] = "Records"
+            st.rerun()
+
+
 def page_staffing() -> None:
     st.markdown(
         f"""
@@ -1017,8 +920,660 @@ def page_staffing() -> None:
     else:
         _render_new_hire_form(open_terms)
 
-    st.markdown(f"#### {html.escape(i18n.t('staffing.my_requests'))}")
-    _render_my_staffing_requests()
+    _render_my_pending_line()
+
+
+# ---------------------------------------------------------------------------
+# Records (Phase 4): read-only archive of every request, for HR staff.
+# GET /records (+ /facets, /export, /{proposal_id}); IBANs arrive masked.
+# The Excel / PDF files are rendered here (app/ui/exports.py) so they use
+# the interface language.
+# ---------------------------------------------------------------------------
+
+_RECORD_STATUSES = ("", "pending", "approved", "rejected")
+_REC_FILTER_KEYS = ("rec_types", "rec_status", "rec_dept", "rec_from", "rec_to", "rec_q", "rec_mine")
+
+
+def _preset_records_filters(*, types=None, status="", mine=False) -> None:
+    """Open Records with filters set (called before its widgets exist)."""
+    for key in _REC_FILTER_KEYS + ("rec_page", "rec_open", "rec_xlsx", "rec_pdf"):
+        st.session_state.pop(key, None)
+    st.session_state["rec_types"] = list(types or [])
+    st.session_state["rec_status"] = status
+    st.session_state["rec_mine"] = mine
+
+
+def _record_type_label(action_type: str) -> str:
+    key = f"records.type.{action_type}"
+    label = i18n.t(key)
+    return label if label != key else str(action_type or "—").replace("_", " ").capitalize()
+
+
+def _record_status(record: dict) -> tuple[str, str]:
+    """(pill key, label) — terminations show their separation state."""
+    sep = record.get("separation") or {}
+    if sep.get("state") == "notice":
+        return f"notice_{sep.get('until')}", i18n.t("records.in_notice", date=_friendly_when(sep.get("until")) or "—")
+    if sep.get("state") == "finalized":
+        return "finalized", i18n.t("records.finalized")
+    return str(record.get("status") or ""), ""
+
+
+def _records_params() -> dict:
+    params = {}
+    if st.session_state.get("rec_types"):
+        params["type"] = ",".join(st.session_state["rec_types"])
+    if st.session_state.get("rec_status"):
+        params["status"] = st.session_state["rec_status"]
+    if st.session_state.get("rec_dept"):
+        params["department_id"] = st.session_state["rec_dept"]
+    if st.session_state.get("rec_from"):
+        params["date_from"] = st.session_state["rec_from"].isoformat()
+    if st.session_state.get("rec_to"):
+        params["date_to"] = st.session_state["rec_to"].isoformat()
+    if (st.session_state.get("rec_q") or "").strip():
+        params["q"] = st.session_state["rec_q"].strip()
+    if st.session_state.get("rec_mine"):
+        params["mine"] = "true"
+    return params
+
+
+def _facet_departments(facets: dict) -> dict[str, str]:
+    return {
+        d["department_id"]: _department_label(d["department_id"], d.get("department_name"), d.get("department_name_ar"))
+        for d in facets.get("departments", [])
+    }
+
+
+def _record_department(record: dict) -> str:
+    return _department_label(record.get("department_id"), record.get("department_name"), record.get("department_name_ar"))
+
+
+def _record_status_text(record: dict) -> str:
+    pill_key, pill_label = _record_status(record)
+    if pill_label:
+        return pill_label
+    status = {"pending_approval": "pending"}.get(pill_key, pill_key)
+    return i18n.t(f"records.status_{status}") if status in _RECORD_STATUSES else status
+
+
+def _record_summary(record: dict) -> str:
+    """Localized one-line summary for the exports (dates in UI format)."""
+    payload = record.get("payload") or {}
+    action_type = record.get("action_type")
+    if action_type == "termination":
+        termination_type = payload.get("termination_type")
+        return (
+            f"{i18n.t(f'term.{termination_type}') if termination_type else '—'} · "
+            f"{i18n.t('staff.termination_date')}: {_friendly_when(payload.get('termination_date')) or '—'}"
+        )
+    if action_type == "new_hire":
+        hire = payload.get("new_employee") or {}
+        return f"{hire.get('job_title') or '—'} · {i18n.t('staff.hire_date')}: {_friendly_when(hire.get('hire_date')) or '—'}"
+    if action_type == "leave_request":
+        leave_type = str(payload.get("leave_type") or "").lower()
+        type_label = i18n.t(f"leave.type_{leave_type}")
+        return i18n.t(
+            "records.summary_leave",
+            type=type_label if type_label != f"leave.type_{leave_type}" else leave_type,
+            start=_friendly_when(payload.get("start_date")) or "?",
+            end=_friendly_when(payload.get("end_date")) or "?",
+        )
+    return record.get("summary") or ""
+
+
+def _records_filter_lines(facets: dict) -> list[tuple[str, str]]:
+    """The filters in effect, for the PDF report header."""
+    ss = st.session_state
+    comma = "، " if i18n.is_rtl() else ", "
+    lines = []
+    if ss.get("rec_types"):
+        lines.append((i18n.t("records.f_type"), comma.join(_record_type_label(t) for t in ss["rec_types"])))
+    if ss.get("rec_status"):
+        lines.append((i18n.t("records.f_status"), i18n.t(f"records.status_{ss['rec_status']}")))
+    if ss.get("rec_dept"):
+        lines.append((i18n.t("records.f_department"), _facet_departments(facets).get(ss["rec_dept"], ss["rec_dept"])))
+    if ss.get("rec_from"):
+        lines.append((i18n.t("records.f_from"), _friendly_when(ss["rec_from"].isoformat())))
+    if ss.get("rec_to"):
+        lines.append((i18n.t("records.f_to"), _friendly_when(ss["rec_to"].isoformat())))
+    if (ss.get("rec_q") or "").strip():
+        lines.append((i18n.t("records.f_search"), ss["rec_q"].strip()))
+    if ss.get("rec_mine"):
+        lines.append((i18n.t("records.f_mine"), i18n.t("records.yes")))
+    return lines or [("", i18n.t("records.report_no_filters"))]
+
+
+def _build_records_export(kind: str, params: dict, facets: dict) -> bytes:
+    """GET /records/export (every filtered record, IBANs masked) rendered as
+    .xlsx or the branded PDF report, in the interface language."""
+    data = api.raise_for_api(api.request("GET", "/records/export", params=params, timeout=120.0)) or {}
+    items = data.get("items") or []
+    # (row key, header, PDF width weight — 0 = Excel only)
+    columns = [
+        ("proposal_id", "records.col_id", 16),
+        ("submitted", "records.col_submitted", 22),
+        ("type", "records.col_type", 24),
+        ("employee_id", "records.col_employee_id", 0),
+        ("employee", "records.col_employee", 34),
+        ("department", "records.col_department", 24),
+        ("status", "records.col_status", 24),
+        ("requested_by", "records.col_requested_by", 0),
+        ("decided_by", "records.col_decided_by", 26),
+        ("decided_at", "records.decided_at", 22),
+        ("note", "records.note", 0),
+        ("summary", "records.col_summary", 46),
+    ]
+    rows = []
+    for record in items:
+        subject = record.get("subject_name") or "—"
+        if kind == "pdf" and record.get("subject_id"):
+            subject = f"{subject} ({record['subject_id']})"
+        rows.append(
+            {
+                "proposal_id": record.get("proposal_id"),
+                "submitted": _friendly_when(record.get("submitted_at")),
+                "type": _record_type_label(record.get("action_type")),
+                "employee_id": record.get("subject_id"),
+                "employee": subject,
+                "department": _record_department(record),
+                "status": _record_status_text(record),
+                "requested_by": record.get("requested_by"),
+                "decided_by": record.get("decided_by_name") or record.get("decided_by"),
+                "decided_at": _friendly_when(record.get("decided_at")),
+                "note": record.get("decision_note"),
+                "summary": _record_summary(record),
+            }
+        )
+    rtl = i18n.is_rtl()
+    if kind == "xlsx":
+        return exports.records_xlsx(
+            [i18n.t(label) for _, label, _ in columns],
+            [[row[key] for key, _, _ in columns] for row in rows],
+            rtl=rtl,
+            sheet_title=i18n.t("records.sheet"),
+        )
+    shown = [c for c in columns if c[2]]
+    me = st.session_state.get("me") or {}
+    now = datetime.now()
+    return exports.records_pdf(
+        title=i18n.t("records.report_title"),
+        subtitle=i18n.t("records.report_count", total=len(rows)),
+        filters_title=i18n.t("records.report_filters"),
+        filters=_records_filter_lines(facets),
+        generated=i18n.t(
+            "records.report_generated",
+            at=f"{_friendly_when(now.isoformat())} {now:%H:%M}",
+            by=f"{me.get('full_name') or me.get('username') or '—'}"
+            + (f" ({me['employee_id']})" if me.get("employee_id") else ""),
+        ),
+        headers=[i18n.t(label) for _, label, _ in shown],
+        rows=[[row[key] or "—" for key, _, _ in shown] for row in rows],
+        widths=[w for _, _, w in shown],
+        page_label=i18n.t("records.report_page"),
+        rtl=rtl,
+    )
+
+
+def _settlement_document(record: dict) -> dict:
+    """Localized content of the final settlement PDF, from the settlement
+    frozen at approval (payload.final_settlement) — no recalculation."""
+    payload = record.get("payload") or {}
+    settlement = payload.get("final_settlement") or {}
+    rtl = i18n.is_rtl()
+    sar = i18n.t("settlement.sar")
+
+    def money(value) -> str:
+        return f"{_money(value)} {sar}"
+
+    def pick(en_key: str, ar_key: str) -> str | None:
+        return (record.get(ar_key) if rtl else None) or record.get(en_key)
+
+    service = settlement.get("service") or {}
+    wage = settlement.get("wage_basis") or {}
+    eos = settlement.get("end_of_service") or {}
+    leave = settlement.get("unused_leave") or {}
+    notice = settlement.get("notice") or {}
+    deadline = settlement.get("settlement_deadline") or {}
+    termination_type = settlement.get("termination_type") or payload.get("termination_type")
+    type_label = i18n.t(f"term.{termination_type}") if termination_type else "—"
+    component_labels = {
+        "basic_salary_sar": i18n.t("settlement.basic"),
+        "housing_allowance_sar": i18n.t("settlement.housing"),
+        "transport_allowance_sar": i18n.t("settlement.transport"),
+    }
+    included = wage.get("included") or []
+    wage_pairs = [
+        (component_labels[key], money(value))
+        for key, value in (wage.get("components") or {}).items()
+        if key in included and key in component_labels
+    ]
+    wage_cite = _cite(wage)
+    wage_pairs.append(
+        (i18n.t("settlement.wage_basis"), money(wage.get("monthly_wage")) + (f" — {wage_cite}" if wage_cite else ""))
+    )
+    service_cite = _cite(service)
+    ratio = _ratio_text(eos.get("fraction"))
+    notice_basis = _notice_basis(notice)
+    if notice.get("notice_given_on"):
+        notice_basis += " · " + i18n.t("settlement.doc_notice_given_on", date=_friendly_when(notice["notice_given_on"]))
+    who = record.get("decided_by")
+    articles = ("، " if rtl else ", ").join(_cite(a) for a in settlement.get("articles") or [])
+    return {
+        "company": i18n.t("settlement.doc_company"),
+        "company_sub": i18n.t("settlement.doc_company_sub"),
+        "title": i18n.t("settlement.doc_title"),
+        "ref": i18n.t("settlement.doc_ref", ref=record.get("proposal_id"), date=_friendly_when(date.today().isoformat())),
+        "page_label": i18n.t("settlement.doc_page"),
+        "sections": [
+            {
+                "title": i18n.t("settlement.doc_employee"),
+                "pairs": [
+                    (i18n.t("settlement.doc_name"), pick("subject_name", "subject_name_ar") or payload.get("employee_id")),
+                    (i18n.t("settlement.doc_id"), record.get("subject_id") or payload.get("employee_id")),
+                    (i18n.t("settlement.doc_job"), pick("job_title", "job_title_ar")),
+                    (i18n.t("settlement.doc_department"), _record_department(record)),
+                    (i18n.t("settlement.doc_nationality"), pick("nationality", "nationality_ar")),
+                    (i18n.t("settlement.doc_type"), type_label),
+                ],
+            },
+            {
+                "title": i18n.t("settlement.doc_service"),
+                "pairs": [
+                    (i18n.t("settlement.doc_hire"), _friendly_when(settlement.get("hire_date") or record.get("hire_date"))),
+                    (i18n.t("settlement.doc_last_day"), _friendly_when(settlement.get("termination_date"))),
+                    (
+                        i18n.t("settlement.doc_length"),
+                        i18n.t(
+                            "profile.service_value",
+                            y=service.get("years"), m=service.get("months"), d=service.get("days"),
+                            total=service.get("total_days"),
+                        ) + (f" — {service_cite}" if service_cite else ""),
+                    ),
+                ],
+            },
+            {"title": i18n.t("settlement.doc_wage"), "pairs": wage_pairs},
+        ],
+        "calc": {
+            "title": i18n.t("settlement.doc_calc"),
+            "headers": [
+                i18n.t("settlement.col_item"),
+                i18n.t("settlement.col_basis"),
+                i18n.t("settlement.col_article"),
+                i18n.t("settlement.col_amount"),
+            ],
+            "rows": [
+                [i18n.t("settlement.full_award"), i18n.t("settlement.full_award_basis"),
+                 _cite(eos.get("full_award_law")), _money(eos.get("full_award"))],
+                [i18n.t("settlement.fraction"), type_label, _cite(eos.get("fraction_law")), "× " + ratio],
+                [i18n.t("settlement.doc_eos"),
+                 i18n.t("settlement.doc_eos_formula", full=_money(eos.get("full_award")), fraction=ratio,
+                        amount=_money(eos.get("amount"))),
+                 _cite(eos.get("fraction_law")), _money(eos.get("amount"))],
+                [i18n.t("settlement.doc_leave"),
+                 i18n.t("settlement.leave_basis", days=f"{float(leave.get('days') or 0):g}",
+                        daily=_money(leave.get("daily_wage"))),
+                 _cite(leave), _money(leave.get("amount"))],
+                [i18n.t("settlement.doc_notice"), notice_basis, _cite(notice), _money(notice.get("adjustment"))],
+                [i18n.t("settlement.doc_total"), "", "", _money(settlement.get("total"))],
+            ],
+        },
+        "notes": [
+            i18n.t("settlement.doc_pay_by", date=_friendly_when(deadline.get("deadline")) or "—",
+                   cite=_cite(deadline) or "—"),
+            i18n.t("settlement.doc_articles", articles=articles or "—"),
+            i18n.t("profile.disclaimer"),
+        ],
+        "approval": {
+            "title": i18n.t("settlement.doc_approval"),
+            "pairs": [
+                (i18n.t("settlement.doc_approved_by"), f"{record.get('decided_by_name') or who} ({who})" if who else "—"),
+                (i18n.t("settlement.doc_decided"), _friendly_when(record.get("decided_at")) or "—"),
+            ],
+        },
+        "signatures": {
+            "ack": i18n.t("settlement.doc_ack"),
+            "name": i18n.t("settlement.doc_sign_name"),
+            "signature": i18n.t("settlement.doc_sign_signature"),
+            "date": i18n.t("settlement.doc_sign_date"),
+            "blocks": [i18n.t("settlement.doc_sign_hr"), i18n.t("settlement.doc_sign_employee")],
+        },
+    }
+
+
+def _render_settlement_download(record: dict) -> None:
+    settlement = (record.get("payload") or {}).get("final_settlement") or {}
+    if record.get("status") != "approved" or not settlement or settlement.get("error"):
+        return
+    try:
+        data = exports.settlement_pdf(_settlement_document(record), rtl=i18n.is_rtl())
+    except RuntimeError as exc:  # no Arabic-capable font on this host
+        st.warning(str(exc))
+        return
+    st.download_button(
+        i18n.t("settlement.download"),
+        data=data,
+        file_name=f"settlement_{record.get('proposal_id')}_{i18n.get_lang()}.pdf",
+        mime="application/pdf",
+        key=f"rec_settlement_{record.get('proposal_id')}",
+        type="primary",
+    )
+
+
+def _scroll_to(selector: str) -> None:
+    """Smooth-scroll the Streamlit page to the first element matching
+    `selector`. Streamlit scrolls inside its own container (not always the
+    window), so the script walks up to the nearest scrollable ancestor. The
+    nonce makes the iframe new on every call, so the script runs again
+    even when the target is the same."""
+    nonce = uuid.uuid4().hex
+    script = f"""
+<script>
+/* {nonce} */
+(function () {{
+  const win = window.parent, doc = win.document;
+  function scroller(el) {{
+    for (let node = el.parentElement; node && node !== doc.body; node = node.parentElement) {{
+      const oy = win.getComputedStyle(node).overflowY;
+      if ((oy === "auto" || oy === "scroll") && node.scrollHeight > node.clientHeight + 1) return node;
+    }}
+    return null;
+  }}
+  function go(el) {{
+    const box = scroller(el);
+    if (box) {{
+      const top = el.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop - 16;
+      box.scrollTo({{ top: top, behavior: "smooth" }});
+    }} else {{
+      win.scrollTo({{ top: el.getBoundingClientRect().top + win.scrollY - 16, behavior: "smooth" }});
+    }}
+  }}
+  let tries = 0;
+  function attempt() {{
+    const el = doc.querySelector({json.dumps(selector)});
+    if (!el) {{ if (tries++ < 60) setTimeout(attempt, 50); return; }}
+    go(el);
+    /* Streamlit may still be laying out the page: re-aim once if the
+       target moved. */
+    setTimeout(function () {{
+      const box = scroller(el);
+      const top = el.getBoundingClientRect().top - (box ? box.getBoundingClientRect().top : 0);
+      if (Math.abs(top - 16) > 40) go(el);
+    }}, 900);
+  }}
+  attempt();
+}})();
+</script>
+"""
+    with st.container(key="yz_scroll_js"):
+        components.html(script, height=0)
+
+
+def _render_records_filters(facets: dict) -> None:
+    types = list(dict.fromkeys(
+        [*facets.get("types", []), *st.session_state.get("rec_types", [])]
+    ))
+    departments = _facet_departments(facets)
+    with st.container(key="records_filters"):
+        c1, c2, c3 = st.columns([2, 1, 1])
+        c1.multiselect(
+            i18n.t("records.f_type"), types, key="rec_types", format_func=_record_type_label,
+            placeholder=i18n.t("records.all_types"),
+        )
+        c2.selectbox(
+            i18n.t("records.f_status"), _RECORD_STATUSES, key="rec_status",
+            format_func=lambda v: i18n.t(f"records.status_{v or 'all'}"),
+        )
+        c3.selectbox(
+            i18n.t("records.f_department"), ["", *departments], key="rec_dept",
+            format_func=lambda v: departments.get(v, i18n.t("records.all_departments")) if v else i18n.t("records.all_departments"),
+        )
+        d1, d2, d3 = st.columns([1, 1, 2])
+        d1.date_input(i18n.t("records.f_from"), value=None, format="DD-MM-YYYY", key="rec_from")
+        d2.date_input(i18n.t("records.f_to"), value=None, format="DD-MM-YYYY", key="rec_to")
+        d3.text_input(i18n.t("records.f_search"), key="rec_q", placeholder=i18n.t("records.search_hint"))
+        st.checkbox(i18n.t("records.f_mine"), key="rec_mine")
+
+
+def _render_record_detail(proposal_id: str) -> None:
+    try:
+        record = api.raise_for_api(api.request("GET", f"/records/{proposal_id}")) or {}
+    except RuntimeError as exc:
+        st.error(str(exc))
+        return
+    payload = record.get("payload") or {}
+    action_type = record.get("action_type") or ""
+    subject = record.get("subject_name") or record.get("subject_id") or "—"
+
+    st.markdown('<div id="yz-rec-detail"></div>', unsafe_allow_html=True)
+    top_l, top_m, top_r = st.columns([4, 1.3, 1])
+    with top_m, st.container(key="yz_btn_secondary_rec_back"):
+        if st.button(i18n.t("records.back_to_list"), key="rec_back", use_container_width=True):
+            st.session_state["rec_scroll"] = "#yz-rec-list"
+            st.rerun()
+    with top_l:
+        st.markdown(f"**{html.escape(_record_type_label(action_type))} — {html.escape(str(subject))}**")
+        pill_key, pill_label = _record_status(record)
+        pills = {**styles.status_pills(), "pending_approval": styles.status_pills()["pending"]}
+        if pill_label:
+            pills[pill_key] = (pill_label, "◷" if pill_key.startswith("notice_") else "■", "#E8EEF6", "#2F4A6B")
+        st.markdown(styles.status_pill_html(pill_key, pills), unsafe_allow_html=True)
+    with top_r:
+        if st.button(i18n.t("inbox.close"), key="rec_close", use_container_width=True):
+            st.session_state.pop("rec_open", None)
+            st.session_state["rec_scroll"] = "#yz-rec-list"
+            st.rerun()
+
+    styles.detail_card(
+        [
+            (i18n.t("records.col_id"), record.get("proposal_id")),
+            (i18n.t("records.col_submitted"), _friendly_when(record.get("submitted_at"))),
+            (i18n.t("detail.requested_by"), record.get("requested_by")),
+            (i18n.t("records.col_department"), _record_department(record)),
+        ]
+    )
+
+    st.caption(i18n.t("records.details"))
+    if action_type == "leave_request":
+        _render_leave_proposal_details(payload, f"rec_{proposal_id}")
+    elif action_type == "personal_info_update":
+        styles.detail_card(
+            [
+                (i18n.t("records.field"), str(payload.get("field_name") or "").replace("_", " ").title()),
+                (i18n.t("records.old_value"), payload.get("old_value")),
+                (i18n.t("records.new_value"), payload.get("new_value")),
+            ]
+        )
+    elif action_type == "bank_update":
+        styles.detail_card(
+            [
+                (i18n.t("records.old_value"), payload.get("old_iban")),
+                (i18n.t("records.new_value"), payload.get("new_iban")),
+                (i18n.t("records.bank"), payload.get("new_bank_name") or payload.get("new_bank_code")),
+            ]
+        )
+    elif action_type == "new_hire":
+        if record.get("subject_id"):
+            styles.detail_card([(i18n.t("details.employee_id_created"), record.get("subject_id"))])
+        _render_new_hire_details(payload)
+    elif action_type == "termination":
+        sep = record.get("separation") or {}
+        if sep.get("state") == "notice":
+            st.info(i18n.t("notice.until", date=_friendly_when(sep.get("until")) or "—"))
+        elif sep.get("state") == "finalized":
+            st.caption(i18n.t("notice.finalized", date=_friendly_when(sep.get("at")) or "—"))
+        _render_termination_details(payload)
+        _render_settlement_download(record)
+    else:
+        _render_generic_proposal_details(
+            {k: v for k, v in payload.items() if k not in {"decision", "cover_candidates"}}
+        )
+
+    st.caption(i18n.t("records.decision"))
+    if record.get("status") == "pending_approval":
+        st.write(i18n.t("details.pending"))
+    else:
+        who = record.get("decided_by")
+        styles.detail_card(
+            [
+                (i18n.t("records.col_decided_by"), f"{record.get('decided_by_name') or who} ({who})" if who else i18n.t("records.system")),
+                (i18n.t("records.decided_at"), _friendly_when(record.get("decided_at"))),
+                (i18n.t("records.note"), record.get("decision_note") or i18n.t("details.no_note")),
+            ]
+        )
+
+
+def page_records() -> None:
+    st.markdown(
+        f"""
+        <div class="yz-chat-header">
+          <div class="yz-chat-title">{html.escape(i18n.t("records.title"))}</div>
+          <div class="yz-chat-subtitle">{html.escape(i18n.t("records.subtitle"))}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if not _can_manage_staff():
+        st.error(i18n.t("records.not_allowed"))
+        return
+
+    try:
+        facets = api.raise_for_api(api.request("GET", "/records/facets")) or {}
+    except RuntimeError as exc:
+        st.error(str(exc))
+        return
+    _render_records_filters(facets)
+
+    params = _records_params()
+    signature = json.dumps(params, sort_keys=True)
+    if st.session_state.get("rec_sig") != signature:
+        # New filters: back to page 1, drop the prepared files.
+        st.session_state["rec_sig"] = signature
+        st.session_state["rec_page"] = 1
+        st.session_state.pop("rec_xlsx", None)
+        st.session_state.pop("rec_pdf", None)
+    if st.session_state.get("rec_export_lang") != i18n.get_lang():
+        # Prepared files are in the language they were built in.
+        st.session_state["rec_export_lang"] = i18n.get_lang()
+        st.session_state.pop("rec_xlsx", None)
+        st.session_state.pop("rec_pdf", None)
+    page = st.session_state.get("rec_page", 1)
+
+    try:
+        data = api.raise_for_api(api.request("GET", "/records", params={**params, "page": page})) or {}
+    except RuntimeError as exc:
+        st.error(str(exc))
+        return
+    total, page_size = int(data.get("total") or 0), int(data.get("page_size") or 20)
+    pages = max((total + page_size - 1) // page_size, 1)
+
+    status_styles = {"pending_approval": styles.status_pills()["pending"]}
+    rows = []
+    for record in data.get("items") or []:
+        pill_key, pill_label = _record_status(record)
+        if pill_label:
+            status_styles[pill_key] = (
+                pill_label, "◷" if pill_key.startswith("notice_") else "■", "#E8EEF6", "#2F4A6B"
+            )
+        subject = record.get("subject_name") or "—"
+        if record.get("subject_id"):
+            subject = f"{subject} ({record['subject_id']})"
+        rows.append(
+            {
+                "id": record.get("proposal_id"),
+                "date": _friendly_when(record.get("submitted_at")),
+                "type": _record_type_label(record.get("action_type")),
+                "employee": subject,
+                "department": _record_department(record),
+                "status": pill_key,
+                "decided_by": record.get("decided_by_name") or record.get("decided_by"),
+            }
+        )
+
+    def _open(row: dict) -> None:
+        st.session_state["rec_open"] = row.get("id")
+        st.session_state["rec_scroll"] = "#yz-rec-detail"
+
+    st.markdown('<div id="yz-rec-list"></div>', unsafe_allow_html=True)
+    records_card = st.container(key="records_card")
+    top_l, top_x, top_p = records_card.columns([3, 1, 1])
+    top_l.caption(i18n.t("records.count", total=total, page=page, pages=pages))
+    for col, kind, label, mime in (
+        (top_x, "xlsx", "excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        (top_p, "pdf", "pdf", "application/pdf"),
+    ):
+        with col:
+            prepared = st.session_state.get(f"rec_{kind}")
+            if prepared is None:
+                with st.container(key=f"yz_btn_secondary_rec_{kind}"):
+                    if st.button(i18n.t(f"records.export_{label}"), key=f"rec_prepare_{kind}",
+                                 use_container_width=True, disabled=not total):
+                        try:
+                            st.session_state[f"rec_{kind}"] = _build_records_export(kind, params, facets)
+                        except (RuntimeError, httpx.HTTPError) as exc:
+                            st.session_state["rec_export_error"] = str(exc)
+                        st.rerun()
+            else:
+                st.download_button(
+                    i18n.t(f"records.download_{label}"),
+                    data=prepared,
+                    file_name=f"records_{date.today().isoformat()}.{kind}",
+                    mime=mime,
+                    key=f"rec_download_{kind}",
+                    use_container_width=True,
+                )
+    export_error = st.session_state.pop("rec_export_error", None)
+    if export_error:
+        records_card.error(export_error)
+
+    with records_card:
+        styles.data_table(
+            rows,
+            [
+                ("date", i18n.t("records.col_submitted")),
+                ("type", i18n.t("records.col_type")),
+                ("employee", i18n.t("records.col_employee")),
+                ("department", i18n.t("records.col_department")),
+                ("status", i18n.t("records.col_status")),
+                ("decided_by", i18n.t("records.col_decided_by")),
+            ],
+            status_key="status",
+            status_styles=status_styles,
+            on_view=_open,
+            view_label=i18n.t("staffing.view"),
+            key="records",
+            empty_message=i18n.t("records.empty"),
+        )
+        opened = st.session_state.get("rec_open")
+        selected = next((i for i, row in enumerate(rows) if opened and row["id"] == opened), None)
+        if selected is not None:
+            st.markdown(styles.selected_row_css("records", selected), unsafe_allow_html=True)
+
+    if pages > 1:
+        p1, p2, p3 = st.columns([1, 2, 1])
+        with p1, st.container(key="yz_btn_secondary_rec_prev"):
+            if st.button(i18n.t("records.prev"), key="rec_prev", use_container_width=True, disabled=page <= 1):
+                st.session_state["rec_page"] = page - 1
+                st.rerun()
+        p2.markdown(
+            f'<div style="text-align:center;padding-top:.5rem">{html.escape(i18n.t("records.page", page=page, pages=pages))}</div>',
+            unsafe_allow_html=True,
+        )
+        with p3, st.container(key="yz_btn_secondary_rec_next"):
+            if st.button(i18n.t("records.next"), key="rec_next", use_container_width=True, disabled=page >= pages):
+                st.session_state["rec_page"] = page + 1
+                st.rerun()
+
+    opened = st.session_state.get("rec_open")
+    if opened:
+        st.divider()
+        with st.container(key="records_detail"):
+            _render_record_detail(opened)
+
+    # Set by View (to the details) and by Close / Back to list (to the table).
+    target = st.session_state.pop("rec_scroll", None)
+    if target:
+        _scroll_to(target)
 
 
 def _render_message(message: dict, index: int) -> None:
@@ -1218,21 +1773,8 @@ def page_inbox() -> None:
 
     leave_items = [r for r in pending_approvals if _action_type(r) == "leave_request"]
     other_approval_items = [r for r in pending_approvals if _action_type(r) != "leave_request"]
-    # Decided hires/terminations, newest first — where the approver finds
-    # the saved final settlement after approving.
-    history_items = sorted(
-        (
-            r
-            for r in approvals
-            if (r.get("status") or "").lower() != "pending"
-            and _action_type(r) in {"new_hire", "termination"}
-        ),
-        key=lambda r: str(r.get("decided_at") or ""),
-        reverse=True,
-    )
-
     names = _employee_names(
-        [r.get("employee_id") for r in pending_approvals + history_items]
+        [r.get("employee_id") for r in pending_approvals]
         + [g.get("employee_id") for g in pending_grievances if g.get("identity_visible")]
     )
 
@@ -1277,22 +1819,12 @@ def page_inbox() -> None:
         "grievance": [_grievance_row(g) for g in pending_grievances],
     }
     rows_by_tab["all"] = rows_by_tab["leave"] + rows_by_tab["approval"] + rows_by_tab["grievance"]
-    rows_by_tab["history"] = [
-        {
-            **_approval_row(r),
-            "date": _friendly_when(r.get("decided_at")) or "—",
-            "status": (r.get("status") or "").lower(),
-        }
-        for r in history_items
-    ]
 
     tabs = [("all", i18n.t("inbox.tab_all"))]
     if can_approvals:
         tabs += [("leave", i18n.t("inbox.tab_leave")), ("approval", i18n.t("inbox.tab_approval"))]
     if can_grievances:
         tabs.append(("grievance", i18n.t("inbox.tab_grievance")))
-    if can_approvals:
-        tabs.append(("history", i18n.t("inbox.tab_history")))
 
     tab_full_labels = [f"{label} ({len(rows_by_tab[key])})" for key, label in tabs]
     chosen_full_label = st.radio(
@@ -1327,7 +1859,7 @@ def page_inbox() -> None:
         st.divider()
         if kind == "approval":
             row = next(
-                (r for r in approvals if str(r.get("approval_id") or "") == item_id), None
+                (r for r in pending_approvals if str(r.get("approval_id") or "") == item_id), None
             )
             if row:
                 _render_approval_review(row, names, proposals)
@@ -2000,14 +2532,10 @@ def _risk_label(level: str | None) -> tuple[str, str]:
 
 
 def _friendly_when(raw: str | None) -> str:
+    """"25 Sep 2026" / "25 سبتمبر 2026" (ISO or DD-MM-YYYY input)."""
     if not raw:
         return ""
-    text = str(raw).replace("Z", "+00:00")
-    try:
-        dt = datetime.fromisoformat(text)
-        return dt.strftime("%d %b %Y")
-    except ValueError:
-        return str(raw)[:10]
+    return i18n.format_date(raw) if i18n.parse_date(raw) else str(raw)[:10]
 
 
 def _approval_card_html(row: dict, person: str) -> str:
@@ -2076,8 +2604,8 @@ def _render_proposal_details(item: dict | None) -> None:
 def _render_leave_proposal_details(payload: dict, key_prefix: str) -> None:
     rows = [
         (i18n.t("detail.leave_type"), str(payload.get("leave_type") or "").title()),
-        (i18n.t("detail.start_date"), payload.get("start_date")),
-        (i18n.t("detail.end_date"), payload.get("end_date")),
+        (i18n.t("detail.start_date"), _friendly_when(payload.get("start_date")) or payload.get("start_date")),
+        (i18n.t("detail.end_date"), _friendly_when(payload.get("end_date")) or payload.get("end_date")),
         (i18n.t("detail.days"), payload.get("days")),
         (i18n.t("detail.reason"), payload.get("reason")),
         (i18n.t("detail.suggested_cover"), payload.get("suggested_cover_employee_name")),
@@ -2122,7 +2650,7 @@ def _staffing_label(proposal: dict | None) -> str:
         return (
             f"{i18n.t('staff.terminate_employee')}: {payload.get('employee_id') or '—'} — "
             f"{i18n.t(f'term.{termination_type}') if termination_type else '—'} — "
-            f"{payload.get('termination_date') or '—'}"
+            f"{_friendly_when(payload.get('termination_date')) or '—'}"
         )
     return ""
 
@@ -2133,12 +2661,12 @@ def _render_new_hire_details(payload: dict) -> None:
         [
             (i18n.t("detail.new_employee"), hire.get("full_name")),
             (i18n.t("staff.job_title"), hire.get("job_title")),
-            (i18n.t("staff.department"), f"{hire.get('department_name') or ''} ({hire.get('department_id')})"),
+            (i18n.t("staff.department"), f"{_department_label(hire.get('department_id'), hire.get('department_name'))} ({hire.get('department_id')})"),
             (i18n.t("staff.manager"), hire.get("manager_id")),
             (i18n.t("staff.gender"), hire.get("gender")),
             (i18n.t("staff.nationality"), hire.get("nationality")),
             (i18n.t("staff.employment_type"), hire.get("employment_type")),
-            (i18n.t("staff.hire_date"), hire.get("hire_date")),
+            (i18n.t("staff.hire_date"), _friendly_when(hire.get("hire_date"))),
             (i18n.t("staff.basic_salary"), hire.get("basic_salary")),
             (i18n.t("staff.housing_allowance"), hire.get("housing_allowance")),
             (i18n.t("staff.transport_allowance"), hire.get("transport_allowance")),
@@ -2159,7 +2687,7 @@ def _render_termination_details(payload: dict) -> None:
                 i18n.t("staff.termination_type"),
                 i18n.t(f"term.{termination_type}") if termination_type else None,
             ),
-            (i18n.t("staff.termination_date"), payload.get("termination_date")),
+            (i18n.t("staff.termination_date"), _friendly_when(payload.get("termination_date"))),
             (i18n.t("detail.reason"), payload.get("reason")),
             (
                 i18n.t("profile.notice"),

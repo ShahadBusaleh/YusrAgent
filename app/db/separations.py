@@ -1,11 +1,13 @@
 """Final separation of terminated employees (Phase 4, TEAM.md).
 
-An approved termination whose last working day is in the future leaves the
-employee Active (notice period) with termination_date set. Once that date is
-reached, finalize_due_separations() applies the final status and deactivates
-the login. Called on API startup and daily from app/api/routers/onboarding.py,
-and directly by _sync_termination when the separation applies immediately.
-Never deletes rows.
+termination_date is the LAST WORKING DAY. An approved termination leaves the
+employee Active (notice period) with termination_date set; the day after
+termination_date, finalize_due_separations() applies the final status and
+deactivates the login. Art. 80 and waived notice apply at approval.
+
+finalize_due_separations() runs on API startup and daily from
+app/api/routers/onboarding.py; _sync_termination calls apply_final_separation()
+directly when the separation applies immediately. Never deletes rows.
 """
 
 from __future__ import annotations
@@ -34,12 +36,17 @@ def parse_day(value: str | None) -> date | None:
         return None
 
 
-def is_due(termination_type: str | None, termination_date: str | None, today: date | None = None) -> bool:
-    """Art. 80, or a last working day that is today or earlier, applies now."""
-    if termination_type == "article_80":
+def is_due(
+    termination_type: str | None,
+    termination_date: str | None,
+    today: date | None = None,
+    notice_waived: bool = False,
+) -> bool:
+    """Final now: Art. 80, waived notice, or a last working day already past."""
+    if termination_type == "article_80" or notice_waived:
         return True
     day = parse_day(termination_date)
-    return day is not None and day <= (today or date.today())
+    return day is not None and day < (today or date.today())
 
 
 def apply_final_separation(
@@ -78,9 +85,9 @@ def _approved_termination(conn: sqlite3.Connection, employee_id: str) -> tuple[s
 
 
 def finalize_due_separations(conn: sqlite3.Connection, today: date | None = None) -> list[str]:
-    """Apply the final status to every Active employee whose termination_date
-    has been reached and who has an approved termination. Idempotent. The
-    caller commits. Returns the employee_ids finalized."""
+    """Apply the final status to every Active employee whose last working day
+    (termination_date) is before today and who has an approved termination.
+    Idempotent. The caller commits. Returns the employee_ids finalized."""
     today = today or date.today()
     finalized: list[str] = []
     rows = conn.execute(
@@ -91,7 +98,7 @@ def finalize_due_separations(conn: sqlite3.Connection, today: date | None = None
     ).fetchall()
     for employee_id, termination_date in rows:
         day = parse_day(termination_date)
-        if day is None or day > today:
+        if day is None or day >= today:  # still their last working day, or before it
             continue
         match = _approved_termination(conn, employee_id)
         if match is None:

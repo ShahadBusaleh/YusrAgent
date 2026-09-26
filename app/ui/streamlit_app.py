@@ -34,6 +34,8 @@ styles.inject()
 # (it was already absent from every role in `main` itself — dropped one
 # commit earlier still, by "Remove employees page" (20ffe15) / "Comment
 # out 'Employees' in HR roles" (69fccd5)) — not restored here.
+# Every role ends with My Requests, then Grievances and Records (where the
+# role has them), just above Sign out.
 PAGES_BY_ROLE = {
     "employee": ["Dashboard", "Ask Yusor", "Growth Opportunities", "My Requests"],
     # hr_specialist gets "Approvals" (the "Waiting on you" inbox) too, not
@@ -49,8 +51,9 @@ PAGES_BY_ROLE = {
         "Ask Yusor",
         "Approvals",
         "Onboarding & Offboarding",
-        "Grievances",
         "My Requests",
+        "Grievances",
+        "Records",
     ],
     "hr_manager": [
         "Dashboard",
@@ -59,8 +62,9 @@ PAGES_BY_ROLE = {
         "Onboarding & Offboarding",
         "Team Insights",
         "Payroll",
-        "Grievances",
         "My Requests",
+        "Grievances",
+        "Records",
     ],
     "admin": [
         "Dashboard",
@@ -69,10 +73,11 @@ PAGES_BY_ROLE = {
         "Onboarding & Offboarding",
         "Team Insights",
         "Payroll",
-        "Grievances",
         "Users",
         "Audit log",
         "My Requests",
+        "Grievances",
+        "Records",
     ],
 }
 
@@ -82,6 +87,7 @@ NAV_ICONS = {
     "Dashboard": "dashboard",
     "Ask Yusor": "chat",
     "Approvals": "pending_actions",
+    "Records": "folder_open",
     "Onboarding & Offboarding": "badge",
     "Team Insights": "insights",
     "Payroll": "payments",
@@ -98,6 +104,7 @@ def _nav_labels() -> dict[str, str]:
         "Dashboard": i18n.t("nav.dashboard"),
         "Ask Yusor": i18n.t("nav.ask_yusor"),
         "Approvals": i18n.t("nav.approvals"),
+        "Records": i18n.t("nav.records"),
         "Onboarding & Offboarding": i18n.t("nav.staffing"),
         "Team Insights": i18n.t("nav.team_insights"),
         "Grievances": i18n.t("nav.grievances"),
@@ -632,7 +639,7 @@ def _page_dashboard(me: dict) -> None:
     # Approved termination, still employed: Active + a future last working day.
     until = views.notice_period_until(me.get("employee_id"))
     if until:
-        st.info(i18n.t("notice.until", date=until))
+        st.info(i18n.t("notice.until", date=views._friendly_when(until)))
 
     # ---- Role-scoped real content, per the redesign spec ----
     if role == "employee":
@@ -755,6 +762,8 @@ def _render(page: str) -> None:
         views.page_leave()
     elif page == "Approvals":
         views.page_inbox()
+    elif page == "Records":
+        views.page_records()
     elif page == "Onboarding & Offboarding":
         views.page_staffing()
     elif page == "Team Insights":

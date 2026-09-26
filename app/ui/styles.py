@@ -1016,7 +1016,9 @@ section[data-testid="stSidebar"] .stButton > button:hover {
 /* ---------- Onboarding & Offboarding forms ---------- */
 .st-key-staff_card_hire,
 .st-key-staff_card_term,
-.st-key-staff_requests_card {
+.st-key-records_filters,
+.st-key-records_card,
+.st-key-records_detail {
   background: rgba(255,252,247,0.78);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -1032,12 +1034,32 @@ section[data-testid="stSidebar"] .stButton > button:hover {
    the same inner width the paired inputs in st.columns already get. */
 .st-key-staff_card_hire [data-testid="stElementContainer"],
 .st-key-staff_card_term [data-testid="stElementContainer"],
-.st-key-staff_requests_card [data-testid="stElementContainer"],
+.st-key-records_filters [data-testid="stElementContainer"],
+.st-key-records_card [data-testid="stElementContainer"],
+.st-key-records_detail [data-testid="stElementContainer"],
 .st-key-staff_card_hire [data-testid="stElementContainer"] > *,
 .st-key-staff_card_term [data-testid="stElementContainer"] > *,
-.st-key-staff_requests_card [data-testid="stElementContainer"] > * {
+.st-key-records_filters [data-testid="stElementContainer"] > *,
+.st-key-records_card [data-testid="stElementContainer"] > *,
+.st-key-records_detail [data-testid="stElementContainer"] > * {
   width: 100% !important;
   max-width: 100%;
+}
+
+/* Records is a data page: its cards use the full content width, and a long
+   status pill ("In notice until 26-10-2026") wraps inside its column. */
+.st-key-records_filters,
+.st-key-records_card,
+.st-key-records_detail {
+  max-width: none;
+}
+.st-key-records_card .dt-pill {
+  white-space: normal;
+  line-height: 1.3;
+}
+/* Scroll helper iframe (views._scroll_to): runs its script, takes no space. */
+.st-key-yz_scroll_js {
+  display: none;
 }
 
 /* ---------- Growth Opportunities ---------- */
@@ -2189,6 +2211,18 @@ def data_table(
                 with cols[-1]:
                     if st.button(view_label, key=f"dtviewbtn_{key}_{i}", use_container_width=True):
                         on_view(row)
+
+
+def selected_row_css(table_key: str, index: int) -> str:
+    """<style> that marks row `index` of data_table(key=table_key) as the
+    one whose details are open (bar on the leading edge)."""
+    edge = "-4px" if i18n.is_rtl() else "4px"
+    return (
+        f"<style>.st-key-dtrow_{table_key}_{index} {{"
+        "background: rgba(201,167,143,0.28) !important;"
+        f"box-shadow: inset {edge} 0 0 #462E24;"
+        "}</style>"
+    )
 
 
 # =============================================================

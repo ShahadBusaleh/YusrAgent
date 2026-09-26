@@ -121,27 +121,17 @@ For these two features only, the Feature Owner takes the HR-agent, Manager (appr
 
 | Owner | May edit | Must not |
 |---|---|---|
-| **Phase 4 Feature Owner** | `app/agents/hr_agent.py` (new_hire / termination intents only), new `app/agents/regulation_agent.py`, `app/agents/orchestrator.py` (routing only), `app/agents/consultant_agent.py` (new action_type citations only), `app/db/approvals.py` (new `_sync_new_hire`, `_sync_termination`, `_sync_regulation_update` only; don't change existing `_sync_*`), new `app/db/regulations.py`, `app/ui/**` | rename frozen contract keys, change columns of existing tables, delete rows, rewrite `app/rag/**` (call ingest helpers only) |
+| **Phase 4 Feature Owner** | `app/agents/hr_agent.py` (new_hire / termination intents + read-only helpers only), new `app/agents/regulation_agent.py`, new `app/agents/cv_parser.py`, `app/agents/orchestrator.py` (routing only, plus the one call below), `app/agents/consultant_agent.py` (new action_type citations only), `app/db/approvals.py` (new `_sync_new_hire`, `_sync_termination`, `_sync_regulation_update` only; don't change existing `_sync_*`), new `app/db/regulations.py`, new `app/db/separations.py`, new `app/db/records.py`, new `app/api/routers/onboarding.py`, new `app/api/routers/records.py`, `app/ui/**` | rename frozen contract keys, change columns of existing tables, delete rows, rewrite `app/rag/**` (call ingest helpers only), change `auth.py` |
 
 Rules:
 - Every hire / termination / regulation change is a HIGH-risk proposed_action. No DB write before approval.
-- Data writes after approval are allowed through `_sync_*` (same pattern as `_sync_personal_info_update`). The schema is not changed.
-- Terminations never delete rows. `employment_status` follows the termination type: resignation → `Resigned`, retirement → `Retired`, end_of_contract → `End of Contract`, all others → `Terminated`. Always set `termination_date` and `users.is_active=0`.
-
+- Data writes after approval are allowed through `_sync_*` (same pattern as `_sync_personal_info_update`). Existing table columns are not changed.
+- New tables allowed: `regulation_versions`, `employee_cvs`.
+- `app/api/main.py`: only the import + include lines for the new routers (onboarding, records). No other changes.
+- Terminations never delete rows. `termination_date` is the LAST WORKING DAY. On approval, if termination_date is in the future: keep employment_status='Active' and users.is_active=1, and set termination_date (the UI shows "Notice period until <date>"). The day after termination_date: set the final status (resignation → Resigned, retirement → Retired, end_of_contract → End of Contract, all others → Terminated) and users.is_active=0. Art. 80, or waived notice, applies immediately at approval.
+- The date check lives in `app/db/separations.py` (finalize_due_separations). It runs on API startup and daily from `app/api/routers/onboarding.py`. No change to auth.py.
 - New hires get the same dev/test password as all seeded accounts (`ChangeMe123!`, see DATABASE_SCHEMA.md), hashed with the same function in `app/security/passwords.py`. Demo project only — replace before any real use.
-- New tables allowed: `regulation_versions`.
-
 - Adding new labor-law articles is allowed: new rows in `saudi_labor_law` + new files in `policy_texts/saudi_labor_law/` (same format as existing LAW files), then re-index with the existing ingest helpers. Existing articles are not edited or deleted.
-
 - `app/agents/orchestrator.py` may also get ONE read-only call inside `explain_pending_approval` that adds `brief["termination_profile"]` (computed by a read-only function in `hr_agent.py`). No other orchestrator logic changes.
-
-- CV upload in onboarding is allowed: new module `app/agents/cv_parser.py` (reuses `extract_pdf_text` from growth_plan.py without modifying it), new router `app/api/routers/onboarding.py` (+ one include line in `app/api/main.py`), and a new table `employee_cvs`. The Growth page integration stays with the Growth owner.
-
-- Terminations never delete rows. On approval, if termination_date is in the future, keep
-  employment_status='Active' and users.is_active=1, and set termination_date (the UI shows
-  "Notice period until <date>"). When termination_date is reached, set the final status
-  (resignation → Resigned, retirement → Retired, end_of_contract → End of Contract,
-  all others → Terminated) and users.is_active=0. Art. 80, or a date that is today or
-  earlier, applies immediately.
-- The date check lives in a new app/db/separations.py (finalize_due_separations). It runs on
-  API startup and daily from app/api/routers/onboarding.py. No change to auth.py.
+- CV upload in onboarding: `cv_parser.py` reuses `extract_pdf_text` from growth_plan.py without modifying it. `employee_cvs` is written only after approval. The Growth page integration stays with the Growth owner.
+- Records archive: READ-ONLY queries in `app/db/records.py` on proposed_actions + pending_approvals + employees, served by `app/api/routers/records.py`. No writes, no schema change. HR specialists, HR managers and admins only; everyone else gets 403. Grievances and audit_log are not part of Records. IBANs are masked (last 4 digits).

@@ -1325,7 +1325,9 @@ def get_termination_profile(conn, proposal: dict) -> dict:
     # --- Notice period (Art. 75) and shortfall (Art. 76) ---
     created_at = str(proposal.get("created_at") or "")
     try:
-        notice_date = datetime.fromisoformat(created_at).date()
+        # created_at is UTC; the last working day was set from the server's
+        # local date, so count notice from the same local calendar day.
+        notice_date = datetime.fromisoformat(created_at).astimezone().date()
     except ValueError:
         notice_date = date.today()
     days_given = max((end_date - notice_date).days, 0)

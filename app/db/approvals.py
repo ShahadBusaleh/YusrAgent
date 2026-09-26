@@ -673,9 +673,9 @@ def _sync_termination(
 ) -> None:
     """If an approved proposal is a termination, freeze the final settlement
     into the proposal payload and set termination_date. The employee stays
-    Active with an active login through the notice period; the final status
-    and deactivation happen when termination_date is reached (immediately for
-    Art. 80 or a date that is today or earlier). Never deletes rows, and does
+    Active with an active login through the notice period (termination_date
+    is the last working day); the final status and deactivation happen the
+    day after (immediately for Art. 80, waived notice, or a past date). Never deletes rows, and does
     not reassign direct reports or pending requests. Rejected: only the
     decision is recorded on the proposal."""
     # Lazy import: the settlement comes from the same read-only function the
@@ -705,8 +705,8 @@ def _sync_termination(
 
     termination_type = payload.get("termination_type")
     termination_date = payload.get("termination_date")
-    if is_due(termination_type, termination_date):
-        # Art. 80, or a last working day that is today or earlier: final now.
+    if is_due(termination_type, termination_date, notice_waived=bool(payload.get("notice_waived"))):
+        # Art. 80, waived notice, or a last working day already past: final now.
         apply_final_separation(conn, employee_id, termination_type, termination_date)
         payload["finalized_at"] = decided_at
         conn.execute(
