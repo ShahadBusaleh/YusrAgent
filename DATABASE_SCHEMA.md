@@ -1,8 +1,11 @@
 # Yusor — SQLite Database (agentic_hr.db)
 
 Built from your 11 CSV exports, extending the tables already defined in your
-working-draft schema, plus a login/RBAC layer added afterward. 14 tables total,
-plus 3 seed/placeholder tables added later for Experience Gap Insight (see below).
+working-draft schema, plus a login/RBAC layer added afterward. 14 original tables,
+3 seed/placeholder tables for Experience Gap Insight, and later additive tables for
+payroll/attendance, grievances, Phase 4 (regulations, CVs), growth plans and
+translation caching — 24 tables in total (see "Tables added later" below).
+Existing columns are never changed; new features only add tables.
 ## Authentication & RBAC (added)
 
 - **users** — separate table, linked 1:1 to `employees` via `employee_id`. Kept
@@ -15,7 +18,8 @@ plus 3 seed/placeholder tables added later for Experience Gap Insight (see below
 - **roles** — lookup table: `employee`, `hr_specialist`, `hr_manager`, `admin`, each
   with a description. `users.role` FKs into it.
 
-**Seed data (80 accounts, one per employee):**
+**Seed data (one account per employee — 500 today; the breakdown below is from the
+original 80-employee seed):**
 - `admin` (1) — placeholder pick, `EMP0037` (Engineering Manager) — arbitrary, not
   derived from any "admin" field in the data. Reassign to whoever should actually
   hold this before real use.
@@ -65,7 +69,7 @@ plus 3 seed/placeholder tables added later for Experience Gap Insight (see below
 
 ## New tables (from the extra CSVs, not in the original draft)
 
-- **departments** — small lookup table (8 rows). `employees.department_id` now has a
+- **departments** — small lookup table (12 rows today, `DEP-01` … `DEP-12`). `employees.department_id` now has a
   real FK into it instead of being a free-text field.
 - **personal_info_update_requests** — low-risk field changes (mobile, address, etc.),
   separate from proposed_actions since the CSV already tracks these as their own
@@ -107,6 +111,37 @@ An earlier draft used a per-employee `employee_skills` table with a
 `current_level` (1-5) score; that was replaced by `skill_job_titles` since a
 fabricated per-employee score over synthetic data wasn't adding real signal.
 
+## Tables added later (additive, no existing columns changed)
+
+- **payroll_monthly** — one row per employee per month (`pay_period`), basic,
+  allowances, overtime, gross, GOSI deduction, net pay. Read by the HR Agent
+  and the Payroll page (PDF export).
+- **attendance_leave_monthly** — one row per employee per month: working days,
+  present/absent, leave days by type.
+- **grievances** — `grievance_id, employee_id, identity_visible, complaint,
+  consultant_recommendation, sources (JSON), status, submitted_at, decided_at,
+  decided_by, hr_response`. Written by the Orchestrator after Manager PASS;
+  `employee_id` is kept but hidden from reviewers when `identity_visible = 0`.
+- **regulation_versions** (Phase 4) — every version of a labor-law article or
+  policy text: `version_id, kind, ref_id, version_no, label, text, text_hash,
+  status, source, source_url, fetched_at, change_key, proposal_id, created_at,
+  decided_by, decided_at`. The first run stores the baseline; an approved
+  `regulation_update` adds the new text before the row in `saudi_labor_law` /
+  `company_policies` is updated. Rows are never deleted.
+- **employee_cvs** (Phase 4) — `employee_id, filename, cv_text, uploaded_at,
+  source`. Written only when a `new_hire` proposal is approved. Created on
+  first use.
+- **candidate_growth_plans** — `plan_id, employee_id, department_id, skill_id,
+  cv_filename, cv_text (PII-masked), plan_text, created_at`. LLM growth plans
+  from the Growth Opportunities page.
+- **translation_cache** — `text_hash, target_lang, translated_text,
+  created_at` (key: hash + language). Stores Arabic/English translations of
+  stored free text so each text is translated once. Created on first use.
+
+New `proposed_actions.action_type` values since the original draft:
+`new_hire`, `termination`, `regulation_update` (all high risk, approval
+required). A `regulation_update` has `employee_id` NULL (requester "system").
+
 ## `related_request_id` — not a hard foreign key
 
 `proposed_actions.related_request_id` points to either
@@ -127,33 +162,54 @@ departments
        ├─ leave_requests
        ├─ personal_info_update_requests
        ├─ sensitive_change_requests
+       ├─ payroll_monthly
+       ├─ attendance_leave_monthly
+       ├─ grievances
+       ├─ employee_cvs
+       ├─ candidate_growth_plans ── skill_id → skills
        ├─ proposed_actions
-       │    └─ pending_approvals
+       │    ├─ pending_approvals
+       │    └─ regulation_versions (proposal_id)
        ├─ tasks
        └─ audit_log
+
+saudi_labor_law / company_policies ── regulation_versions (kind + ref_id)
+departments ── department_requirements ── skills ── skill_job_titles
 ```
 
 ## Row counts
 
+Snapshot of the local `agentic_hr.db` on 2026-09-26. Transactional tables
+(requests, approvals, audit, grievances) change as the app is used.
+
 | table | rows |
 |---|---|
-| departments | 8 |
-| employees | 80 |
-| leave_balances | 80 |
-| leave_requests | 125 |
-| proposed_actions | 20 |
-| pending_approvals | 12 |
-| personal_info_update_requests | 18 |
-| sensitive_change_requests | 12 |
-| audit_log | 20 |
+| departments | 12 |
+| employees | 500 |
+| users | 500 (459 employee, 29 hr_specialist, 12 hr_manager — placeholder passwords, see above) |
+| roles | 4 |
+| leave_balances | 500 |
+| leave_requests | 4 |
+| payroll_monthly | 7,774 |
+| attendance_leave_monthly | 7,774 |
+| proposed_actions | 17 |
+| pending_approvals | 17 |
+| personal_info_update_requests | 0 |
+| sensitive_change_requests | 3 |
+| grievances | 7 |
+| audit_log | 198 |
 | company_policies | 27 |
 | saudi_labor_law | 70 |
-| tasks | 0 (empty, ready for the running system) |
-| roles | 4 |
-| users | 80 (seeded, placeholder passwords — see above) |
+| regulation_versions | 245 (baseline article versions) |
 | skills | 72 (seed/placeholder — see above) |
 | department_requirements | 72 (seed/placeholder — see above) |
 | skill_job_titles | 135 (seed/placeholder — see above) |
+| candidate_growth_plans | 0 |
+| employee_cvs, translation_cache | created on first use |
+| tasks | 0 (empty, ready for the running system) |
+
+Note: in this snapshot no account has the `admin` role, so the Users and
+Audit log pages are not reachable until one user is set to `admin`.
 
 ## Example queries
 
@@ -163,7 +219,7 @@ SELECT e.full_name, d.department_name, lb.annual_remaining, lb.sick_remaining
 FROM employees e
 JOIN departments d ON d.department_id = e.department_id
 JOIN leave_balances lb ON lb.employee_id = e.employee_id
-WHERE e.employee_id = 'EMP0001';
+WHERE e.employee_id = 'EMP-0001';
 
 -- Resolve a proposed action's related request (polymorphic join)
 SELECT pa.proposal_id, pa.action_type, pa.status,

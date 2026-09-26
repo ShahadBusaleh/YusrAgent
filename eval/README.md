@@ -61,3 +61,14 @@ Expectations (all optional):
 
 EMP-0002 (Rana Al Harbi, employee): 17 annual days remaining, hired 26-05-2026, June 2026 net pay 5684.82 SAR.
 EMP-0001 is an `hr_manager`.
+
+## Other evaluation tools
+
+| Command | What it does | Needs LLM / Qdrant |
+|---|---|---|
+| `python -m unittest discover -s eval -p "test_*.py" -v` | Offline unit tests (Arabic answers and translation, query expansion, regulations parser, staffing, growth API, supporting modules — see `PHASE1B.md`). Model calls are mocked. | No |
+| `python -m eval.build_ragas_dataset` | Runs the Consultant on `golden/consultant_rag.jsonl` and saves answers + retrieved contexts to `golden/consultant_rag_results.jsonl`. | Yes |
+| `python -m eval.run_ragas` | Scores those results with Ragas: faithfulness, context precision, context recall, answer relevancy → `golden/ragas_results.jsonl`. | Yes |
+| `python -m eval.run_llm_judge` | LLM-as-a-Judge over the latest `results/eval-*.json` (all four agents) → `results/llm-judge-*.json`. Uses the fuller `judge_output` saved by `run_eval.py`. Options: `--input`, `--model`, `--id`. | Yes |
+
+`ragas` is not in `requirements.txt`; install it separately (`pip install ragas`) before running the Ragas scripts. The LLM-based tools use the shared provider quota (Groq: 8k tokens/minute, 200k/day). Prefer `--offline` and the unit tests for day-to-day checks.

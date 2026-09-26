@@ -1,7 +1,22 @@
 # Yusor — HR Multi-Agent Assistant
-Policy-grounded HR assistant: **HR Agent** (SQLite facts) + **Consultant Agent** (RAG over policies) + **Manager Agent** (PASS/FAIL), wired by an **Orchestrator**.
+Bilingual (Arabic / English), policy-grounded HR assistant. An **Orchestrator** routes each request to the **HR Agent** (SQLite facts and proposed actions) and/or the **Consultant Agent** (RAG over Saudi Labor Law, company policies and WPS documents); the **Manager Agent** validates the result (PASS/FAIL) before it reaches the user. Risky actions wait for human approval.
 
-Team work, setup, and **rules for your AI** are in **[TEAM.md](TEAM.md)**. Any AI working in this repo must also follow **[AGENTS.md](AGENTS.md)**.
+- Architecture (components, data flow, diagram): **[ARCHITECTURE.md](ARCHITECTURE.md)**
+- Running it locally: **[RUNNING.md](RUNNING.md)**
+- Database: **[DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)**
+- Evaluation: **[eval/README.md](eval/README.md)**
+- Team rules and frozen agent contracts: **[TEAM.md](TEAM.md)**, **[AGENTS.md](AGENTS.md)**
+
+## Features
+
+- **Ask Yusor** chat in Arabic or English: leave balance, payroll, attendance, profile, policy / labor-law questions with `[Source: ID]` citations.
+- **Self-service requests** through chat: leave, personal-info update, bank/IBAN change, certificate. Each becomes a proposed action for approval.
+- **Approvals** with an AI **Decision Brief** (employee context, historical precedent, policy citation, termination profile).
+- **Grievances** (anonymous or named), reviewed by HR.
+- **Onboarding & Offboarding**: new hire (with CV auto-fill) and termination (notice period, final settlement per Labor Law Art. 74–88).
+- **Regulation Update Agent**: watches laws.boe.gov.sa / hrsd.gov.sa, proposes text updates, four-eyes approval, re-indexes RAG.
+- **Team Insights** (experience gap per department) and **Growth Opportunities** (CV-based growth plans).
+- **Records** archive, **Payroll** PDFs, Excel/PDF exports, **Users** and **Audit log** for admins.
 
 ## Setup
 
@@ -10,7 +25,7 @@ pip install -r requirements.txt
 copy .env.example .env
 ```
 
-Fill `.env`: `QDRANT_URL`, `QDRANT_API_KEY`, `LLM_API_KEY` (and optional `LLM_BASE_URL` / `LLM_MODEL`). Never commit `.env`.
+Fill `.env`: `QDRANT_URL`, `QDRANT_API_KEY`, and `LLM_API_KEY` (or `LLM_API_KEYS="k1,k2"` to rotate several keys), plus `LLM_BASE_URL` / `LLM_MODEL` from the **same** provider. Never commit `.env`.
 
 ## RAG (already built — do not redo)
 
@@ -20,7 +35,7 @@ python -m app.rag.retrieve "What is the minimum annual leave per year?"
 python -m app.rag.generate "What is the minimum annual leave per year?"
 ```
 
-Ingest once (or after policy files change). Expected retrieve hit for that question: `LAW037`.
+Ingest once, or after files under `policy_texts/` change. Expected retrieve hit for that question: `LAW037`. Retrieval is hybrid: query expansion → Qdrant vectors + BM25 keywords → Reciprocal Rank Fusion.
 
 ## Run the app
 
@@ -29,10 +44,10 @@ uvicorn app.api.main:app --reload
 streamlit run app/ui/streamlit_app.py
 ```
 
-`POST /agent/query` calls `OrchestratorAgent` (stub until Member 4 implements it).
+`POST /agent/query` calls `OrchestratorAgent.run`. Details and troubleshooting in [RUNNING.md](RUNNING.md).
 
 ## What not to do
 
-- Do not redesign the database (`DATABASE_SCHEMA.md` is final).
-- Do not implement a fifth “RAG agent.” RAG is infrastructure; Consultant uses it.
-- Do not edit another member’s agent file. See `TEAM.md`.
+- Do not change columns of existing tables. New tables only (see `DATABASE_SCHEMA.md`).
+- Do not implement a separate "RAG agent". RAG is infrastructure; the Consultant uses it.
+- Do not rename the frozen agent contract keys in `TEAM.md`.
