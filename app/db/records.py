@@ -79,6 +79,15 @@ def _summary(action_type: str, payload: dict) -> str:
     if action_type == "new_hire":
         hire = payload.get("new_employee") or {}
         return f"{hire.get('job_title') or ''}, starting {hire.get('hire_date') or '?'}".strip(", ")
+    if action_type == "regulation_update":
+        policies = payload.get("policies") or []
+        conflicts = sum(1 for p in policies if p.get("status") == "conflict")
+        review = sum(1 for p in policies if p.get("status") == "needs_review")
+        return (
+            ("[SIMULATED] " if payload.get("simulated") else "")
+            + f"Labor Law Art. {payload.get('article_no')} {payload.get('change_kind') or ''} · "
+            f"{conflicts} conflict(s), {review} to review"
+        )
     if action_type == "termination":
         return (
             f"{str(payload.get('termination_type') or '').replace('_', ' ')}, "
@@ -115,6 +124,15 @@ def _build(row: sqlite3.Row, departments: dict[str, tuple[str, str | None]]) -> 
         department_name_ar = dep_ar
         subject_name_ar, job_title_ar, nationality_ar = None, None, None
         job_title, nationality, hire_date = hire.get("job_title"), hire.get("nationality"), hire.get("hire_date")
+
+    if action_type == "regulation_update":
+        # Requested by the system; the subject is the Labor Law article.
+        subject_id = f"Art. {payload.get('article_no')}"
+        subject_name = payload.get("article_label")
+        subject_name_ar = payload.get("article_label")
+        department_id = department_name = department_name_ar = None
+        job_title = job_title_ar = nationality = nationality_ar = hire_date = None
+        requested_by = "system"
 
     separation = None
     if action_type == "termination" and row["status"] == "approved":

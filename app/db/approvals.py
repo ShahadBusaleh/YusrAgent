@@ -184,6 +184,7 @@ def decide_approval(
         )
         _sync_new_hire(conn, proposal_id, status=status, decided_at=now, decided_by=decided_by)
         _sync_termination(conn, proposal_id, status=status, decided_at=now, decided_by=decided_by)
+        _sync_regulation_update(conn, proposal_id, status=status, decided_at=now, decided_by=decided_by)
     return get_approval(conn, approval_id)
 
 
@@ -725,3 +726,28 @@ def _sync_termination(
         "UPDATE proposed_actions SET related_request_id = ? WHERE proposal_id = ?",
         (employee_id, proposal_id),
     )
+
+
+def _sync_regulation_update(
+    conn: sqlite3.Connection,
+    proposal_id: str,
+    *,
+    status: str,
+    decided_at: str,
+    decided_by: str | None,
+) -> None:
+    """If the proposal is a regulation_update: on approval save old/new
+    versions in regulation_versions and update the affected saudi_labor_law
+    and company_policies text (re-indexing runs after commit, see
+    regulation_agent.reindex_pending); otherwise record the decision only.
+    Raises (and so rolls the decision back) if the approver edited the text
+    (four-eyes) or simulated data would touch the real DB / collection."""
+    from app.db.regulations import apply_regulation_decision, save_payload
+
+    proposal = get_proposed_action(conn, proposal_id)
+    if not proposal or proposal.get("action_type") != "regulation_update":
+        return
+    payload = apply_regulation_decision(
+        conn, proposal, status=status, decided_at=decided_at, decided_by=decided_by
+    )
+    save_payload(conn, proposal_id, payload)

@@ -18,6 +18,7 @@ from app.api.routers import (
     payroll,
     proposed_actions,
     records,
+    regulations,
     users,
 )
 
@@ -62,3 +63,4 @@ app.include_router(agent.router)
 app.include_router(payroll.router)
 app.include_router(onboarding.router)
 app.include_router(records.router)
+app.include_router(regulations.router)

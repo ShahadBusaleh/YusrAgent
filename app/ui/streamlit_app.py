@@ -35,7 +35,8 @@ styles.inject()
 # commit earlier still, by "Remove employees page" (20ffe15) / "Comment
 # out 'Employees' in HR roles" (69fccd5)) — not restored here.
 # Every role ends with My Requests, then Grievances and Records (where the
-# role has them), just above Sign out.
+# role has them), just above Sign out; Regulations sits right before My
+# Requests for hr_manager and admin.
 PAGES_BY_ROLE = {
     "employee": ["Dashboard", "Ask Yusor", "Growth Opportunities", "My Requests"],
     # hr_specialist gets "Approvals" (the "Waiting on you" inbox) too, not
@@ -62,6 +63,7 @@ PAGES_BY_ROLE = {
         "Onboarding & Offboarding",
         "Team Insights",
         "Payroll",
+        "Regulations",
         "My Requests",
         "Grievances",
         "Records",
@@ -75,6 +77,7 @@ PAGES_BY_ROLE = {
         "Payroll",
         "Users",
         "Audit log",
+        "Regulations",
         "My Requests",
         "Grievances",
         "Records",
@@ -88,6 +91,7 @@ NAV_ICONS = {
     "Ask Yusor": "chat",
     "Approvals": "pending_actions",
     "Records": "folder_open",
+    "Regulations": "gavel",
     "Onboarding & Offboarding": "badge",
     "Team Insights": "insights",
     "Payroll": "payments",
@@ -105,6 +109,7 @@ def _nav_labels() -> dict[str, str]:
         "Ask Yusor": i18n.t("nav.ask_yusor"),
         "Approvals": i18n.t("nav.approvals"),
         "Records": i18n.t("nav.records"),
+        "Regulations": i18n.t("nav.regulations"),
         "Onboarding & Offboarding": i18n.t("nav.staffing"),
         "Team Insights": i18n.t("nav.team_insights"),
         "Grievances": i18n.t("nav.grievances"),
@@ -163,6 +168,7 @@ def _pending_decisions_count(token: str) -> int:
     count += sum(
         1 for g in grievances if str(g.get("status") or "").upper() == "PENDING_HR_REVIEW"
     )
+    count += _pending_regulation_count()
     return count
 
 
@@ -606,7 +612,16 @@ def _pending_approvals_only_count(token: str) -> int:
         return 0
     if not isinstance(approvals, list):
         return 0
-    return sum(1 for r in approvals if str(r.get("status") or "").lower() == "pending")
+    return sum(1 for r in approvals if str(r.get("status") or "").lower() == "pending") + _pending_regulation_count()
+
+
+def _pending_regulation_count() -> int:
+    """System-requested regulation updates, which /approvals doesn't list."""
+    try:
+        rows = api.raise_for_api(api.request("GET", "/regulations/pending")) or []
+    except RuntimeError:
+        return 0
+    return len(rows) if isinstance(rows, list) else 0
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -764,6 +779,8 @@ def _render(page: str) -> None:
         views.page_inbox()
     elif page == "Records":
         views.page_records()
+    elif page == "Regulations":
+        views.page_regulations()
     elif page == "Onboarding & Offboarding":
         views.page_staffing()
     elif page == "Team Insights":

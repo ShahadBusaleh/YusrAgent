@@ -1057,6 +1057,48 @@ section[data-testid="stSidebar"] .stButton > button:hover {
   white-space: normal;
   line-height: 1.3;
 }
+/* ---------- Regulation updates (regulations_view.py) ---------- */
+.rg-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--yz-muted);
+  margin: .35rem 0 .2rem;
+}
+.rg-ar, .rg-en {
+  background: rgba(255,252,247,0.9);
+  border: 1px solid #E7DFD5;
+  border-radius: 10px;
+  padding: .6rem .8rem;
+  line-height: 1.9;
+  font-size: 15px;
+  color: #1D1512;
+  white-space: pre-wrap;
+}
+.rg-ar { direction: rtl; text-align: right; font-family: "Noto Naskh Arabic", "Segoe UI", Tahoma, sans-serif; }
+.rg-en { direction: ltr; text-align: left; line-height: 1.55; font-size: 14.5px; }
+.rg-small { font-size: 13.5px; line-height: 1.75; margin-bottom: .3rem; }
+.rg-del { background: #F6DCD6; color: #8A2E1F; text-decoration: line-through; border-radius: 3px; }
+.rg-ins { background: #DDEDD5; color: #28501C; border-radius: 3px; font-weight: 600; }
+.rg-sim-badge {
+  display: inline-block;
+  background: #7A4E12;
+  color: #FFFFFF;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  padding: .12rem .55rem;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+.rg-cites { margin: .2rem 0 .6rem; padding-inline-start: 1.2rem; font-size: 14px; }
+.rg-alert { font-size: 14px; padding: .25rem 0; border-bottom: 1px solid #ECE3D7; }
+/* The proposed law-row / policy texts are English: keep them LTR in the Arabic UI. */
+[class*="st-key-rg_lawrow_"] textarea,
+[class*="st-key-rg_policy_"] textarea {
+  direction: ltr;
+  text-align: left;
+}
+
 /* Scroll helper iframe (views._scroll_to): runs its script, takes no space. */
 .st-key-yz_scroll_js {
   display: none;

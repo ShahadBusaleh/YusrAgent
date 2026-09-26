@@ -1,0 +1,12 @@
+{
+  "simulated": true,
+  "label": "SIMULATED AMENDMENT — fictional, NOT real law. Created to demonstrate a policy conflict: Ramadan hours for Muslim workers reduced from 6 h/day (36 h/week) to 5 h/day (30 h/week).",
+  "source_url": "simulated://labor-law/amendment-ramadan-hours",
+  "changes": [
+    {
+      "number": 98,
+      "label": "المادة الثامنة والتسعون",
+      "text": "لا يجوز تشغيل العامل تشغيلًا فعليًّا أكثر من ثماني ساعات في اليوم الواحد، إذا اعتمد صاحب العمل المعيار اليومي، أو أكثر من ثمان وأربعين ساعة في الأسبوع، إذا اعتمد المعيار الأسبوعي. وتخفض ساعات العمل الفعلية خلال شهر رمضان للمسلمين، بحيث لا تزيد على خمس ساعات في اليوم، أو ثلاثين ساعة في الأسبوع."
+    }
+  ]
+}

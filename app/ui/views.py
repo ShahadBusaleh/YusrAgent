@@ -1010,6 +1010,10 @@ def _record_summary(record: dict) -> str:
     if action_type == "new_hire":
         hire = payload.get("new_employee") or {}
         return f"{hire.get('job_title') or '—'} · {i18n.t('staff.hire_date')}: {_friendly_when(hire.get('hire_date')) or '—'}"
+    if action_type == "regulation_update":
+        from app.ui import regulations_view
+
+        return regulations_view.summary_line(payload)
     if action_type == "leave_request":
         leave_type = str(payload.get("leave_type") or "").lower()
         type_label = i18n.t(f"leave.type_{leave_type}")
@@ -1078,7 +1082,7 @@ def _build_records_export(kind: str, params: dict, facets: dict) -> bytes:
                 "employee": subject,
                 "department": _record_department(record),
                 "status": _record_status_text(record),
-                "requested_by": record.get("requested_by"),
+                "requested_by": i18n.t("reg.system") if record.get("requested_by") == "system" else record.get("requested_by"),
                 "decided_by": record.get("decided_by_name") or record.get("decided_by"),
                 "decided_at": _friendly_when(record.get("decided_at")),
                 "note": record.get("decision_note"),
@@ -1368,7 +1372,8 @@ def _render_record_detail(proposal_id: str) -> None:
         [
             (i18n.t("records.col_id"), record.get("proposal_id")),
             (i18n.t("records.col_submitted"), _friendly_when(record.get("submitted_at"))),
-            (i18n.t("detail.requested_by"), record.get("requested_by")),
+            (i18n.t("detail.requested_by"),
+             i18n.t("reg.system") if record.get("requested_by") == "system" else record.get("requested_by")),
             (i18n.t("records.col_department"), _record_department(record)),
         ]
     )
@@ -1396,6 +1401,10 @@ def _render_record_detail(proposal_id: str) -> None:
         if record.get("subject_id"):
             styles.detail_card([(i18n.t("details.employee_id_created"), record.get("subject_id"))])
         _render_new_hire_details(payload)
+    elif action_type == "regulation_update":
+        from app.ui import regulations_view
+
+        regulations_view.render_record_details(record)
     elif action_type == "termination":
         sep = record.get("separation") or {}
         if sep.get("state") == "notice":
@@ -1739,6 +1748,9 @@ def page_inbox() -> None:
         """,
         unsafe_allow_html=True,
     )
+    from app.ui import regulations_view
+
+    regulations_view.show_flash()
 
     pending_approvals: list[dict] = []
     approvals: list[dict] = []
@@ -1753,6 +1765,12 @@ def page_inbox() -> None:
             approvals = []
         pending_approvals = [r for r in approvals if (r.get("status") or "").lower() == "pending"]
         proposals = _proposal_map()
+        # System-requested regulation updates (not returned by /approvals).
+        known = {r.get("approval_id") for r in pending_approvals}
+        for item in regulations_view.pending_requests():
+            proposals[item["proposal_id"]] = item["proposal"]
+            if item.get("approval_id") not in known:
+                pending_approvals.append(item)
 
     pending_grievances: list[dict] = []
     if can_grievances:
@@ -1790,6 +1808,20 @@ def page_inbox() -> None:
         }
 
     def _approval_row(r: dict) -> dict:
+        proposal = proposals.get(r.get("proposal_id")) or {}
+        if proposal.get("action_type") == "regulation_update":
+            from app.ui import regulations_view
+
+            payload = proposal.get("payload_json") if isinstance(proposal.get("payload_json"), dict) else {}
+            return {
+                "_kind": "approval",
+                "_id": str(r.get("approval_id") or ""),
+                "type": styles.type_badge_html("approval", i18n.t("records.type.regulation_update")),
+                "employee": i18n.t("reg.system"),
+                "request": regulations_view.request_label(payload),
+                "date": _friendly_when(r.get("created_at")) or "—",
+                "status": (r.get("status") or "pending").lower(),
+            }
         return {
             "_kind": "approval",
             "_id": str(r.get("approval_id") or ""),
@@ -1872,6 +1904,12 @@ def page_inbox() -> None:
 
 
 def _render_approval_review(row: dict, names: dict, proposals: dict) -> None:
+    proposal = proposals.get(row.get("proposal_id")) or {}
+    if proposal.get("action_type") == "regulation_update":
+        from app.ui import regulations_view
+
+        regulations_view.render_review(row, proposal)
+        return
     approval_id = str(row.get("approval_id") or "")
     employee_id = str(row.get("employee_id") or "")
     person = names.get(employee_id) or employee_id or "—"
@@ -2983,3 +3021,10 @@ def page_growth_opportunities() -> None:
                 else:
                     st.rerun()
         st.write("")
+
+
+def page_regulations() -> None:
+    """Regulations page (Phase 4): app/ui/regulations_view.py."""
+    from app.ui import regulations_view
+
+    regulations_view.page()
