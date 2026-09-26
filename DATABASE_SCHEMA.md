@@ -186,7 +186,7 @@ Snapshot of the local `agentic_hr.db` on 2026-09-26. Transactional tables
 |---|---|
 | departments | 12 |
 | employees | 500 |
-| users | 500 (459 employee, 29 hr_specialist, 12 hr_manager — placeholder passwords, see above) |
+| users | 500 (1 admin, 458 employee, 29 hr_specialist, 12 hr_manager — placeholder passwords, see above) |
 | roles | 4 |
 | leave_balances | 500 |
 | leave_requests | 4 |
@@ -208,8 +208,10 @@ Snapshot of the local `agentic_hr.db` on 2026-09-26. Transactional tables
 | employee_cvs, translation_cache | created on first use |
 | tasks | 0 (empty, ready for the running system) |
 
-Note: in this snapshot no account has the `admin` role, so the Users and
-Audit log pages are not reachable until one user is set to `admin`.
+**Current admin:** Sara Al Ghamdi (`EMP-0048`, Operations Manager). She replaces
+the original `EMP0037` placeholder described above. `agentic_hr.db` is a local
+file, so any copy made before this change has no admin until the role is set
+(Users page, or `UPDATE users SET role = 'admin' WHERE employee_id = 'EMP-0048'`).
 
 ## Example queries
 
