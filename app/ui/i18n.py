@@ -247,6 +247,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "chat.show_identity": "👤 Show my identity",
         "chat.source_excerpts": "Source excerpts",
         "chat.placeholder": "Ask Yusor anything... | اسأل يُسر",
+        "chat.send": "Send",
         "sugg.request_leave.label": "Request annual leave",
         "sugg.request_leave.query": (
             "I want to take annual leave from {start} to {end}, can you find "
@@ -874,6 +875,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "chat.show_identity": "👤 إظهار هويتي",
         "chat.source_excerpts": "مقتطفات المصدر",
         "chat.placeholder": "اسأل يُسر أي شيء... | Ask Yusor anything",
+        "chat.send": "إرسال",
         "sugg.request_leave.label": "طلب إجازة سنوية",
         "sugg.request_leave.query": "أريد أخذ إجازة سنوية من {start} إلى {end}، هل يمكنك إيجاد من يغطّي عني؟",
         "sugg.check_balance.label": "التحقق من رصيد إجازتي",

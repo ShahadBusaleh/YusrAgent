@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import time
+import unicodedata
 from typing import Literal
 
 RiskLevel = Literal["low", "medium", "high"]
@@ -141,6 +142,45 @@ def sanitize_input(text: str) -> str:
     return cleaned[:4000]
 
 
+_ARABIC_LETTER_RE = re.compile(r"[؀-ۿݐ-ݿ]")
+_CITATION_TAG_RE = re.compile(r"\[\s*source\s*:[^\]]*\]", re.IGNORECASE)
+_LIST_MARKER_RE = re.compile(r"^\s*\d+[.)]\s", re.MULTILINE)
+_NUMBER_WORDS = {
+    word: value
+    for value, word in enumerate(
+        "zero one two three four five six seven eight nine ten eleven twelve".split()
+    )
+}
+_NUMBER_WORDS.update({
+    "fifteen": 15, "twenty": 20, "thirty": 30, "forty": 40, "sixty": 60, "ninety": 90,
+    "hundred": 100, "half": 0.5,
+})
+
+
+def _is_mostly_arabic(text: str) -> bool:
+    letters = re.findall(r"[^\W\d_]", text)
+    return bool(letters) and len(_ARABIC_LETTER_RE.findall(text)) / len(letters) > 0.3
+
+
+def _arabic_answer_grounded(response: str, blob: str) -> bool:
+    """English word overlap can't measure an Arabic answer (the Consultant
+    writes Arabic directly for Arabic readers), so it is held to citations
+    and numbers instead: at least one [Source: ID] tag, and every number it
+    states (days, articles, percentages) appears in the retrieved text."""
+    if not _CITATION_TAG_RE.search(response):
+        return False
+    body = _CITATION_TAG_RE.sub(" ", response)
+    body = "".join(str(unicodedata.decimal(c)) if c.isdecimal() else c for c in body)
+    # Markdown list markers ("1. ", "2) ") are layout, not stated facts.
+    body = _LIST_MARKER_RE.sub(" ", body)
+    source_numbers = set(re.findall(r"\d+(?:\.\d+)?", blob))
+    # Sources often spell numbers out ("five consecutive years").
+    source_numbers.update(
+        str(value) for word, value in _NUMBER_WORDS.items() if re.search(rf"\b{word}\b", blob)
+    )
+    return all(n in source_numbers for n in re.findall(r"\d+(?:\.\d+)?", body))
+
+
 def validate_output(response: str, sources: list) -> bool:
     """Groundedness check: non-empty sources and lexical overlap with the answer."""
     if not response or not str(response).strip():
@@ -156,7 +196,9 @@ def validate_output(response: str, sources: list) -> bool:
     blob = " ".join(blob_parts).lower()
     if not blob.strip():
         return False
-    tokens = [t for t in re.findall(r"[a-zA-Z0-9_]{4,}", str(response).lower())]
+    if _is_mostly_arabic(str(response)):
+        return _arabic_answer_grounded(str(response), blob)
+    tokens =[t for t in re.findall(r"[a-zA-Z0-9_]{4,}", str(response).lower())]
     if not tokens:
         return True
     overlap = sum(1 for t in tokens if t in blob)

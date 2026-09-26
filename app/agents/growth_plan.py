@@ -15,6 +15,7 @@ import unicodedata
 from openai import OpenAI
 from pypdf import PdfReader
 
+from app.agents.arabic_text import glossary_instruction
 from app.config import get_settings
 from app.llm import llm_client
 
@@ -167,7 +168,7 @@ _LANGUAGE_INSTRUCTION = {
         "\nWrite the text of strengths, gaps and next_steps in Modern "
         "Standard Arabic. Keep the JSON keys and the status value in "
         "English. Keep course, certification and tool names in their "
-        "original form."
+        "original form." + glossary_instruction()
     ),
 }
 

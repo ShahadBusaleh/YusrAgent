@@ -21,6 +21,7 @@ from uuid import uuid4
 
 from openai import OpenAI
 
+from app.agents.arabic_text import glossary_instruction, strip_citation_tags
 from app.config import fast_llm_options, get_settings
 from app.llm import llm_client
 
@@ -132,7 +133,7 @@ def translate_to_english(text: str) -> str:
         "assistant request. Preserve names, dates (keep YYYY-MM-DD "
         "format if present), numbers, IBANs, phone numbers, and email "
         "addresses exactly as written. Return ONLY the translated text, "
-        "no notes, no quotes, no explanation.",
+        "no notes, no quotes, no explanation." + glossary_instruction("en"),
     )
 
 
@@ -148,8 +149,10 @@ _DOCUMENT_PROMPT = (
     "identifiers exactly as written. Return ONLY the translation."
 )
 _DOCUMENT_PROMPTS = {
-    "ar": _DOCUMENT_PROMPT.format(source="English", target="Modern Standard Arabic"),
-    "en": _DOCUMENT_PROMPT.format(source="Arabic", target="English"),
+    "ar": _DOCUMENT_PROMPT.format(source="English", target="Modern Standard Arabic")
+    + glossary_instruction("ar"),
+    "en": _DOCUMENT_PROMPT.format(source="Arabic", target="English")
+    + glossary_instruction("en"),
 }
 
 _CACHE_MAX = 512
@@ -303,10 +306,15 @@ def translate_to_arabic(text: str) -> str:
     Used only on the outgoing `response` string, after the existing
     English-only pipeline (HR/Consultant/Manager) has already produced
     and validated it.
+
+    [Source: ID] tags are removed first: the prompt says not to reproduce
+    them, but _translate protects bracketed text and falls back to the
+    English original when a protected tag goes missing, so a cited answer
+    used to come back untranslated.
     """
 
     return _translate(
-        text,
+        strip_citation_tags(text),
         "Translate the following HR assistant response into Modern "
         "Standard Arabic. Preserve Article numbers, dates, proposal/approval "
         "IDs, and bracketed PII placeholders such as [IBAN], [EMAIL], "
@@ -314,5 +322,5 @@ def translate_to_arabic(text: str) -> str:
         "Do not preserve or reproduce Law IDs, internal source IDs, "
         "record IDs, filenames, or [Source: ID] citation tags. "
         "Use human-readable source names only. Return ONLY the translated "
-        "text, no notes, no quotes, no explanation.",
+        "text, no notes, no quotes, no explanation." + glossary_instruction(),
     )

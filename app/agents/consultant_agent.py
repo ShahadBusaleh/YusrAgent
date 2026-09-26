@@ -1,12 +1,14 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 from typing import Any
 
 from openai import OpenAI
 
+from app.agents.arabic_text import glossary_instruction
 from app.agents.base import BaseAgent
 from app.config import get_settings
 from app.rag.retrieve import retrieve
@@ -22,6 +24,8 @@ from app.security.governance import (
 # =========================================================
 # CONSTANTS
 # =========================================================
+
+logger = logging.getLogger(__name__)
 
 SUCCESS = "SUCCESS"
 FAILED = "FAILED"
@@ -771,11 +775,14 @@ def _generate_consultant_recommendation(
     query: str,
     chunks: list[dict],
     is_grievance: bool = False,
+    lang: str = "en",
 ) -> str:
     """
     Generate a policy-only Consultant response.
 
     HR data is intentionally NOT passed to this function.
+    lang="ar" writes the answer in Arabic directly (the evidence and the
+    question stay English) instead of translating it afterwards.
     """
 
     settings = get_settings()
@@ -883,6 +890,14 @@ Include citations using the exact format [Source: ID].
 Citations must refer only to the retrieved policy evidence.
 """.strip()
 
+    if lang == "ar":
+        system_prompt += (
+            "\n\nWrite the whole answer in Modern Standard Arabic. Keep every "
+            "[Source: ID] citation exactly as written, in English. Write "
+            "numbers as digits exactly as they appear in the evidence."
+            + glossary_instruction()
+        )
+
     response = client.chat.completions.create(
         model=settings.llm_model,
         messages=[
@@ -914,6 +929,41 @@ Citations must refer only to the retrieved policy evidence.
     return _safe_text(
         _normalize_citations(recommendation)
     )
+
+def _generate_for_reader(
+    query: str,
+    chunks: list[dict],
+    is_grievance: bool,
+    lang: str,
+) -> tuple[str, str]:
+    """(recommendation, language). An Arabic answer that fails the
+    groundedness checks falls back to the English answer, which the
+    Orchestrator then translates as before."""
+
+    if lang == "ar":
+        validation_sources = [
+            {"id": chunk.get("id"), "text": chunk.get("text", "")}
+            for chunk in chunks
+        ]
+        try:
+            arabic = _generate_consultant_recommendation(
+                query=query, chunks=chunks, is_grievance=is_grievance, lang="ar"
+            )
+            if validate_output(arabic, validation_sources) and verify_citations(
+                arabic, validation_sources
+            ):
+                return arabic, "ar"
+            logger.info("Arabic Consultant answer not grounded; using English")
+        except Exception:
+            logger.warning("Arabic Consultant answer failed; using English", exc_info=True)
+
+    return (
+        _generate_consultant_recommendation(
+            query=query, chunks=chunks, is_grievance=is_grievance
+        ),
+        "en",
+    )
+
 
 # =========================================================
 # CONSULTANT AGENT
@@ -970,6 +1020,7 @@ class ConsultantAgent(BaseAgent):
         ).strip().upper()
 
         is_grievance = intent == "GRIEVANCE"
+        lang = "ar" if input.get("lang") == "ar" and not is_grievance else "en"
 
         # Second call shape: {"action_type": "bank_update"} looks up the
         # policy/law citation for that action instead of a free-text
@@ -1367,12 +1418,11 @@ class ConsultantAgent(BaseAgent):
 
         try:
 
-            recommendation = (
-                _generate_consultant_recommendation(
-                    query=query,
-                    chunks=relevant_chunks,
-                    is_grievance=is_grievance,
-                )
+            recommendation, language = _generate_for_reader(
+                query=query,
+                chunks=relevant_chunks,
+                is_grievance=is_grievance,
+                lang=lang,
             )
 
         except Exception as exc:
@@ -1538,6 +1588,10 @@ class ConsultantAgent(BaseAgent):
 
         return {
             "recommendation": recommendation,
+
+            # "ar" when written in Arabic directly for an Arabic reader;
+            # Manager then skips translating it.
+            "language": language,
 
             # Consultant does not generate
             # employee-specific conflicts.

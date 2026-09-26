@@ -1,5 +1,6 @@
 import logging
 
+from app.agents import arabic_text as ar
 from app.agents.base import BaseAgent
 from app.db.approvals import create_pending_approval, decide_approval
 from app.db.connection import get_connection
@@ -102,10 +103,12 @@ def _failure_message(reasons: list[str]) -> str:
 
 def _fail(reasons: list[str]) -> dict:
     reasons = list(dict.fromkeys(reasons))
+    response = _failure_message(reasons)
     return {
         "decision": "FAIL",
         "reasons": reasons,
-        "response": _failure_message(reasons),
+        "response": response,
+        "response_blocks": [[(response, ar.failure_message_ar(reasons))]],
     }
 
 
@@ -118,16 +121,23 @@ def _fallback_hr_summary(facts: dict, include_profile: bool = True) -> str:
     plain HR fact (e.g. a leave-balance lookup) since there would be
     no response text at all. No LLM call — Manager stays rule-based.
     """
-    if not isinstance(facts, dict) or not facts:
-        return ""
+    return " ".join(en for en, _ in _hr_summary_pairs(facts, include_profile))
 
-    parts: list[str] = []
+
+def _hr_summary_pairs(facts: dict, include_profile: bool = True) -> list[tuple[str, str | None]]:
+    """_fallback_hr_summary as (English, Arabic) sentence pairs. Arabic is
+    None where the text isn't a fixed template (free-text HR notes); the
+    Orchestrator translates only those."""
+    if not isinstance(facts, dict) or not facts:
+        return []
+
+    parts: list[tuple[str, str | None]] = []
 
     assessment = facts.get("request_assessment")
     if isinstance(assessment, dict):
         message = _assessment_message(assessment)
         if message:
-            parts.append(message)
+            parts.append((message, ar.assessment_message_ar(assessment)))
 
     balance = facts.get("leave_balance")
     if isinstance(balance, dict):
@@ -143,15 +153,24 @@ def _fallback_hr_summary(facts: dict, include_profile: bool = True) -> str:
             if balance.get(key) is not None
         ]
         if bits:
-            parts.append("Remaining leave balance: " + ", ".join(bits) + " days.")
+            parts.append((
+                "Remaining leave balance: " + ", ".join(bits) + " days.",
+                ar.leave_balance_ar(balance),
+            ))
     elif facts.get("remaining_balance") is not None:
         remaining = facts["remaining_balance"]
         remaining_text = f"{remaining:g}" if isinstance(remaining, (int, float)) else remaining
-        parts.append(f"Remaining leave balance: {remaining_text} days.")
+        parts.append((
+            f"Remaining leave balance: {remaining_text} days.",
+            ar.remaining_balance_ar(remaining),
+        ))
 
     requests = facts.get("leave_requests")
     if isinstance(requests, list) and requests:
-        parts.append(f"You have {len(requests)} leave request(s) on record.")
+        parts.append((
+            f"You have {len(requests)} leave request(s) on record.",
+            ar.leave_requests_ar(len(requests)),
+        ))
 
     payroll = facts.get("payroll")
     if isinstance(payroll, dict) and payroll:
@@ -169,11 +188,11 @@ def _fallback_hr_summary(facts: dict, include_profile: bool = True) -> str:
         period = payroll.get("pay_period")
         prefix = f"Payroll ({period}): " if period else "Payroll: "
         if bits:
-            parts.append(prefix + ", ".join(bits) + ".")
+            parts.append((prefix + ", ".join(bits) + ".", ar.payroll_ar(payroll)))
     else:
         payroll_notice = facts.get("payroll_notice")
         if isinstance(payroll_notice, str) and payroll_notice:
-            parts.append(payroll_notice)
+            parts.append((payroll_notice, None))
 
     attendance = facts.get("attendance")
     if isinstance(attendance, dict) and attendance:
@@ -191,11 +210,11 @@ def _fallback_hr_summary(facts: dict, include_profile: bool = True) -> str:
         period = attendance.get("attendance_month")
         prefix = f"Attendance ({period}): " if period else "Attendance: "
         if bits:
-            parts.append(prefix + ", ".join(bits) + ".")
+            parts.append((prefix + ", ".join(bits) + ".", ar.attendance_ar(attendance)))
     else:
         attendance_notice = facts.get("attendance_notice")
         if isinstance(attendance_notice, str) and attendance_notice:
-            parts.append(attendance_notice)
+            parts.append((attendance_notice, None))
 
     # Identity is only useful as context alongside a specific answer above,
     # or as a last-resort reply when nothing else matched the query — not
@@ -203,9 +222,10 @@ def _fallback_hr_summary(facts: dict, include_profile: bool = True) -> str:
     profile = facts.get("profile")
     if include_profile and not parts and isinstance(profile, dict) and profile.get("full_name"):
         bits = [b for b in (profile.get("job_title"), profile.get("department_name")) if b]
-        parts.append(f"{profile['full_name']}" + (f" — {', '.join(bits)}." if bits else "."))
+        # Job titles and departments are English DB values: translate.
+        parts.append((f"{profile['full_name']}" + (f" — {', '.join(bits)}." if bits else "."), None))
 
-    return " ".join(parts)
+    return parts
 
 
 def _action_summary(action_type: str, payload: dict) -> str:
@@ -456,7 +476,7 @@ def _submit_for_approval(
     payload: dict,
     risk_level: str,
     auto_approve: bool = False,
-) -> str | None:
+) -> tuple[str, str] | None:
     """Persist a proposed_action + pending_approvals row. Own connection/commit
     since neither the Orchestrator nor /agent/query open one for this path.
 
@@ -476,7 +496,8 @@ def _submit_for_approval(
         if duplicate:
             return (
                 f"Your request is already pending approval "
-                f"(proposal {duplicate['proposal_id']})."
+                f"(proposal {duplicate['proposal_id']}).",
+                ar.submission_note_ar("duplicate", duplicate["proposal_id"]),
             )
     
         proposal = create_proposed_action(
@@ -517,14 +538,16 @@ def _submit_for_approval(
     if auto_approve:
         return (
             f"Your change has been recorded and auto-approved as a low-risk "
-            f"update (proposal {proposal['proposal_id']})."
+            f"update (proposal {proposal['proposal_id']}).",
+            ar.submission_note_ar("auto_approved", proposal["proposal_id"]),
         )
 
     cover = payload.get("suggested_cover_employee_name")
     cover_note = f" Suggested cover: {cover}." if cover else ""
     return (
         f"Your request has been submitted for approval "
-        f"(proposal {proposal['proposal_id']}).{cover_note}"
+        f"(proposal {proposal['proposal_id']}).{cover_note}",
+        ar.submission_note_ar("submitted", proposal["proposal_id"], cover),
     )
 
 
@@ -648,9 +671,13 @@ class ManagerAgent(BaseAgent):
         consultant_sources = list(consultant_result.get("sources") or [])
         sources = [*hr_sources, *consultant_sources]
 
+        # Each paragraph as (English, Arabic) pieces: the Orchestrator uses
+        # the fixed Arabic where there is one and translates only the rest.
+        blocks: list[list[tuple[str, str | None]]] = []
         if facts.get("historical_precedent") is not None:
             # Decision Brief: composed deterministically from HR facts.
             response_text = _compose_decision_brief(facts, consultant_result) or policy_text
+            blocks.append([(response_text, None)])
             grounded = bool(response_text and sources)
         else:
             # HR facts, the pending action, and the policy answer are all
@@ -658,25 +685,28 @@ class ManagerAgent(BaseAgent):
             # the HR facts, so BOTH queries ("how many days do I have, and
             # can I carry them forward?") lost the employee's own numbers.
             parts: list[str] = []
-            facts_text = _fallback_hr_summary(
+            fact_pairs = _hr_summary_pairs(
                 facts, include_profile=not (policy_text or proposed_action)
             )
-            if facts_text:
-                parts.append(facts_text)
+            if fact_pairs:
+                parts.append(" ".join(en for en, _ in fact_pairs))
+                blocks.append(fact_pairs)
             if proposed_action:
-                parts.append(
-                    _action_summary(
-                        proposed_action.get("action_type", ""),
-                        proposed_action.get("payload") or {},
-                    )
-                )
+                action_type = proposed_action.get("action_type", "")
+                payload = proposed_action.get("payload") or {}
+                parts.append(_action_summary(action_type, payload))
+                blocks.append([(parts[-1], ar.action_summary_ar(action_type, payload))])
             if policy_text:
                 parts.append(policy_text)
+                # The Consultant writes Arabic directly for Arabic readers.
+                is_arabic = consultant_result.get("language") == "ar"
+                blocks.append([(policy_text, policy_text if is_arabic else None)])
             elif consultant_failed and parts:
                 parts.append(
                     "(I couldn't retrieve the related HR policy right now, "
                     "so this answer covers your records only.)"
                 )
+                blocks.append([(parts[-1], ar.POLICY_UNAVAILABLE_AR)])
             response_text = "\n\n".join(parts)
 
             # Only the LLM-generated policy text needs a groundedness check
@@ -697,11 +727,15 @@ class ManagerAgent(BaseAgent):
                 reasons.append("Response is empty, unsupported, or missing sources.")
 
         response = mask_pii(response_text)
+        blocks = [
+            [(mask_pii(en), mask_pii(ar_text) if ar_text else None) for en, ar_text in block]
+            for block in blocks
+        ]
 
         if reasons:
             return _fail(reasons)
 
-        submission_note = ""
+        submission_note = None
         if proposed_action:
             payload = proposed_action.get("payload") or {}
             action_type = proposed_action.get("action_type", "")
@@ -718,12 +752,14 @@ class ManagerAgent(BaseAgent):
                     ["Could not submit the request for approval. Please try again."]
                 )
 
-        final_response = (
-            f"{response}\n\n{submission_note}".strip() if submission_note else response
-        )
+        final_response = response
+        if submission_note:
+            final_response = f"{response}\n\n{submission_note[0]}".strip()
+            blocks.append([submission_note])
 
         return {
             "decision": "PASS",
             "reasons": [],
             "response": final_response,
+            "response_blocks": blocks,
         }

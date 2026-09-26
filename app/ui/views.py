@@ -1654,16 +1654,35 @@ def page_chat() -> None:
             with col:
                 key = "yz_sugg_" + "".join(c if c.isalnum() else "_" for c in label.lower())
                 with st.container(key=key):
-                    if st.button(label, use_container_width=True):
-                        _submit_query(query)
-                        st.rerun()
+                    # Only fills the prompt box, so the employee can edit
+                    # dates/details before sending it themselves.
+                    st.button(
+                        label,
+                        use_container_width=True,
+                        on_click=_fill_chat_draft,
+                        args=(query,),
+                    )
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-    prompt = st.chat_input(i18n.t("chat.placeholder"))
-    if prompt:
-        _submit_query(prompt)
+    # A form instead of st.chat_input: chat_input can't be pre-filled from
+    # a suggestion, and a form sends only when the Send button is clicked.
+    with st.form("yz_chat_form", clear_on_submit=True, border=False):
+        prompt = st.text_area(
+            i18n.t("chat.placeholder"),
+            key="chat_draft",
+            placeholder=i18n.t("chat.placeholder"),
+            label_visibility="collapsed",
+            height=90,
+        )
+        sent = st.form_submit_button(i18n.t("chat.send"))
+    if sent and prompt.strip():
+        _submit_query(prompt.strip())
         st.rerun()
+
+
+def _fill_chat_draft(query: str) -> None:
+    st.session_state["chat_draft"] = query
 
 
 def page_leave() -> None:

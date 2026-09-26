@@ -1511,6 +1511,20 @@ section[data-testid="stSidebar"] .stButton > button:hover {
   fill: #FFFFFF !important;
   color: #FFFFFF !important;
 }
+/* Ask Yusor prompt box (a form, so suggestions can pre-fill it). */
+.st-key-chat_draft [data-baseweb="textarea"] {
+  background: rgba(255,252,247,0.85) !important;
+  border: 1px solid #E8D4BB !important;
+  border-radius: 16px !important;
+}
+.st-key-chat_draft textarea {
+  background: transparent !important;
+  color: #111312 !important;
+}
+.st-key-chat_draft textarea::placeholder {
+  color: #6F6B65 !important;
+  opacity: 1;
+}
 
 /* ---------- Welcome bar (page_header) — transparent, no card, sits over
    the shell photo above every page's own title. ---------- */

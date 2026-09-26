@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import time
 
-from qdrant_client.http import models as qmodels
-
 from app.config import get_settings
 from app.rag.client import get_qdrant_client
 from app.rag.embeddings import embed_text
+from app.rag.keyword import keyword_search
 
 
 def _hit_to_chunk(hit) -> dict:
@@ -57,24 +56,13 @@ def retrieve(query: str, top_k: int = 5) -> list[dict]:
     # 4. Keyword search
     start = time.perf_counter()
 
-    """    try:
-        keyword = client.scroll(
-            collection_name=settings.qdrant_collection,
-            scroll_filter=qmodels.Filter(
-                must=[
-                    qmodels.FieldCondition(
-                        key="text",
-                        match=qmodels.MatchText(text=query),
-                    )
-                ]
-            ),
-            limit=top_k,
-            with_payload=True,
-            with_vectors=False,
-        )[0]
+    # BM25 over the policy files (see app/rag/keyword.py): Qdrant's
+    # MatchText needed every query word in one chunk, so it matched nothing.
+    try:
+        keyword = keyword_search(query, top_k=top_k)
     except Exception as e:
-        print(f"[RAG] keyword search failed: {e}")"""
-    keyword = []
+        print(f"[RAG] keyword search failed: {e}")
+        keyword = []
 
     print(
         f"[RAG] keyword search: "
@@ -97,8 +85,7 @@ def retrieve(query: str, top_k: int = 5) -> list[dict]:
             + 1.0 / (k + rank),
         }
 
-    for rank, hit in enumerate(keyword, start=1):
-        chunk = _hit_to_chunk(hit)
+    for rank, chunk in enumerate(keyword, start=1):
         key = f"{chunk.get('source_table')}:{chunk.get('id')}"
 
         ranked[key] = {

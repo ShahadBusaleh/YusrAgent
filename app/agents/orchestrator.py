@@ -6,6 +6,7 @@ from app.agents.hr_agent import HRAgent
 from app.agents.consultant_agent import ConsultantAgent
 from app.agents.manager_agent import ManagerAgent
 
+from app.agents import arabic_text
 from app.config import fast_llm_options, get_settings
 from app.security.governance import detect_prompt_injection
 from app.agents.translation import (
@@ -48,6 +49,31 @@ def _failed_consultant_result(message: str) -> dict:
             "retryable": True,
         },
     }
+
+
+def _render_arabic(blocks: list) -> str:
+    """Arabic response from the Manager's (English, Arabic) pieces.
+
+    A paragraph whose pieces all have fixed Arabic (balances, payroll,
+    statuses) or were written in Arabic (Consultant) is used as is — no
+    LLM call. Only paragraphs with a missing piece are translated, and
+    those in parallel. A failed translation keeps that paragraph English."""
+
+    def render(block: list) -> str:
+        if all(ar_text for _, ar_text in block):
+            return " ".join(arabic_text.strip_citation_tags(t) for _, t in block)
+        english = " ".join(en for en, _ in block)
+        try:
+            return translate_to_arabic(english)
+        except Exception:
+            return english
+
+    if len(blocks) == 1:
+        paragraphs = [render(blocks[0])]
+    else:
+        with ThreadPoolExecutor(max_workers=min(4, len(blocks))) as pool:
+            paragraphs = list(pool.map(render, blocks))
+    return "\n\n".join(p for p in paragraphs if p)
 
 
 class OrchestratorAgent:
@@ -523,11 +549,13 @@ User request:
     def run_consultant(
         self,
         query: str,
+        lang: str = "en",
     ) -> dict:
 
         try:
             return self.consultant_agent.run({
                 "query": query,
+                "lang": lang,
             })
         except Exception as exc:
             logger.exception("Consultant Agent failed")
@@ -819,12 +847,16 @@ User request:
         internal_input = dict(input)
         internal_input["query"] = translated_query
         internal_input["original_query"] = original_query
+        internal_input["lang"] = language
 
         result = self._run(internal_input)
+        blocks = result.pop("_response_blocks", None)
 
         if language == "ar":
             response_text = result.get("response")
-            if isinstance(response_text, str) and response_text.strip():
+            if blocks:
+                result["response"] = _render_arabic(blocks)
+            elif isinstance(response_text, str) and response_text.strip():
                 try:
                     result["response"] = translate_to_arabic(response_text)
                 except Exception:
@@ -851,6 +883,9 @@ User request:
         )
 
         user = input.get("user") or {}
+
+        # Reader's language: the Consultant answers Arabic readers in Arabic.
+        lang = input.get("lang") or "en"
 
         # =====================================================
         # STEP 1 — SECURITY
@@ -910,6 +945,7 @@ User request:
 
             consultant_result = self.run_consultant(
                 query=query,
+                lang=lang,
             )
         elif intent == "BOTH":
 
@@ -924,6 +960,7 @@ User request:
                 consultant_future = executor.submit(
                     self.run_consultant,
                     query=query,
+                    lang=lang,
                 )
 
                 hr_result = hr_future.result()
@@ -1035,6 +1072,11 @@ User request:
                     "identity_visible": bool(identity_visible),
                     "hr_review": True,
                     "grievance_id": grievance.get("grievance_id"),
+                    "_response_blocks": [[(
+                        "Your grievance has been submitted successfully. "
+                        "HR will review your case.",
+                        arabic_text.GRIEVANCE_SUBMITTED_AR,
+                    )]],
                 }
 
             return {
@@ -1052,6 +1094,7 @@ User request:
                 "security": security_result,
                 "identity_visible": bool(identity_visible),
                 "hr_review": False,
+                "_response_blocks": manager_result.get("response_blocks"),
             }
 
         
@@ -1091,4 +1134,5 @@ User request:
             "intent": intent,
             "execution_order": execution_order,
             "security": security_result,
+            "_response_blocks": manager_result.get("response_blocks"),
         }

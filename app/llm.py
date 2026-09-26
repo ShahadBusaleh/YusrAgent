@@ -84,7 +84,10 @@ def _order(keys: list[str]) -> list[str]:
 
 
 def _client_for(openai_cls, key: str, base_url: str, timeout):
-    cache_key = (id(openai_cls), key, base_url, timeout)
+    # Keyed by the class object, not id(): the cache then keeps it alive,
+    # so a garbage-collected test mock's id can't be reused by a new mock
+    # and hand it the old mock's cached client (made the suite flaky).
+    cache_key = (openai_cls, key, base_url, timeout)
     with _lock:
         client = _clients.get(cache_key)
     if client is None:
