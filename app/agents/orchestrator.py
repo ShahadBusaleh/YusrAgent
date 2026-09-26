@@ -18,7 +18,7 @@ from app.db.connection import get_connection
 from app.db.approvals import list_pending_approvals
 from app.db.grievances import create_grievance
 from app.db.proposed_actions import get_proposed_action
-from app.agents.hr_agent import get_historical_precedent, get_termination_profile
+from app.agents.hr_agent import get_historical_precedent
 
 
 logger = logging.getLogger(__name__)
@@ -196,13 +196,13 @@ class OrchestratorAgent:
 
         fast_paths = [
             (
-                # Phase 4 staffing actions — checked first so a free-text
-                # termination reason can't route the request elsewhere.
-                "HR",
+                "BOTH",
                 [
-                    "hire new employee",
-                    "add new employee",
-                    "terminate employee",
+                    "how many annual leave days do i have remaining and can i carry",
+                    "how many annual leave days do i have left and can i carry",
+                    "am i entitled to 30 days of annual leave",
+                    "can i change my bank account according to company policy",
+                    "annual leave balance and carry forward",
                 ],
             ),
             (
@@ -704,12 +704,6 @@ User request:
                     ),
 
                     "historical_precedent": precedent,
-
-                    "termination_profile": (
-                        get_termination_profile(conn, proposal)
-                        if action_type == "termination"
-                        else None
-                    ),
 
                     "policy": {
                         "recommendation": consultant_result.get(

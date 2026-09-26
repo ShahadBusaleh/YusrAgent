@@ -518,15 +518,11 @@ def _analyze_policy_chunks(
 def _detect_policy_conflicts(
     policy_analysis: dict,
 ) -> list[str]:
-    """
-    Detect explicit conflicts between Saudi Labor Law
-    and Company Policies.
-    """
+    """Detect only meaningful numeric law-vs-policy conflicts."""
 
     conflicts: list[str] = []
 
     entries = []
-
     for field_name in (
         "rules",
         "conditions",
@@ -552,53 +548,84 @@ def _detect_policy_conflicts(
         if entry.get("source_table") == "company_policies"
     ]
 
+    def clean_text(text: str) -> str:
+        text = _safe_text(text)
+
+        # Remove source metadata / identifiers.
+        text = re.sub(
+            r"\bLAW\d+\b",
+            " ",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r"\bAAM-POL-\d+\b",
+            " ",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r"\b(?:Article|Section)\s*:?\s*\d+\b",
+            " ",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        return text.strip()
+
+    def meaningful_numbers(text: str) -> set[str]:
+        cleaned = clean_text(text)
+        return set(
+            re.findall(
+                r"\b\d+(?:\.\d+)?\b",
+                cleaned,
+            )
+        )
+
+    def meaningful_tokens(text: str) -> set[str]:
+        return {
+            token
+            for token in _extract_tokens(clean_text(text))
+            if len(token) >= 4
+        }
+
     for law in law_entries:
-        law_text = _safe_text(
-            law.get("text")
-        ).strip()
+        law_text = clean_text(law.get("text", ""))
+
+        if not law_text:
+            continue
+
+        law_tokens = meaningful_tokens(law_text)
+        law_numbers = meaningful_numbers(law_text)
 
         for policy in policy_entries:
-            policy_text = _safe_text(
-                policy.get("text")
-            ).strip()
+            policy_text = clean_text(policy.get("text", ""))
 
-            if not law_text or not policy_text:
+            if not policy_text:
                 continue
 
-            law_tokens = _extract_tokens(law_text)
-            policy_tokens = _extract_tokens(policy_text)
+            shared_tokens = (
+                law_tokens
+                & meaningful_tokens(policy_text)
+            )
 
-            shared_tokens = law_tokens & policy_tokens
-
-            if len(shared_tokens) < 2:
+            if len(shared_tokens) < 3:
                 continue
 
-            # Detect explicit numeric disagreement.
-            law_numbers = set(
-                re.findall(
-                    r"\b\d+(?:\.\d+)?\b",
-                    law_text,
-                )
+            policy_numbers = meaningful_numbers(
+                policy_text
             )
 
-            policy_numbers = set(
-                re.findall(
-                    r"\b\d+(?:\.\d+)?\b",
-                    policy_text,
-                )
-            )
+            # No meaningful numeric rule values -> no numeric conflict.
+            if not law_numbers or not policy_numbers:
+                continue
 
-            if (
-                law_numbers
-                and policy_numbers
-                and law_numbers != policy_numbers
-            ):
+            if law_numbers != policy_numbers:
                 conflicts.append(
                     "Potential conflict between "
                     f"{law.get('source_id')} and "
                     f"{policy.get('source_id')}: "
-                    "the retrieved law and company policy "
-                    "contain different numeric requirements."
+                    "meaningful numeric rule values differ."
                 )
 
     return list(dict.fromkeys(conflicts))

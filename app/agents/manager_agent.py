@@ -240,51 +240,65 @@ def _get_ai_recommendation(
     facts: dict,
     consultant_result: dict,
 ) -> str:
-    policy_text = str(
-        (consultant_result or {}).get("recommendation") or ""
-    ).lower()
-
-    review_terms = (
-        "subject to manager review",
-        "manager reviews",
-        "line manager",
-        "workload",
-        "business commitments",
-        "staffing requirements",
-        "depends on",
-        "based on",
-        "taken into account",
-    )
-
-    if any(term in policy_text for term in review_terms):
+    """Build a recommendation from deterministic evidence."""
+    if not isinstance(facts, dict):
         return "MANAGER REVIEW"
 
-    reject_terms = (
-        "not allowed",
-        "not permitted",
-        "prohibited",
-        "cannot be approved",
-        "should be rejected",
-        "ineligible",
-        "does not meet",
-        "not entitled",
+    proposed_action = facts.get("proposed_action") or {}
+    action_type = str(
+        proposed_action.get("action_type") or ""
     )
+    payload = proposed_action.get("payload") or {}
 
-    if any(term in policy_text for term in reject_terms):
+    # Security / risk evidence
+    try:
+        risk_level = classify_risk(action_type, payload)
+    except Exception:
+        risk_level = ""
+
+    # Real policy conflicts always require human review.
+    conflicts = consultant_result.get("conflicts") or []
+    if conflicts:
+        return "MANAGER REVIEW"
+
+    # Leave balance evidence.
+    requested_days = facts.get("requested_days")
+    remaining_balance = facts.get("remaining_balance")
+
+    if (
+        isinstance(requested_days, (int, float))
+        and isinstance(remaining_balance, (int, float))
+        and requested_days > remaining_balance
+    ):
         return "REJECT"
 
-    approve_terms = (
-        "can be approved",
-        "should be approved",
-        "eligible",
-        "meets the requirements",
-    )
+    # Medium/high-risk actions remain for human review.
+    if risk_level in {"MEDIUM", "HIGH"}:
+        return "MANAGER REVIEW"
 
-    if any(term in policy_text for term in approve_terms):
+    # Historical precedent.
+    precedent = facts.get("historical_precedent") or {}
+    approved = precedent.get("approved_count") or 0
+    denied = precedent.get("denied_count") or 0
+    total = approved + denied
+
+    if total == 0:
+        return "MANAGER REVIEW"
+
+    approval_ratio = approved / total
+
+    # Evidence-based recommendation:
+    # sufficient balance + positive precedent + low risk.
+    if (
+        isinstance(requested_days, (int, float))
+        and isinstance(remaining_balance, (int, float))
+        and requested_days <= remaining_balance
+        and approval_ratio >= 0.5
+        and risk_level == "LOW"
+    ):
         return "APPROVE"
 
     return "MANAGER REVIEW"
-
 def _compose_decision_brief(facts: dict, consultant_result: dict) -> str:
     """Build an evidence-based Decision Brief for human HR review."""
 
