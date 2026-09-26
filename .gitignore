@@ -16,3 +16,5 @@ htmlcov/
 dist/
 build/
 agentic_hr.db
+
+.eval-venv/

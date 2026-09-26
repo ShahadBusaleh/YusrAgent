@@ -901,7 +901,7 @@ User request:
             # stop here and ask the UI to show Hide / Show.
             if identity_visible is None:
                 return {
-                    "status": "REPLAN",
+                    "status": "IDENTITY_REQUIRED",
                     "response": "",
                     "sources": [],
                     "intent": "GRIEVANCE",
@@ -974,7 +974,7 @@ User request:
                     conn.close()
 
                 return {
-                    "status": "REPLAN",
+                    "status": "PENDING_HR_REVIEW",
                     "response": (
                         "Your grievance has been submitted successfully. "
                         "HR will review your case."
