@@ -228,6 +228,12 @@ def _hr_summary_pairs(facts: dict, include_profile: bool = True) -> list[tuple[s
     return parts
 
 
+def _shown(value) -> str:
+    """A payload value for display; an empty old value reads "(not set)"
+    rather than the literal "None"."""
+    return "(not set)" if value in (None, "") else str(value)
+
+
 def _action_summary(action_type: str, payload: dict) -> str:
     if action_type == "leave_request":
         cover = payload.get("suggested_cover_employee_name") or "none suggested"
@@ -241,12 +247,12 @@ def _action_summary(action_type: str, payload: dict) -> str:
         return (
             f"Personal info update for {payload.get('employee_id')}: "
             f"{payload.get('field_name')} "
-            f"\"{payload.get('old_value')}\" → \"{payload.get('new_value')}\"."
+            f"\"{_shown(payload.get('old_value'))}\" → \"{_shown(payload.get('new_value'))}\"."
         )
     if action_type == "bank_update":
         return (
             f"Bank/IBAN update for {payload.get('employee_id')}: "
-            f"IBAN \"{payload.get('old_iban')}\" → \"{payload.get('new_iban')}\"."
+            f"IBAN \"{_shown(payload.get('old_iban'))}\" → \"{_shown(payload.get('new_iban'))}\"."
         )
     if action_type == "certificate_request":
         return (
@@ -674,6 +680,8 @@ class ManagerAgent(BaseAgent):
         # Each paragraph as (English, Arabic) pieces: the Orchestrator uses
         # the fixed Arabic where there is one and translates only the rest.
         blocks: list[list[tuple[str, str | None]]] = []
+        # The requester's own submitted change, echoed back unmasked (below).
+        own_change: tuple[str, str | None] | None = None
         if facts.get("historical_precedent") is not None:
             # Decision Brief: composed deterministically from HR facts.
             response_text = _compose_decision_brief(facts, consultant_result) or policy_text
@@ -696,6 +704,8 @@ class ManagerAgent(BaseAgent):
                 payload = proposed_action.get("payload") or {}
                 parts.append(_action_summary(action_type, payload))
                 blocks.append([(parts[-1], ar.action_summary_ar(action_type, payload))])
+                if action_type == "personal_info_update":
+                    own_change = blocks[-1][0]
             if policy_text:
                 parts.append(policy_text)
                 # The Consultant writes Arabic directly for Arabic readers.
@@ -728,9 +738,19 @@ class ManagerAgent(BaseAgent):
 
         response = mask_pii(response_text)
         blocks = [
-            [(mask_pii(en), mask_pii(ar_text) if ar_text else None) for en, ar_text in block]
+            [
+                pair if pair == own_change
+                else (mask_pii(en), mask_pii(ar_text) if ar_text else None)
+                for pair in block
+                for en, ar_text in [pair]
+            ]
             for block in blocks
         ]
+        # A personal-info confirmation must show the value the user just
+        # typed, or it reads "email → [EMAIL]" and they can't check it.
+        # Everything else (IBANs, policy text, other records) stays masked.
+        if own_change:
+            response = response.replace(mask_pii(own_change[0]), own_change[0], 1)
 
         if reasons:
             return _fail(reasons)

@@ -179,9 +179,13 @@ _ACTION_TYPE_QUERIES: dict[str, str] = {
         "What is the HR policy on updating an employee's personal "
         "information, such as mobile number, address, or email?"
     ),
+    # Worded after the annual-leave texts: "submitting ... a request"
+    # matched the exam-leave article (LAW057, "submit an examination
+    # leave request") ahead of the annual-leave rules.
     "leave_request": (
-        "What is the HR policy or Saudi labor law on submitting and "
-        "approving an employee leave request?"
+        "What is the company policy on planning annual leave with the "
+        "line manager, and what does Saudi labor law say about annual "
+        "leave entitlement and taking it in the year it becomes due?"
     ),
     "certificate_request": (
         "What is the HR policy on issuing an employment or salary "

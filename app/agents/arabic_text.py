@@ -186,6 +186,14 @@ def attendance_ar(attendance: dict) -> str | None:
     return prefix + "، ".join(bits) + "."
 
 
+_PERSONAL_FIELD_AR = {
+    "email": "البريد الإلكتروني",
+    "mobile": "رقم الجوال",
+    "address": "العنوان",
+    "city": "المدينة",
+}
+
+
 def action_summary_ar(action_type: str, payload: dict) -> str | None:
     if action_type == "leave_request":
         leave_type = str(payload.get("leave_type") or "").lower()
@@ -205,7 +213,18 @@ def action_summary_ar(action_type: str, payload: dict) -> str | None:
         )
     if action_type == "certificate_request":
         return f"طلب شهادة تعريف للموظف {payload.get('employee_id')}."
-    # personal_info_update names a DB field in English; translate instead.
+    if action_type == "personal_info_update":
+        # Fixed text so the requester's own new value (shown unmasked) is
+        # never sent to the LLM translator.
+        field_ar = _PERSONAL_FIELD_AR.get(str(payload.get("field_name") or ""))
+        if not field_ar:
+            return None
+        old = payload.get("old_value") or "غير محدد"
+        new = payload.get("new_value") or "غير محدد"
+        return (
+            f"تحديث البيانات الشخصية للموظف {payload.get('employee_id')}: "
+            f"{field_ar} \"{old}\" ← \"{new}\"."
+        )
     return None
 
 

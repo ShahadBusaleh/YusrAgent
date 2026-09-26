@@ -1,10 +1,11 @@
 import asyncio
 import json
+import os
 
 from openai import AsyncOpenAI
 
 from ragas.llms import llm_factory
-from ragas.embeddings import OpenAIEmbeddings
+from ragas.embeddings import HuggingFaceEmbeddings
 from ragas.metrics.collections import (
     Faithfulness,
     ContextPrecision,
@@ -17,6 +18,12 @@ from app.config import get_settings
 
 RESULTS_PATH = "eval/golden/consultant_rag_results.jsonl"
 OUTPUT_PATH = "eval/golden/ragas_results.jsonl"
+METRIC_KEYS = (
+    "faithfulness",
+    "context_precision",
+    "context_recall",
+    "answer_relevancy",
+)
 
 
 def load_cases():
@@ -24,35 +31,75 @@ def load_cases():
         return [json.loads(line) for line in f if line.strip()]
 
 
-async def safe_score(name, metric_call):
-    try:
-        result = await asyncio.wait_for(metric_call(), timeout=60)
-        value = result.value
+class Metrics:
+    """The four Ragas metrics bound to one LLM key. Ragas drives a single
+    client, so when that key spends its daily quota we move to the next key
+    in LLM_API_KEYS instead of failing every remaining metric."""
 
-        print(f"  {name}: {value}")
-        return value
+    def __init__(self, settings, embeddings):
+        self.settings = settings
+        self.embeddings = embeddings
+        self.keys = list(settings.llm_api_keys or (settings.llm_api_key,))
+        self.index = 0
+        self._build()
 
-    except asyncio.TimeoutError:
-        print(f"  {name}: TIMEOUT")
-        return None
+    def _build(self):
+        print(f"  (using key {self.index + 1} of {len(self.keys)})")
+        llm = llm_factory(
+            self.settings.llm_model,
+            client=AsyncOpenAI(
+                api_key=self.keys[self.index],
+                base_url=self.settings.llm_base_url,
+                max_retries=6,
+            ),
+            # Default 1024 truncates Faithfulness' claim list on long
+            # Consultant answers (gpt-oss also spends tokens reasoning).
+            max_tokens=4096,
+            reasoning_effort="low",
+        )
+        self.faithfulness = Faithfulness(llm=llm)
+        self.context_precision = ContextPrecision(llm=llm)
+        self.context_recall = ContextRecall(llm=llm)
+        self.answer_relevancy = AnswerRelevancy(
+            llm=llm,
+            embeddings=self.embeddings,
+        )
 
-    except Exception as e:
-        print(f"  {name}: ERROR - {type(e).__name__}: {e}")
-        return None
+    def next_key(self):
+        if self.index + 1 >= len(self.keys):
+            return False
+        self.index += 1
+        self._build()
+        return True
 
 
-async def evaluate_case(
-    case,
-    faithfulness,
-    context_precision,
-    context_recall,
-    answer_relevancy,
-):
+async def safe_score(name, metrics, metric_call):
+    while True:
+        try:
+            result = await asyncio.wait_for(metric_call(metrics), timeout=120)
+            value = result.value
+
+            print(f"  {name}: {value}")
+            return value
+
+        except asyncio.TimeoutError:
+            print(f"  {name}: TIMEOUT")
+            return None
+
+        except Exception as e:
+            if "tokens per day" in str(e) and metrics.next_key():
+                continue
+            print(f"  {name}: ERROR - {type(e).__name__}: {str(e)[:200]}")
+            return None
+
+
+async def evaluate_case(case, metrics):
     print(f"\nEvaluating {case['id']}...")
 
     faithfulness_result = await safe_score(
         "Faithfulness",
-        lambda: faithfulness.ascore(
+        metrics,
+        lambda m: m.faithfulness.ascore(
             user_input=case["question"],
             response=case["answer"],
             retrieved_contexts=case["contexts"],
@@ -61,7 +108,8 @@ async def evaluate_case(
 
     context_precision_result = await safe_score(
         "Context Precision",
-        lambda: context_precision.ascore(
+        metrics,
+        lambda m: m.context_precision.ascore(
             user_input=case["question"],
             retrieved_contexts=case["contexts"],
             reference=case["reference_answer"],
@@ -70,7 +118,8 @@ async def evaluate_case(
 
     context_recall_result = await safe_score(
         "Context Recall",
-        lambda: context_recall.ascore(
+        metrics,
+        lambda m: m.context_recall.ascore(
             user_input=case["question"],
             retrieved_contexts=case["contexts"],
             reference=case["reference_answer"],
@@ -79,7 +128,8 @@ async def evaluate_case(
 
     answer_relevancy_result = await safe_score(
         "Answer Relevancy",
-        lambda: answer_relevancy.ascore(
+        metrics,
+        lambda m: m.answer_relevancy.ascore(
             user_input=case["question"],
             response=case["answer"],
         ),
@@ -104,41 +154,31 @@ async def main():
     settings = get_settings()
     cases = load_cases()
 
-    async_client = AsyncOpenAI(
-        api_key=settings.llm_api_key,
-        base_url=settings.llm_base_url,
+    # Groq has no embeddings endpoint, so AnswerRelevancy uses the same
+    # local sentence-transformers model as the policy index.
+    embeddings = HuggingFaceEmbeddings(
+        model=os.getenv(
+            "EMBEDDING_MODEL",
+            "sentence-transformers/all-MiniLM-L6-v2",
+        ),
     )
 
-    llm = llm_factory(
-        settings.llm_model,
-        client=async_client,
-    )
-
-    embeddings = OpenAIEmbeddings(
-        client=async_client,
-        model="text-embedding-3-small",
-    )
-
-    faithfulness = Faithfulness(llm=llm)
-    context_precision = ContextPrecision(llm=llm)
-    context_recall = ContextRecall(llm=llm)
-
-    answer_relevancy = AnswerRelevancy(
-        llm=llm,
-        embeddings=embeddings,
-    )
+    metrics = Metrics(settings, embeddings)
 
     results = []
 
     for case in cases:
-        result = await evaluate_case(
-            case,
-            faithfulness,
-            context_precision,
-            context_recall,
-            answer_relevancy,
-        )
+        result = await evaluate_case(case, metrics)
         results.append(result)
+
+    scored = [
+        r for r in results
+        if any(r[k] is not None for k in METRIC_KEYS)
+    ]
+    if not scored:
+        raise SystemExit(
+            f"Every metric failed; kept the previous {OUTPUT_PATH}."
+        )
 
     with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
         for result in results:

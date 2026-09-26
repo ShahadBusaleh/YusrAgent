@@ -20,7 +20,9 @@ from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
-from openai import OpenAI
+
+from app.config import get_settings
+from app.llm import llm_client
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -68,9 +70,16 @@ def find_latest_eval() -> Path:
 
 def build_prompt(case: dict, result: dict) -> str:
     target = case.get("target", "unknown")
-    query = case.get("query", "")
+    query = case.get("query") or result.get("query", "")
     expect = case.get("expect", {})
-    output = result.get("output", {})
+    # judge_output is the fuller view (fact values, whole response); older
+    # result files only have the display summary.
+    output = result.get("judge_output") or result.get("output", {})
+    failures = result.get("failures") or []
+    checks = (
+        "all passed" if result.get("outcome") in ("PASS", "FIXED")
+        else "; ".join(failures) or result.get("error") or "unknown"
+    )
 
     return f"""
 You are an evaluator for an Agentic HR system called Yusor.
@@ -88,6 +97,13 @@ Expected behavior / evaluation requirements:
 
 Actual agent output:
 {json.dumps(output, ensure_ascii=False, indent=2)}
+
+Rule-based harness checks against the expectations: {checks}
+
+Note: expectations such as db_delta (database row changes), facts_has and
+payload_equals are verified by the harness against the database and the
+agent's internal state; they are not fields the output must contain. Do not
+penalize their absence from the output.
 
 Evaluate the actual output using these four criteria.
 
@@ -144,7 +160,7 @@ Return ONLY valid JSON in exactly this structure:
 # LLM call
 # ---------------------------------------------------------------------------
 
-def judge_case(client: OpenAI, model: str, case: dict, result: dict) -> dict:
+def judge_case(client, model: str, case: dict, result: dict) -> dict:
     prompt = build_prompt(case, result)
 
     response = client.chat.completions.create(
@@ -254,22 +270,16 @@ def main() -> int:
     if not eval_results:
         raise SystemExit("No evaluation cases selected.")
 
-    base_url = os.getenv("LLM_BASE_URL")
-    api_key = os.getenv("LLM_API_KEY")
+    settings = get_settings()
 
-    if not api_key:
+    if not settings.llm_api_keys:
         raise SystemExit(
-            "LLM_API_KEY is not configured."
+            "LLM_API_KEYS / LLM_API_KEY is not configured."
         )
 
-    client_kwargs = {
-        "api_key": api_key,
-    }
-
-    if base_url:
-        client_kwargs["base_url"] = base_url
-
-    client = OpenAI(**client_kwargs)
+    # Same rotating client as the app: spreads judge calls across every
+    # configured key and fails over on 429.
+    client = llm_client(settings)
 
     judged = []
 

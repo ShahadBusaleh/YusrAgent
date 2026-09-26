@@ -6,6 +6,7 @@ from app.config import get_settings
 from app.rag.client import get_qdrant_client
 from app.rag.embeddings import embed_text
 from app.rag.keyword import keyword_search
+from app.rag.query_expansion import expand_query
 
 
 def _hit_to_chunk(hit) -> dict:
@@ -27,6 +28,7 @@ def retrieve(query: str, top_k: int = 5) -> list[dict]:
     total_start = time.perf_counter()
 
     settings = get_settings()
+    query = expand_query(query)
 
     # 1. Qdrant client
     start = time.perf_counter()

@@ -189,6 +189,9 @@ def run_case(case: dict, workdir: Path) -> dict:
         "error": error,
         "latency_ms": round(latency_ms, 1),
         "output": _summarize(case["target"], output),
+        # Fuller view for eval/run_llm_judge.py: the summary above drops
+        # fact values and cuts the response at 600 chars.
+        "judge_output": _judge_view(output),
     }
 
 
@@ -327,6 +330,31 @@ def _summarize(target: str, out: dict) -> dict:
     if isinstance(out.get("error"), dict):
         keep["error"] = out["error"]
     return keep
+
+
+def _clip(value, limit: int = 1500):
+    """Bound strings and lists so one case can't blow the judge's context."""
+    if isinstance(value, str):
+        return value if len(value) <= limit else value[:limit] + " …[cut]"
+    if isinstance(value, dict):
+        return {k: _clip(v, limit) for k, v in value.items()}
+    if isinstance(value, list):
+        clipped = [_clip(v, limit) for v in value[:10]]
+        return clipped + [f"…[{len(value) - 10} more]"] if len(value) > 10 else clipped
+    return value
+
+
+def _judge_view(out: dict) -> dict:
+    view = {k: v for k, v in out.items() if k not in ("sources", "response", "recommendation")}
+    for key in ("response", "recommendation"):
+        if out.get(key):
+            view[key] = _clip(out[key], 4000)
+    if out.get("sources"):
+        view["sources"] = [
+            {"id": s.get("id"), "text": str(s.get("text") or "")[:300]} if isinstance(s, dict) else s
+            for s in out["sources"]
+        ]
+    return _clip(view)
 
 
 # ---------------------------------------------------------------------------
