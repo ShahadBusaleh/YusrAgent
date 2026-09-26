@@ -5,9 +5,11 @@ import sqlite3
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.agents.orchestrator import OrchestratorAgent
-from app.api.deps import CurrentUser, require_role, roles_at_least
+from app.agents.translation import localize_many
+from app.api.deps import CurrentUser, get_request_lang, require_role, roles_at_least
 from app.api.schemas import ApprovalDecision, ApprovalOut
 from app.db.connection import get_db
+from app.db.translation_cache import database_path
 from app.db import approvals as approvals_db
 from app.db.audit import write_audit
 
@@ -83,6 +85,7 @@ def get_approval_brief(
         require_role(*roles_at_least("hr_manager"))
     ),
     conn: sqlite3.Connection = Depends(get_db),
+    lang: str = Depends(get_request_lang),
 ) -> dict:
     approval = approvals_db.get_approval(
         conn,
@@ -122,5 +125,35 @@ def get_approval_brief(
                 "Could not generate decision brief",
             ),
         )
+
+    if lang == "ar":
+        # Only the LLM-written / free-text parts need translating; the UI
+        # renders everything else (action, risk, precedent counts, the
+        # Manager's recommendation keyword) from structured fields via
+        # i18n. English originals are kept alongside the *_ar fields.
+        detail = brief.get("brief") or {}
+        policy = detail.get("policy") or {}
+        manager = detail.get("manager") or {}
+        # The UI reads the APPROVE / REJECT / MANAGER REVIEW keyword from
+        # the English response and localizes it itself, so only the
+        # evidence lines are translated (without the keyword line).
+        explanation = "\n".join(
+            line
+            for line in str(manager.get("response") or "").splitlines()
+            if not line.strip().lower().startswith("ai recommendation:")
+        )
+        reasons = [str(r) for r in manager.get("reasons") or []]
+        # The brief is generated on demand, so it can't be pre-translated;
+        # translating all its parts in parallel keeps the wait to about one
+        # LLM round-trip.
+        policy_ar, explanation_ar, *reasons_ar = localize_many(
+            [policy.get("recommendation"), explanation, *reasons], lang, database_path(conn)
+        )
+        if policy.get("recommendation"):
+            policy["recommendation_ar"] = policy_ar
+        if explanation:
+            manager["explanation_ar"] = explanation_ar
+        if reasons:
+            manager["reasons_ar"] = reasons_ar
 
     return brief

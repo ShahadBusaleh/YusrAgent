@@ -11,7 +11,8 @@ import re
 from datetime import date, datetime
 from typing import Any
 
-from app.config import get_settings
+from app.config import fast_llm_options, get_settings
+from app.llm import llm_client
 
 _LEAVE_INTENT_PATTERNS = (
     r"^(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:request|apply\s+for|submit|book)\s+(?:my\s+|a\s+)?(?:(?:annual|sick|emergency)\s+)?(?:leave|time\s+off)\b",
@@ -61,7 +62,7 @@ def extract_leave_fields(query: str) -> dict:
     try:
         from openai import OpenAI
 
-        client = OpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url)
+        client = llm_client(settings, openai_cls=OpenAI)
 
         system_prompt = (
             "Extract leave request details from the employee's message. "
@@ -81,6 +82,7 @@ def extract_leave_fields(query: str) -> dict:
             ],
             temperature=0,
             response_format={"type": "json_object"},
+            **fast_llm_options(600),
         )
 
         content = (response.choices[0].message.content or "").strip()

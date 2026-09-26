@@ -1014,16 +1014,7 @@ def _record_summary(record: dict) -> str:
         from app.ui import regulations_view
 
         return regulations_view.summary_line(payload)
-    if action_type == "leave_request":
-        leave_type = str(payload.get("leave_type") or "").lower()
-        type_label = i18n.t(f"leave.type_{leave_type}")
-        return i18n.t(
-            "records.summary_leave",
-            type=type_label if type_label != f"leave.type_{leave_type}" else leave_type,
-            start=_friendly_when(payload.get("start_date")) or "?",
-            end=_friendly_when(payload.get("end_date")) or "?",
-        )
-    return record.get("summary") or ""
+    return _localized_summary(action_type, payload) or record.get("summary") or ""
 
 
 def _records_filter_lines(facets: dict) -> list[tuple[str, str]]:
@@ -1802,7 +1793,7 @@ def page_inbox() -> None:
             "_id": str(r.get("approval_id") or ""),
             "type": styles.type_badge_html("leave", i18n.t("inbox.type_leave")),
             "employee": names.get(str(r.get("employee_id") or "")) or r.get("employee_id") or "—",
-            "request": _action_label(r),
+            "request": _action_label(r, proposals.get(r.get("proposal_id"))),
             "date": _friendly_when(r.get("created_at")) or "—",
             "status": (r.get("status") or "pending").lower(),
         }
@@ -1827,7 +1818,7 @@ def page_inbox() -> None:
             "_id": str(r.get("approval_id") or ""),
             "type": styles.type_badge_html("approval", i18n.t("inbox.type_approval")),
             "employee": names.get(str(r.get("employee_id") or "")) or r.get("employee_id") or "—",
-            "request": _staffing_label(proposals.get(r.get("proposal_id"))) or _action_label(r),
+            "request": _staffing_label(proposals.get(r.get("proposal_id"))) or _action_label(r, proposal),
             "date": _friendly_when(r.get("created_at")) or "—",
             "status": (r.get("status") or "pending").lower(),
         }
@@ -1860,7 +1851,7 @@ def page_inbox() -> None:
 
     tab_full_labels = [f"{label} ({len(rows_by_tab[key])})" for key, label in tabs]
     chosen_full_label = st.radio(
-        "Inbox filter", tab_full_labels, horizontal=True, key="inbox_tab", label_visibility="collapsed"
+        i18n.t("inbox.filter_label"), tab_full_labels, horizontal=True, key="inbox_tab", label_visibility="collapsed"
     )
     chosen_key = dict(zip(tab_full_labels, [k for k, _ in tabs])).get(chosen_full_label, "all")
     visible_rows = rows_by_tab.get(chosen_key, [])
@@ -1917,6 +1908,8 @@ def _render_approval_review(row: dict, names: dict, proposals: dict) -> None:
     staffing_label = _staffing_label(proposals.get(row.get("proposal_id")))
     if staffing_label:
         row = {**row, "action_summary": staffing_label}
+    else:
+        row = {**row, "action_summary": _action_label(row, proposal)}
 
     with st.container(key=f"inbox_review_{approval_id}"):
         top_l, top_r = st.columns([5, 1])
@@ -1929,19 +1922,26 @@ def _render_approval_review(row: dict, names: dict, proposals: dict) -> None:
 
         st.markdown(_approval_card_html(row, person), unsafe_allow_html=True)
 
+        # Briefs are kept per language: after a language switch an open
+        # brief is re-requested in the new language instead of showing the
+        # old language's text under the new language's labels.
+        lang = i18n.get_lang()
+        brief_key = f"approval_brief_{lang}_{approval_id}"
+        other_key = f"approval_brief_{'en' if lang == 'ar' else 'ar'}_{approval_id}"
         if status == "pending":
-            if st.button(i18n.t("inbox.explain_this"), key=f"explain_{approval_id}", use_container_width=True):
+            explain = st.button(i18n.t("inbox.explain_this"), key=f"explain_{approval_id}", use_container_width=True)
+            if explain or (brief_key not in st.session_state and other_key in st.session_state):
                 try:
                     brief_response = api.request("GET", f"/approvals/{approval_id}/brief", timeout=120.0)
                     brief = api.raise_for_api(brief_response)
                     if isinstance(brief, dict):
-                        st.session_state[f"approval_brief_{approval_id}"] = brief
+                        st.session_state[brief_key] = brief
                     else:
-                        st.error("Unexpected Decision Brief response.")
+                        st.error(i18n.t("brief.unexpected"))
                 except RuntimeError as exc:
                     st.error(str(exc))
 
-        brief = st.session_state.get(f"approval_brief_{approval_id}")
+        brief = st.session_state.get(brief_key)
         if brief:
             _render_decision_brief(brief.get("brief") or {}, approval_id)
 
@@ -1953,11 +1953,15 @@ def _render_approval_review(row: dict, names: dict, proposals: dict) -> None:
             # back here previously let a stray click re-run the decision
             # (duplicate leave request, double-deducted balance).
             st.caption(
-                f"{_status_label(status)} by {row.get('decided_by') or '—'} "
-                f"on {row.get('decided_at') or '—'}"
+                i18n.t(
+                    "inbox.decided_by",
+                    status=_status_label(status),
+                    who=row.get("decided_by") or "—",
+                    when=_friendly_when(row.get("decided_at")) or "—",
+                )
             )
             if row.get("decision_note"):
-                st.caption(f"Note: {row['decision_note']}")
+                st.caption(i18n.t("inbox.decision_note", note=row["decision_note"]))
         else:
             cover_options = _cover_candidate_options(proposal)
             with st.form(f"decide_{approval_id}"):
@@ -1965,10 +1969,10 @@ def _render_approval_review(row: dict, names: dict, proposals: dict) -> None:
                 if cover_options:
                     ids, labels, default_index = cover_options
                     cover_employee_id = st.selectbox(
-                        "Cover employee", ids, index=default_index, format_func=lambda eid: labels.get(eid, eid)
+                        i18n.t("inbox.cover_employee"), ids, index=default_index, format_func=lambda eid: labels.get(eid, eid)
                     )
                 note = st.text_area(
-                    "Note", placeholder=i18n.t("inbox.note_placeholder"), label_visibility="collapsed"
+                    i18n.t("inbox.note_label"), placeholder=i18n.t("inbox.note_placeholder"), label_visibility="collapsed"
                 )
                 st.caption(i18n.t("inbox.note_optional"))
                 col_a, col_b = st.columns(2)
@@ -2018,7 +2022,7 @@ def _clean_policy_summary(policy_text: str, max_sentences: int = 4) -> str:
             continue
         lines.append(line)
     clean_policy = " ".join(lines)
-    sentences = re.split(r"(?<=[.!?])\s+", clean_policy)
+    sentences = re.split(r"(?<=[.!?؟])\s+", clean_policy)
     return " ".join(s.strip() for s in sentences[:max_sentences] if s.strip())
 
 
@@ -2035,6 +2039,10 @@ def _extract_manager_recommendation(manager_response: str) -> tuple[str | None, 
         return None, manager_response
     recommendation = match.group(1).upper()
     explanation = (manager_response[: match.start()] + manager_response[match.end() :]).strip(" :-\n")
+    # Drop the now-empty "AI Recommendation:" label line the keyword came from.
+    explanation = "\n".join(
+        line for line in explanation.splitlines() if line.strip().lower() != "ai recommendation:"
+    ).strip()
     return recommendation, explanation
 
 
@@ -2044,10 +2052,10 @@ def _render_decision_brief(decision_brief: dict, approval_id: str) -> None:
     col_a, col_b = st.columns(2)
     with col_a:
         st.markdown(f"**{i18n.t('inbox.action')}**")
-        st.write(str(decision_brief.get("action_type") or "—").replace("_", " ").title())
+        st.write(_record_type_label(decision_brief.get("action_type")))
     with col_b:
         st.markdown(f"**{i18n.t('inbox.risk')}**")
-        st.write(str(decision_brief.get("risk_level") or "—").upper())
+        st.write(_risk_label(decision_brief.get("risk_level"))[0])
 
     profile = decision_brief.get("termination_profile")
     if profile:
@@ -2066,7 +2074,11 @@ def _render_decision_brief(decision_brief: dict, approval_id: str) -> None:
         )
 
     policy = decision_brief.get("policy") or {}
-    recommendation = str(policy.get("recommendation") or "").strip()
+    # The API adds *_ar translations of the LLM-written parts when the UI
+    # language is Arabic (Accept-Language); fall back to the English text.
+    recommendation = str(
+        (i18n.is_rtl() and policy.get("recommendation_ar")) or policy.get("recommendation") or ""
+    ).strip()
     if recommendation:
         st.markdown(f"**{i18n.t('inbox.policy')}**")
         st.write(_clean_policy_summary(recommendation))
@@ -2079,12 +2091,18 @@ def _render_decision_brief(decision_brief: dict, approval_id: str) -> None:
         st.markdown(f"**{i18n.t('inbox.ai_recommendation')}**")
         keyword, explanation = _extract_manager_recommendation(manager_response)
         if keyword:
-            st.markdown(f"#### {keyword}")
+            # The keyword is a fixed rule-based value
+            # (manager_agent._get_ai_recommendation), so it's rendered from
+            # i18n; the evidence lines come pre-translated as explanation_ar.
+            code = keyword.replace(" ", "_").lower()
+            st.markdown(f"#### {i18n.t(f'brief.rec_{code}')}")
+        if i18n.is_rtl() and manager.get("explanation_ar"):
+            explanation = manager["explanation_ar"]
         if explanation:
             st.caption(i18n.t("inbox.reason"))
             st.write(explanation)
 
-    reasons = manager.get("reasons") or []
+    reasons = (i18n.is_rtl() and manager.get("reasons_ar")) or manager.get("reasons") or []
     if reasons:
         st.markdown(f"**{i18n.t('inbox.notes')}**")
         for reason in reasons:
@@ -2230,7 +2248,34 @@ def _render_staffing_checklist(action_type: str | None) -> None:
     st.markdown("\n".join(f"- {i18n.t(f'checklist.{key}')}" for key in keys))
 
 
+def _localized_grievance(g: dict) -> dict:
+    """Overlay the complaint / Consultant assessment / HR note in the UI
+    language from GET /grievances/{id} (the list endpoint stays
+    untranslated so the inbox loads fast). Works both ways: an Arabic
+    complaint is shown in English to an English-language reviewer, and
+    English Consultant text in Arabic. Cached per grievance + status +
+    language for the session; falls back to the stored text on any error."""
+    grievance_id = str(g.get("grievance_id") or "")
+    if not grievance_id:
+        return g
+    lang = i18n.get_lang()
+    cache_key = f"grievance_{lang}_{grievance_id}_{g.get('status')}"
+    detail = st.session_state.get(cache_key)
+    if detail is None:
+        try:
+            detail = api.raise_for_api(api.request("GET", f"/grievances/{grievance_id}", timeout=120.0)) or {}
+        except RuntimeError:
+            detail = {}
+        st.session_state[cache_key] = detail
+    localized = dict(g)
+    for field in ("complaint", "consultant_recommendation", "hr_response"):
+        if detail.get(f"{field}_{lang}"):
+            localized[field] = detail[f"{field}_{lang}"]
+    return localized
+
+
 def _render_grievance_review(g: dict, names: dict) -> None:
+    g = _localized_grievance(g)
     grievance_id = str(g.get("grievance_id") or "")
     identity_visible = bool(g.get("identity_visible"))
     if identity_visible:
@@ -2254,7 +2299,7 @@ def _render_grievance_review(g: dict, names: dict) -> None:
                 (i18n.t("detail.submitted"), _friendly_when(g.get("submitted_at")) or "—"),
             ]
         )
-        st.write(g.get("complaint") or "No complaint provided.")
+        st.write(g.get("complaint") or i18n.t("grievances.no_complaint"))
 
         if st.button(
             i18n.t("inbox.explain_this"), key=f"explain_grievance_{grievance_id}", use_container_width=True
@@ -2274,7 +2319,7 @@ def _render_grievance_review(g: dict, names: dict) -> None:
             styles.render_sources(brief.get("sources") or [], key=f"grievance_brief_{grievance_id}")
 
         with st.form(f"grievance_decision_{grievance_id}"):
-            response_note = st.text_area("Note", placeholder=i18n.t("inbox.note_placeholder"))
+            response_note = st.text_area(i18n.t("inbox.note_label"), placeholder=i18n.t("inbox.note_placeholder"))
             col_a, col_b = st.columns(2)
             accept = col_a.form_submit_button(i18n.t("inbox.accept"), type="primary", use_container_width=True)
             reject = col_b.form_submit_button(i18n.t("inbox.send_back"), use_container_width=True)
@@ -2358,7 +2403,7 @@ def page_grievances() -> None:
     ]
     tab_full_labels = [f"{label} ({len(items)})" for _, label, items in tabs]
     chosen = st.radio(
-        "Grievance filter", tab_full_labels, horizontal=True, key="grievances_tab", label_visibility="collapsed"
+        i18n.t("grievances.filter_label"), tab_full_labels, horizontal=True, key="grievances_tab", label_visibility="collapsed"
     )
     chosen_items = next(items for (_, _, items), full in zip(tabs, tab_full_labels) if full == chosen)
 
@@ -2407,6 +2452,7 @@ def page_grievances() -> None:
 
 
 def _render_grievance_readonly(g: dict, names: dict) -> None:
+    g = _localized_grievance(g)
     grievance_id = str(g.get("grievance_id") or "")
     identity_visible = bool(g.get("identity_visible"))
     if identity_visible:
@@ -2440,7 +2486,7 @@ def _render_grievance_readonly(g: dict, names: dict) -> None:
             ]
         )
         if g.get("hr_response"):
-            st.markdown("**HR note**")
+            st.markdown(f"**{i18n.t('grievances.hr_note')}**")
             st.write(g.get("hr_response"))
 
 
@@ -2544,7 +2590,46 @@ def _employee_names(employee_ids: list) -> dict[str, str]:
     return names
 
 
-def _action_label(row: dict) -> str:
+def _masked_iban(iban) -> str:
+    text = str(iban or "").replace(" ", "")
+    return f"•••• {text[-4:]}" if len(text) >= 4 else "—"
+
+
+def _localized_summary(action_type: str | None, payload: dict | None) -> str:
+    """One-line request summary in the UI language, built from the
+    proposal payload. pending_approvals.action_summary is written once, in
+    English, by the Manager agent; this replaces it for the self-service
+    request types. Returns "" for types it doesn't know, so callers fall
+    back to the stored summary."""
+    payload = payload if isinstance(payload, dict) else {}
+    if action_type == "leave_request":
+        leave_type = str(payload.get("leave_type") or "").lower()
+        type_label = i18n.t(f"leave.type_{leave_type}")
+        return i18n.t(
+            "records.summary_leave",
+            type=type_label if type_label != f"leave.type_{leave_type}" else leave_type or "—",
+            start=_friendly_when(payload.get("start_date")) or "?",
+            end=_friendly_when(payload.get("end_date")) or "?",
+        )
+    if action_type == "personal_info_update":
+        field = str(payload.get("field_name") or "")
+        field_label = i18n.t(f"summary.field_{field}")
+        if field_label == f"summary.field_{field}":
+            field_label = field or "—"
+        return i18n.t("summary.personal_info", field=field_label, value=payload.get("new_value") or "—")
+    if action_type == "bank_update":
+        return i18n.t("summary.bank", iban=_masked_iban(payload.get("new_iban")))
+    if action_type == "certificate_request":
+        return i18n.t("summary.certificate", name=payload.get("full_name") or payload.get("employee_id") or "—")
+    return ""
+
+
+def _action_label(row: dict, proposal: dict | None = None) -> str:
+    if proposal:
+        payload = proposal.get("payload_json")
+        localized = _localized_summary(proposal.get("action_type"), payload)
+        if localized:
+            return localized
     summary = str(row.get("action_summary") or "").strip()
     if summary:
         return summary
@@ -2624,7 +2709,7 @@ def _render_proposal_details(item: dict | None) -> None:
     action_type = str(item.get("action_type") or "")
     key_prefix = str(item.get("proposal_id") or "proposal")
 
-    st.caption("Request details")
+    st.caption(i18n.t("detail.request_details"))
     if action_type == "leave_request":
         _render_leave_proposal_details(payload, key_prefix)
     elif action_type == "new_hire":
@@ -2636,7 +2721,7 @@ def _render_proposal_details(item: dict | None) -> None:
 
     related = item.get("related_request_id")
     if related and action_type == "leave_request":
-        st.caption(f"Linked leave request: {related}")
+        st.caption(i18n.t("detail.linked_leave", id=related))
 
 
 def _render_leave_proposal_details(payload: dict, key_prefix: str) -> None:

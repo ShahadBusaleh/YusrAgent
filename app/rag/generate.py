@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.config import get_settings
 from app.rag.retrieve import retrieve
+from app.llm import llm_client
 
 SYSTEM_PROMPT = """You answer HR policy questions using only the retrieved documents.
 If the documents do not contain the answer, say so clearly.
@@ -28,7 +29,7 @@ def _llm_answer(query: str, chunks: list[dict]) -> str:
         )
     from openai import OpenAI
 
-    client = OpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url)
+    client = llm_client(settings, openai_cls=OpenAI)
     response = client.chat.completions.create(
         model=settings.llm_model,
         messages=[

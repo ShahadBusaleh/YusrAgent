@@ -24,6 +24,7 @@ from pypdf import PdfReader
 
 from app.agents.growth_plan import extract_pdf_text
 from app.config import get_settings
+from app.llm import llm_client
 
 CV_FIELDS = (
     "full_name",
@@ -124,7 +125,7 @@ def _llm_fields(cv_text: str) -> dict:
     if not settings.llm_api_key:
         raise CVParserUnavailableError("LLM_API_KEY is not set.")
 
-    client = OpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url)
+    client = llm_client(settings, openai_cls=OpenAI)
     # No max_tokens: the model spends tokens reasoning before it answers,
     # and a small cap returns an empty reply.
     response = client.chat.completions.create(

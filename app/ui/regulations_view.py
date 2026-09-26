@@ -59,6 +59,12 @@ def kind_label(kind: str | None) -> str:
     return i18n.t(f"reg.change.{kind or 'changed'}")
 
 
+def policy_reason(policy: dict) -> str:
+    """The analyst's one-line reason in the UI language. reason_ar exists
+    only on requests analysed after it was added; older ones keep English."""
+    return str((i18n.is_rtl() and policy.get("reason_ar")) or policy.get("reason") or "")
+
+
 def summary_line(payload: dict) -> str:
     policies = payload.get("policies") or []
     return i18n.t(
@@ -233,8 +239,9 @@ def render_review(row: dict, proposal: dict) -> None:
                     f"**{html.escape(str(policy.get('policy_name') or ''))}** ({html.escape(str(pid))}) {policy_pill(policy.get('status'))}",
                     unsafe_allow_html=True,
                 )
-                if policy.get("reason"):
-                    st.caption(f"{i18n.t('reg.reason')}: {policy['reason']}")
+                reason = policy_reason(policy)
+                if reason:
+                    st.caption(f"{i18n.t('reg.reason')}: {reason}")
                 cur, new = st.columns(2)
                 cur.markdown(
                     f'<div class="rg-label">{html.escape(i18n.t("reg.policy_old"))}</div>'
@@ -381,7 +388,7 @@ def render_record_details(record: dict) -> None:
         styles.data_table(
             [
                 {"policy": f"{p.get('policy_name')} ({p.get('policy_id')})", "status": styles.raw(policy_pill(p.get("status"))),
-                 "reason": p.get("reason") or "—", "cited": ", ".join(p.get("cited_law_ids") or []) or "—"}
+                 "reason": policy_reason(p) or "—", "cited": ", ".join(p.get("cited_law_ids") or []) or "—"}
                 for p in policies
             ],
             [("policy", i18n.t("reg.policies")), ("status", i18n.t("reg.col_status")),

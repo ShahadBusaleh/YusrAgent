@@ -6,19 +6,22 @@ from app.agents.hr_agent import HRAgent
 from app.agents.consultant_agent import ConsultantAgent
 from app.agents.manager_agent import ManagerAgent
 
-from app.config import get_settings
+from app.config import fast_llm_options, get_settings
 from app.security.governance import detect_prompt_injection
 from app.agents.translation import (
     detect_language,
+    prefetch_translations,
     translate_to_arabic,
     translate_to_english,
 )
 
 from app.db.connection import get_connection
+from app.db.translation_cache import database_path
 from app.db.approvals import list_pending_approvals
 from app.db.grievances import create_grievance
 from app.db.proposed_actions import get_proposed_action
-from app.agents.hr_agent import get_historical_precedent
+from app.agents.hr_agent import get_historical_precedent, get_termination_profile
+from app.llm import llm_client
 
 
 logger = logging.getLogger(__name__)
@@ -52,10 +55,8 @@ class OrchestratorAgent:
     def __init__(self):
         settings = get_settings()
 
-        self.client = OpenAI(
-            api_key=settings.llm_api_key,
-            base_url=settings.llm_base_url,
-        )
+        # Rotates across LLM_API_KEYS (app/llm.py).
+        self.client = llm_client(settings, openai_cls=OpenAI)
 
         self.model = settings.llm_model
 
@@ -195,6 +196,18 @@ class OrchestratorAgent:
         normalized = str(query or "").strip().lower()
 
         fast_paths = [
+            (
+                # Phase 4 staffing actions — checked first so a free-text
+                # termination reason can't route the request elsewhere.
+                # (Restored: dropped by fe67d6e, which was edited from a
+                # pre-Phase-4 copy of this file.)
+                "HR",
+                [
+                    "hire new employee",
+                    "add new employee",
+                    "terminate employee",
+                ],
+            ),
             (
                 "BOTH",
                 [
@@ -381,6 +394,9 @@ User request:
                         },
                     ],
                     temperature=0,
+                    # One-word JSON answer: low reasoning + a small cap keeps
+                    # this call from reserving most of the per-minute budget.
+                    **fast_llm_options(512),
                 )
 
                 content = (
@@ -705,6 +721,15 @@ User request:
 
                     "historical_precedent": precedent,
 
+                    # End-of-service file for terminations (rendered by the
+                    # UI's _render_termination_profile). Restored: dropped
+                    # by fe67d6e along with the staffing fast path.
+                    "termination_profile": (
+                        get_termination_profile(conn, proposal)
+                        if action_type == "termination"
+                        else None
+                    ),
+
                     "policy": {
                         "recommendation": consultant_result.get(
                             "recommendation",
@@ -979,9 +1004,20 @@ User request:
                     )
 
                     conn.commit()
+                    grievance_db = database_path(conn)
 
                 finally:
                     conn.close()
+
+                # Warm the translation cache in the background so HR
+                # reviewers in either language see it without waiting.
+                prefetch_translations(
+                    [
+                        grievance.get("complaint"),
+                        grievance.get("consultant_recommendation"),
+                    ],
+                    grievance_db,
+                )
 
                 return {
                     "status": "PENDING_HR_REVIEW",

@@ -13,8 +13,10 @@ from app.agents.growth_plan import (
     generate_growth_plan,
     prepare_cv_text,
 )
-from app.api.deps import CurrentUser, get_current_user
+from app.agents.translation import localize_many, prefetch_translations
+from app.api.deps import CurrentUser, get_current_user, get_request_lang
 from app.db.connection import get_db
+from app.db.translation_cache import database_path
 from app.db.employees import get_employee
 from app.db.growth_opportunities import (
     list_opportunities_for_employee,
@@ -34,15 +36,28 @@ _MAX_CV_BYTES = 10 * 1024 * 1024  # 10 MB
 def get_opportunities(
     user: CurrentUser = Depends(get_current_user),
     conn: sqlite3.Connection = Depends(get_db),
+    lang: str = Depends(get_request_lang),
 ) -> dict:
     """Department experience gaps this employee is a close-fit candidate for."""
 
-    return {
-        "opportunities": list_opportunities_for_employee(
-            conn,
-            user.employee_id,
-        )
-    }
+    opportunities = list_opportunities_for_employee(
+        conn,
+        user.employee_id,
+    )
+
+    # A plan is stored in the language it was generated in; when the
+    # reader's language differs (either direction) it is translated for
+    # display, in parallel and cached. The stored plan is unchanged.
+    plans = [
+        item["plan"]
+        for item in opportunities
+        if isinstance(item.get("plan"), dict) and item["plan"].get("plan_text")
+    ]
+    translated = localize_many([p["plan_text"] for p in plans], lang, database_path(conn))
+    for plan, text in zip(plans, translated):
+        plan["plan_text"] = text
+
+    return {"opportunities": opportunities}
 
 
 @router.post("/opportunities/{skill_id}/cv")
@@ -51,6 +66,7 @@ def upload_cv(
     cv: UploadFile = File(...),
     user: CurrentUser = Depends(get_current_user),
     conn: sqlite3.Connection = Depends(get_db),
+    lang: str = Depends(get_request_lang),
 ) -> dict:
     """Upload a CV for one gap and receive a personalized growth plan."""
 
@@ -103,7 +119,7 @@ def upload_cv(
     try:
         if not cv_text:
             raise InvalidCVError("The CV contains no usable text.")
-        plan_text = generate_growth_plan(employee, opportunity, cv_text)
+        plan_text = generate_growth_plan(employee, opportunity, cv_text, lang=lang)
     except InvalidCVError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -129,6 +145,10 @@ def upload_cv(
         cv_text=cv_text,
         plan_text=plan_text,
     )
+
+    # Pre-translate into the other language in the background, so the
+    # plan is ready if the employee switches the interface language.
+    prefetch_translations([saved["plan_text"]], database_path(conn))
 
     return {
         "skill_id": skill_id,

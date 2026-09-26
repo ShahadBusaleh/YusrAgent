@@ -15,6 +15,18 @@ from app.security.tokens import decode_token
 ROLES = ("employee", "hr_specialist", "hr_manager", "admin")
 
 
+def lang_from_header(accept_language: str | None) -> str:
+    """"ar" when the client's preferred language is Arabic, else "en"."""
+    first = (accept_language or "").split(",")[0].strip().lower()
+    return "ar" if first.startswith("ar") else "en"
+
+
+def get_request_lang(accept_language: str | None = Header(default=None)) -> str:
+    """The UI sends its selected interface language as Accept-Language;
+    endpoints use this to return Arabic text outside chat."""
+    return lang_from_header(accept_language)
+
+
 @dataclass
 class CurrentUser:
     user_id: str

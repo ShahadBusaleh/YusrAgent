@@ -3,6 +3,12 @@ from __future__ import annotations
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from app.api.deps import lang_from_header
+from app.api.error_messages import localize_detail
+from app.config import get_settings
+from app.llm import pool_status
 
 from app.api.routers import (
     agent,
@@ -36,6 +42,18 @@ app.add_middleware(
 )
 
 
+@app.exception_handler(StarletteHTTPException)
+async def localized_http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    """Same as FastAPI's default handler, except `detail` is translated to
+    Arabic when the UI's language (Accept-Language) is Arabic."""
+    lang = lang_from_header(request.headers.get("accept-language"))
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": localize_detail(exc.detail, lang)},
+        headers=getattr(exc, "headers", None),
+    )
+
+
 @app.exception_handler(NotImplementedError)
 async def not_implemented_handler(request: Request, exc: NotImplementedError) -> JSONResponse:
     return JSONResponse(
@@ -46,7 +64,9 @@ async def not_implemented_handler(request: Request, exc: NotImplementedError) ->
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok"}
+    # Key counts only (never key values): how many LLM keys are configured
+    # and how many are resting after a rate limit.
+    return {"status": "ok", "llm_keys": pool_status(get_settings())}
 
 
 app.include_router(auth.router)

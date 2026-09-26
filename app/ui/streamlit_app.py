@@ -223,7 +223,18 @@ def _initials(name: str) -> str:
 def _login() -> None:
     # Login-only CSS on top of styles.inject() (background photo, hidden
     # header, glass-styled form, fixed brand mark).
+    # RTL layout + Arabic font when Arabic is selected (the logged-in shell
+    # does the same in _shell()).
+    styles.apply_language(i18n.get_lang())
     styles.login_page_style()
+
+    # Language toggle before sign-in, so an Arabic-speaking employee can
+    # log in in Arabic; the choice carries into the session after login.
+    lang = i18n.get_lang()
+    with st.container(key="yz_login_lang_toggle"):
+        if st.button(i18n.t("lang.toggle_to_en") if lang == "ar" else i18n.t("lang.toggle_to_ar")):
+            i18n.set_lang("en" if lang == "ar" else "ar")
+            st.rerun()
 
     # The form itself IS the card — styled via [data-testid="stForm"] in
     # login_page_style() — so there's no extra wrapper div/container.
@@ -231,17 +242,22 @@ def _login() -> None:
         st.markdown(
             """
             <div class="yz-login-kicker">YUSOR</div>
-            <div class="yz-login-title">Welcome Back</div>
-            <div class="yz-login-sub">Sign in to your Yusor workspace</div>
-            """,
+            <div class="yz-login-title">{title}</div>
+            <div class="yz-login-sub">{subtitle}</div>
+            """.format(
+                title=html.escape(i18n.t("login.title")),
+                subtitle=html.escape(i18n.t("login.subtitle")),
+            ),
             unsafe_allow_html=True,
         )
-        username = st.text_input("Username", placeholder="e.g. mona.saleh")
+        username = st.text_input(
+            i18n.t("login.username"), placeholder=i18n.t("login.username_ph")
+        )
         password = st.text_input(
-            "Password", type="password", placeholder="Enter your password"
+            i18n.t("login.password"), type="password", placeholder=i18n.t("login.password_ph")
         )
         submitted = st.form_submit_button(
-            "Sign in",
+            i18n.t("login.submit"),
             type="primary",
             use_container_width=True,
         )
@@ -264,7 +280,7 @@ def _login() -> None:
     except RuntimeError as exc:
         st.error(str(exc))
     except httpx.HTTPError:
-        st.error("Could not reach the Yusor API. Please try again in a moment.")
+        st.error(i18n.t("login.api_unreachable"))
 
 
 def _logout() -> None:
@@ -339,7 +355,7 @@ def _sidebar(me: dict, pending_count: int = 0) -> str:
             return label
 
         page = st.radio(
-            "Navigate",
+            i18n.t("nav.label"),
             pages,
             index=default_index,
             format_func=_nav_label,
@@ -360,7 +376,7 @@ def _sidebar(me: dict, pending_count: int = 0) -> str:
 def _team_insights_v2() -> None:
     role = (st.session_state.get("me") or {}).get("role")
     if role not in {"hr_manager", "admin"}:
-        st.error("Team Insights is available to HR managers and admins only.")
+        st.error(i18n.t("insights.not_allowed"))
         return
 
     st.markdown(
@@ -383,7 +399,7 @@ def _team_insights_v2() -> None:
 
     departments = (dept_data or {}).get("departments") or []
     if not departments:
-        st.info("No departments found.")
+        st.info(i18n.t("insights.no_departments"))
         return
 
     name_to_id = {

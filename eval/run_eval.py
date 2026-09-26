@@ -43,6 +43,10 @@ SOURCE_DB = ROOT / "agentic_hr.db"
 
 sys.path.insert(0, str(ROOT))
 
+# Background translation prefetch (app.agents.translation) would outlive
+# each case's temporary DB copy and add LLM calls to every run.
+os.environ.setdefault("YUSOR_PREFETCH_TRANSLATIONS", "0")
+
 OFFLINE_TARGETS = {"hr", "manager"}
 _CITATION_RE = re.compile(r"\[Source:\s*([^\]]+)\]", re.I)
 _POLICY_ID_RE = re.compile(r"\b(?:LAW\d{3}|AAM-POL-\d{3}|WPS\d{3})\b")

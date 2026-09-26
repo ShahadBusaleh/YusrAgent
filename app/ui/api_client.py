@@ -20,6 +20,9 @@ def _base() -> str:
 
 def _headers(extra: dict | None = None) -> dict[str, str]:
     headers = dict(extra or {})
+    # The selected interface language, so the API returns Arabic text
+    # (errors, Decision Brief, grievances, growth plans) outside chat.
+    headers.setdefault("Accept-Language", st.session_state.get("lang") or "en")
     token = st.session_state.get("access_token")
     if token:
         headers["Authorization"] = f"Bearer {token}"

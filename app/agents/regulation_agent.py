@@ -43,6 +43,7 @@ from app.db import regulations as reg_db
 from app.db.approvals import create_pending_approval
 from app.db.connection import get_connection
 from app.db.proposed_actions import create_proposed_action
+from app.llm import llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -435,6 +436,7 @@ NEW law and return JSON:
 {"policies": [{"policy_id": "<one of the given ids>",
                "status": "compliant" | "conflict" | "needs_review",
                "reason": "<one sentence>",
+               "reason_ar": "<the same sentence in Modern Standard Arabic>",
                "proposed_rule": "<the policy rule rewritten to comply; same as the current rule if compliant>",
                "cited_law_ids": ["<ids from the given law rows>"]}]}
 Status: compliant = the policy meets or exceeds the new law; conflict = the
@@ -449,7 +451,7 @@ def _llm_json(system: str, data: dict) -> dict:
     settings = get_settings()
     if not settings.llm_api_key:
         raise RuntimeError("LLM_API_KEY is not set.")
-    client = OpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url, timeout=90.0)
+    client = llm_client(settings, timeout=90.0, openai_cls=OpenAI)
     response = client.chat.completions.create(
         model=settings.llm_model,
         messages=[
@@ -548,6 +550,7 @@ def analyse_change(conn: sqlite3.Connection, change: dict, fetched: dict) -> dic
                 policies.append({
                     "policy_id": policy["id"], "policy_name": policy["policy_name"], "section": policy["section"],
                     "status": status, "reason": str(out.get("reason") or ""),
+                    "reason_ar": str(out.get("reason_ar") or ""),
                     "old_rule": policy["rule"], "proposed_rule": proposed if status != "compliant" else policy["rule"],
                     "cited_law_ids": [x for x in out.get("cited_law_ids") or [] if x in allowed_laws] or sorted(allowed_laws),
                 })

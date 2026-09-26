@@ -7,8 +7,10 @@ import sqlite3
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.api.deps import CurrentUser, require_role
+from app.agents.translation import localize_many, prefetch_translations
+from app.api.deps import CurrentUser, get_request_lang, require_role
 from app.db.connection import get_db
+from app.db.translation_cache import database_path
 from app.db.grievances import (
     decide_grievance,
     get_grievance,
@@ -44,6 +46,7 @@ def get_grievances(
 @router.get("/{grievance_id}")
 def get_grievance_by_id(
     grievance_id: str,
+    lang: str = Depends(get_request_lang),
     conn: sqlite3.Connection = Depends(get_db),
     user: CurrentUser = Depends(
         require_role(
@@ -60,6 +63,18 @@ def get_grievance_by_id(
             status_code=404,
             detail="Grievance not found.",
         )
+
+    # Translated on the single-grievance view only (not the list), so the
+    # inbox stays fast. Either direction: complaints are stored as the
+    # employee wrote them (often Arabic), Consultant text is English.
+    # Fields already in the reader's language are skipped (no LLM call);
+    # the rest are translated in parallel and cached. Originals are kept,
+    # and "<field>_<lang>" is added only where a translation exists.
+    fields = ("complaint", "consultant_recommendation", "hr_response")
+    translated = localize_many([grievance.get(f) for f in fields], lang, database_path(conn))
+    for field, text in zip(fields, translated):
+        if grievance.get(field) and text != grievance[field]:
+            grievance[f"{field}_{lang}"] = text
 
     return grievance
 
@@ -108,5 +123,9 @@ def decide_grievance_route(
     )
 
     conn.commit()
+
+    # Translate the HR note now, in the background, so the first reader
+    # in the other language doesn't wait for it.
+    prefetch_translations([body.response], database_path(conn))
 
     return updated

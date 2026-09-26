@@ -1689,6 +1689,12 @@ def login_page_style() -> None:
           margin: 12vh auto 6vh !important;
         }}
 
+        /* Phones: the fixed brand block (~200px) is taller than 12vh, so
+           start the card below it instead of under the tagline. */
+        @media (max-width: 640px) {{
+          [data-testid="stForm"] {{ margin-top: 215px !important; }}
+        }}
+
         [data-testid="stForm"] label p {{
           color: #241A14 !important;
           font-weight: 600;
@@ -1752,6 +1758,14 @@ def login_page_style() -> None:
           transition: background-color 5000s ease-in-out 0s;
         }}
 
+        /* Direction follows the content: an Arabic placeholder reads RTL,
+           while a Latin username/password typed in stays LTR. */
+        [data-testid="stForm"] [data-testid="stTextInput"] input,
+        [data-testid="stForm"] [data-testid="stTextInput"] input::placeholder {{
+          unicode-bidi: plaintext;
+          text-align: start;
+        }}
+
         /* Password show/hide eye icon: keep it dark and visible. */
         [data-testid="stForm"] [data-testid="stTextInput"] button svg {{
           fill: #462E24 !important;
@@ -1774,7 +1788,8 @@ def login_page_style() -> None:
         .yz-login-brand {{
           position: fixed;
           top: 2rem;
-          left: 2.4rem;
+          /* Logical side: top-left in English, top-right in Arabic (RTL). */
+          inset-inline-start: 2.4rem;
           z-index: 5;
         }}
 
@@ -1793,11 +1808,45 @@ def login_page_style() -> None:
           margin-top: .4rem;
           font-weight: 600;
         }}
+
+        /* Language toggle: pinned to the corner opposite the brand mark,
+           same glass look as the card. */
+        .st-key-yz_login_lang_toggle {{
+          position: fixed;
+          top: 2rem;
+          inset-inline-end: 2.4rem;
+          z-index: 6;
+          /* Streamlit's button wrappers are percentage-width, which makes
+             fit-content resolve to the full row; size to the button. */
+          width: max-content !important;
+        }}
+        .st-key-yz_login_lang_toggle div,
+        .st-key-yz_login_lang_toggle button {{
+          width: auto !important;
+        }}
+        .st-key-yz_login_lang_toggle button {{
+          height: 40px !important;
+          padding: 0 1.1rem !important;
+          border-radius: 999px !important;
+          border: 1px solid rgba(255,255,255,0.65) !important;
+          background: rgba(255,250,244,0.55) !important;
+          backdrop-filter: blur(8px);
+          -webkit-backdrop-filter: blur(8px);
+          box-shadow: 0 8px 24px rgba(20,14,10,.18) !important;
+          white-space: nowrap !important;
+        }}
+        .st-key-yz_login_lang_toggle button:hover {{
+          background: rgba(255,250,244,0.85) !important;
+        }}
+        .st-key-yz_login_lang_toggle button p {{
+          color: #462E24 !important;
+          font-weight: 700 !important;
+        }}
         </style>
 
         <div class="yz-login-brand">
           {brand_logo("brown", size=180, wordmark_class="yz-login-brand-en")}
-          <div class="yz-login-brand-tagline">People. Processes.<br>A Smarter Tomorrow.</div>
+          <div class="yz-login-brand-tagline">{i18n.t("app.tagline")}</div>
         </div>
         """,
         unsafe_allow_html=True,
