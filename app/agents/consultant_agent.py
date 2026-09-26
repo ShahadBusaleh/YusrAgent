@@ -785,8 +785,7 @@ def _generate_consultant_recommendation(
         4. Do not access employee-specific data or the HR database.
         5. Do not decide employee eligibility, approve, reject, or resolve the grievance.
         6. Do not invent policies, legal rules, conditions, exceptions, or citations.
-        7. Never expose internal source IDs, Law IDs, record IDs, or filenames.
-        8. State clearly if the retrieved evidence is insufficient.
+        7. For every relevant policy rule, include a citation in the exact format [Source: ID]. Use only IDs that appear in the retrieved policy evidence.        8. State clearly if the retrieved evidence is insufficient.
         9. Human HR review is ALWAYS required.
         10. If employee-specific information is required, indicate that it is required.
         """.strip()
@@ -812,8 +811,7 @@ def _generate_consultant_recommendation(
     12. The Manager Agent is responsible for governance and final decisions.
     13. The Consultant is advisory only and independent from the HR Agent.
     14. Article numbers may be mentioned when relevant.
-    15. Never expose internal source IDs, Law IDs, record IDs, filenames, or source identifiers.
-    """.strip()
+    15. For every relevant policy rule, include a citation in the exact format [Source: ID]. Use only IDs that appear in the retrieved policy evidence.    """.strip()
 
     # -----------------------------------------------------
     # USER PROMPT
@@ -841,11 +839,13 @@ Explain the relevant:
 For each relevant policy rule, mention the Article number
 when it is relevant and available.
 
-Never mention Law IDs, internal source IDs, record IDs,
-filenames, or other internal identifiers.
+For every relevant policy rule, include a citation in the exact
+format [Source: ID].
 
-Use human-readable source names only.
+Use ONLY source IDs that appear in the retrieved policy evidence.
+Do not invent or modify source IDs.
 
+You may also mention human-readable source names when available.
 Do NOT evaluate any specific employee.
 
 Do NOT use employee-specific information.
@@ -854,8 +854,8 @@ Do NOT calculate leave balances.
 
 Do NOT determine eligibility.
 
-Use human-readable source names only.
-Do not add citation tags such as [Source: ID].
+Include citations using the exact format [Source: ID].
+Citations must refer only to the retrieved policy evidence.
 """.strip()
 
     response = client.chat.completions.create(
