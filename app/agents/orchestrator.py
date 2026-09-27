@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor
 from openai import OpenAI
 from app.agents.hr_agent import HRAgent
@@ -74,6 +75,62 @@ def _render_arabic(blocks: list) -> str:
         with ThreadPoolExecutor(max_workers=min(4, len(blocks))) as pool:
             paragraphs = list(pool.map(render, blocks))
     return "\n\n".join(p for p in paragraphs if p)
+
+
+# Employees may only see their own records. HR reads the signed-in user's
+# employee_id, so without this check "Show me Mona Saleh's salary" silently
+# answered with the requester's own payroll instead of refusing.
+_PERSONAL_DATA_WORDS = (
+    "salary", "payroll", "payslip", "pay slip", "net pay", "gross pay",
+    "allowance", "deduction", "iban", "bank", "account number",
+    "leave balance", "attendance", "absence", "overtime",
+    "phone", "mobile", "email", "address", "national id", "iqama",
+    "date of birth", "birthday", "personal info", "personal details",
+    "personal data", "record", "profile", "performance", "evaluation",
+    "contract",
+)
+_EMP_ID_IN_QUERY_RE = re.compile(r"\bEMP-\d{4}\b", re.IGNORECASE)
+_POSSESSIVE_RE = re.compile(r"\b([A-Za-z]+)(?:'s|’s)\b")
+
+
+def _references_other_employee(query: str, user: dict) -> bool:
+    """True when an `employee`-role user asks for personal data (salary,
+    IBAN, balances, contact details...) of someone other than themselves,
+    named by employee ID, full name, or a possessive first name."""
+    if (user or {}).get("role") != "employee":
+        return False
+    lowered = query.lower()
+    if not any(word in lowered for word in _PERSONAL_DATA_WORDS):
+        return False
+
+    own_id = str(user.get("employee_id") or "").upper()
+    if any(m.upper() != own_id for m in _EMP_ID_IN_QUERY_RE.findall(query)):
+        return True
+
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT employee_id, full_name, employee_name_en FROM employees"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    own_names: set[str] = set()
+    other_names: set[str] = set()
+    for employee_id, full_name, name_en in rows:
+        names = {str(n).strip().lower() for n in (full_name, name_en) if n}
+        (own_names if str(employee_id).upper() == own_id else other_names).update(names)
+    other_names -= own_names
+
+    for name in other_names:
+        if name and re.search(rf"\b{re.escape(name)}\b", lowered):
+            return True
+
+    own_first = {n.split()[0] for n in own_names if n}
+    other_first = {n.split()[0] for n in other_names if n} - own_first
+    return any(
+        m.lower() in other_first for m in _POSSESSIVE_RE.findall(query)
+    )
 
 
 class OrchestratorAgent:
@@ -906,6 +963,20 @@ User request:
         # =====================================================
 
         intent = self.classify_intent(query)
+
+        # Grievances may legitimately name a colleague; everything else
+        # asking for another employee's personal data is refused.
+        if intent != "GRIEVANCE" and _references_other_employee(query, user):
+            return self.handle_high_risk(
+                query=query,
+                user=user,
+                security_result={
+                    "detected": True,
+                    "type": "UNAUTHORIZED_ACCESS",
+                    "risk": "HIGH",
+                    "reason": "Employees can only see their own records.",
+                },
+            )
 
         # =====================================================
         # STEP 3 — DEFAULT RESULTS

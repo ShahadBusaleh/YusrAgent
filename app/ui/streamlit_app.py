@@ -293,8 +293,12 @@ def _logout() -> None:
     except Exception:
         pass
 
-    for key in ("access_token", "refresh_token", "me", "nav_page"):
-        st.session_state.pop(key, None)
+    # Wipe everything tied to the signed-out user (chat history, form
+    # drafts, cached records...) so the next login on this browser
+    # session starts clean. Only the UI language survives.
+    for key in list(st.session_state.keys()):
+        if key != "lang":
+            st.session_state.pop(key, None)
     st.rerun()
 
 
