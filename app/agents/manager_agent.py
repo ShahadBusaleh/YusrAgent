@@ -216,6 +216,10 @@ def _hr_summary_pairs(facts: dict, include_profile: bool = True) -> list[tuple[s
         if isinstance(attendance_notice, str) and attendance_notice:
             parts.append((attendance_notice, None))
 
+    gap_text = _experience_gap_summary(facts.get("experience_gap"))
+    if gap_text:
+        parts.append((gap_text, None))
+
     # Identity is only useful as context alongside a specific answer above,
     # or as a last-resort reply when nothing else matched the query — not
     # appended to every response regardless of what was actually asked.
@@ -226,6 +230,54 @@ def _hr_summary_pairs(facts: dict, include_profile: bool = True) -> list[tuple[s
         parts.append((f"{profile['full_name']}" + (f" — {', '.join(bits)}." if bits else "."), None))
 
     return parts
+
+
+def _experience_gap_summary(gap: dict | None) -> str:
+    """Skill gaps per department with the internal pool that can grow
+    into each one — the same data Team Insights shows."""
+    if not isinstance(gap, dict):
+        return ""
+    departments = gap.get("departments") or []
+    if not departments:
+        return ""
+
+    lines: list[str] = []
+    for dep in departments:
+        gaps = dep.get("gaps") or []
+        name = dep.get("department_name") or dep.get("department_id")
+        if not gaps:
+            if gap.get("scope") != "company":
+                lines.append(f"**{name}**: no skill gaps — every required skill is covered.")
+            continue
+        lines.extend(["", f"**{name}**"])
+        for item in gaps:
+            label = f"{item['skill_name']}" + (" (critical)" if item.get("is_critical") else "")
+            pool = item.get("internal_candidates") or {}
+            titles = pool.get("titles") or []
+            if pool.get("count"):
+                roles = ", ".join(f"{t['job_title']} ({t['headcount']})" for t in titles)
+                lines.append(
+                    f"- {label}: no one holds this skill yet. Grow internally — "
+                    f"{pool['count']} candidate(s) from {roles}."
+                )
+            else:
+                lines.append(
+                    f"- {label}: no one holds this skill and no adjacent role "
+                    f"exists — hire externally."
+                )
+
+    if not lines:
+        return "No skill gaps found — every department covers its required skills."
+    header = (
+        "Skill gaps across departments, with the internal candidates who can grow into them:"
+        if gap.get("scope") == "company"
+        else "Skill gaps and internal candidates:"
+    )
+    footer = (
+        "Candidates see these gaps on their Growth Opportunities page and can "
+        "upload a CV for a personal development plan. See Team Insights for names."
+    )
+    return "\n".join([header, *lines, "", footer])
 
 
 def _shown(value) -> str:

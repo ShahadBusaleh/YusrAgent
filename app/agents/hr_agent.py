@@ -14,7 +14,11 @@ from app.db.employees import find_cover_candidates, get_employee
 from app.db.leave import get_leave_balance, list_leave_requests
 from app.db.payroll import get_latest_payroll, get_payroll_for_period
 from app.db.attendance import get_attendance_for_period, get_latest_attendance
-from app.db.skills import get_department_experience_gap
+from app.db.skills import (
+    get_department_experience_gap,
+    list_departments,
+    summarize_candidate_titles,
+)
 
 
 _STAFF_ROLES = {"hr_specialist", "hr_manager", "admin"}
@@ -548,12 +552,19 @@ def _is_certificate_request(query: str) -> bool:
 def _is_experience_gap_query(query: str) -> bool:
     """Detect read-only workforce skill-gap questions."""
 
+    # _contains_any is whole-word, so plurals must be listed explicitly —
+    # "What skill gaps exist...?" never matched "skill gap" before.
     return _contains_any(
         query,
         (
             "experience gap",
+            "experience gaps",
             "skill gap",
+            "skill gaps",
             "skills gap",
+            "skills gaps",
+            "internal candidate",
+            "internal candidates",
             "team skills",
             "skill coverage",
             "skills coverage",
@@ -562,6 +573,29 @@ def _is_experience_gap_query(query: str) -> bool:
             "skills shortage",
         ),
     )
+
+
+def _gap_department_ids(
+    conn,
+    query: str,
+    own_department_id: str | None,
+) -> list[str]:
+    """Departments a skill-gap question is about: any department named
+    in the query (Team Insights' "Ask Yusor about this gap" names one);
+    otherwise the asker's own department when they say "my department"
+    / "my team"; otherwise every department (company-wide overview)."""
+
+    query_lower = query.lower()
+    named = [
+        d["department_id"]
+        for d in list_departments(conn)
+        if re.search(rf"\b{re.escape(d['department_name'].lower())}\b", query_lower)
+    ]
+    if named:
+        return named
+    if own_department_id and _contains_any(query, ("my department", "my team", "my teams")):
+        return [own_department_id]
+    return [d["department_id"] for d in list_departments(conn)]
 
 
 def _first_value(
@@ -1719,46 +1753,48 @@ class HRAgent(BaseAgent):
                     }
 
                 else:
-                    department_id = (
-                        input.get("department_id")
-                        or (
-                            facts.get("profile") or {}
-                        ).get("department_id")
-                    )
-
-                    if not department_id:
-                        facts["request_assessment"] = {
-                            "status": "NEEDS_INFORMATION",
-                            "missing_information": [
-                                "department_id"
-                            ],
-                            "notes": [
-                                "Provide a department to calculate "
-                                "the experience gap."
-                            ],
-                        }
-
-                    else:
-                        gap = get_department_experience_gap(
+                    department_ids = (
+                        [input["department_id"]]
+                        if input.get("department_id")
+                        else _gap_department_ids(
                             conn,
-                            department_id,
+                            query,
+                            (employee or {}).get("department_id"),
                         )
+                    )
+                    names = {
+                        d["department_id"]: d["department_name"]
+                        for d in list_departments(conn)
+                    }
 
-                        for item in gap:
-                            item.pop("_candidate_employees", None)
-
-                        facts["experience_gap"] = {
+                    departments = []
+                    for department_id in department_ids:
+                        gaps = []
+                        for item in get_department_experience_gap(conn, department_id):
+                            candidates = item.pop("_candidate_employees", None) or []
+                            if item["status"] != "MISSING":
+                                continue
+                            # Titles + counts only: the chat answer names
+                            # roles, not individual employees.
+                            item["internal_candidates"] = {
+                                "count": len(candidates),
+                                "titles": summarize_candidate_titles(candidates),
+                            }
+                            gaps.append(item)
+                        departments.append({
                             "department_id": department_id,
-                            "skills": gap,
-                        }
-
+                            "department_name": names.get(department_id, department_id),
+                            "gaps": gaps,
+                        })
                         sources.append(
                             f"department_requirements:{department_id}"
                         )
 
-                        sources.append(
-                            f"skill_job_titles:{department_id}"
-                        )
+                    facts["experience_gap"] = {
+                        "scope": "company" if len(department_ids) > 1 else "department",
+                        "departments": departments,
+                    }
+                    sources.append("skill_job_titles")
 
             # -------------------------------------------------
             # Personal information update

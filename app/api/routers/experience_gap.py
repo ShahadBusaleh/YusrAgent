@@ -6,7 +6,12 @@ from fastapi import APIRouter, Depends
 
 from app.api.deps import CurrentUser, require_role, roles_at_least
 from app.db.connection import get_db
-from app.db.skills import get_department_experience_gap, list_departments
+from app.db.growth_opportunities import employees_with_growth_plan
+from app.db.skills import (
+    get_department_experience_gap,
+    list_departments,
+    summarize_candidate_titles,
+)
 
 
 router = APIRouter(
@@ -35,7 +40,12 @@ def get_experience_gap(
     ),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict:
-    """Return read-only skill coverage insights for a department."""
+    """Return read-only skill coverage insights for a department.
+
+    Each MISSING skill carries `internal_candidates`: the same employees
+    who see it on their Growth Opportunities page, so the manager view
+    and the employee view always agree on who can grow into a gap.
+    """
 
     skills = get_department_experience_gap(
         conn,
@@ -43,7 +53,20 @@ def get_experience_gap(
     )
 
     for item in skills:
-        item.pop("_candidate_employees", None)
+        candidates = item.pop("_candidate_employees", None) or []
+        if item["status"] != "MISSING":
+            continue
+        with_plan = employees_with_growth_plan(conn, item["skill_id"])
+        employees = [
+            {**c, "has_growth_plan": c["employee_id"] in with_plan}
+            for c in candidates
+        ]
+        item["internal_candidates"] = {
+            "count": len(employees),
+            "titles": summarize_candidate_titles(candidates),
+            "plans_started": sum(e["has_growth_plan"] for e in employees),
+            "employees": employees,
+        }
 
     return {
         "department_id": department_id,

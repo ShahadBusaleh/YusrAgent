@@ -75,14 +75,28 @@ def _candidate_job_titles(
     Sales-category gap, but they're never proposed for a Technology
     gap they have no connection to.
 
+    Same-category alone misses obvious cross-category fits, though
+    (Systems Administrators for Cyber Security, Supply Planning staff
+    for Supply Chain Risk), which made Team Insights recommend external
+    hiring for gaps the department can clearly grow into. A title also
+    counts when it carries one of the explicitly related skills in
+    `_RELATED_SKILLS`.
+
     Returns [{"job_title": ..., "headcount": ...}, ...] for every such
     title, or an empty list when nothing in the department has any
-    same-category adjacency — the caller then falls back to a hiring
-    recommendation instead of naming an unrelated position.
+    adjacency — the caller then falls back to a hiring recommendation
+    instead of naming an unrelated position.
     """
 
+    skill_row = conn.execute(
+        "SELECT skill_name FROM skills WHERE skill_id = ?",
+        (skill_id,),
+    ).fetchone()
+    related = _RELATED_SKILLS.get(skill_row[0], ()) if skill_row else ()
+    related_placeholders = ",".join("?" for _ in related) or "NULL"
+
     rows = conn.execute(
-        """
+        f"""
         SELECT e.job_title, COUNT(*) AS headcount
         FROM employees e
         WHERE e.department_id = ?
@@ -90,18 +104,42 @@ def _candidate_job_titles(
               SELECT DISTINCT sjt.job_title
               FROM skill_job_titles sjt
               JOIN skills s2 ON s2.skill_id = sjt.skill_id
-              WHERE s2.category = (
-                  SELECT category FROM skills WHERE skill_id = ?
-              )
-              AND sjt.skill_id != ?
+              WHERE sjt.skill_id != ?
+                AND (
+                    s2.category = (
+                        SELECT category FROM skills WHERE skill_id = ?
+                    )
+                    OR s2.skill_name IN ({related_placeholders})
+                )
           )
         GROUP BY e.job_title
         ORDER BY headcount DESC, e.job_title ASC
         """,
-        (department_id, skill_id, skill_id),
+        (department_id, skill_id, skill_id, *related),
     ).fetchall()
 
     return [dict(row) for row in rows]
+
+
+# Cross-category adjacency: gap skill -> existing skills whose holders
+# are a realistic internal pool to grow into it. Keyed by skill_name
+# (stable across reseeds, unlike generated ids).
+_RELATED_SKILLS: dict[str, tuple[str, ...]] = {
+    "Cyber Security": ("Systems Administration", "Cloud Infrastructure"),
+    "CRM Management": ("Sales Forecasting", "Customer Analytics"),
+    "Marketing Automation": ("Digital Marketing", "Marketing Analytics"),
+    "Process Automation": ("Process Improvement",),
+    "Supply Chain Risk": ("Supply Planning", "Demand Forecasting"),
+}
+
+
+def summarize_candidate_titles(candidates: list[dict]) -> list[dict]:
+    """[{"job_title", "headcount"}] in the candidates' ranked order."""
+
+    counts: dict[str, int] = {}
+    for c in candidates:
+        counts[c["job_title"]] = counts.get(c["job_title"], 0) + 1
+    return [{"job_title": t, "headcount": n} for t, n in counts.items()]
 
 
 _CATEGORY_TRAINING_HINTS: dict[str, str] = {

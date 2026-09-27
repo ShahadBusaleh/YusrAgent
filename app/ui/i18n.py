@@ -257,8 +257,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "sugg.check_balance.query": "How many annual leave days do I have remaining, and can I carry them forward?",
         "sugg.explain_policy.label": "Explain a policy",
         "sugg.explain_policy.query": "What is the minimum annual leave per year?",
-        "sugg.skill_gaps.label": "Team skill gaps",
-        "sugg.skill_gaps.query": "What skill gaps exist in my department?",
+        "sugg.skill_gaps.label": "Skill gaps & internal talent",
+        "sugg.skill_gaps.query": "Which departments have skill gaps, and which internal candidates can we grow into them?",
         "sugg.pending_approvals.label": "Pending approvals",
         "sugg.pending_approvals.query": "What requests are waiting for my approval right now?",
         "sugg.bank_policy.label": "Bank update policy",
@@ -372,6 +372,25 @@ STRINGS: dict[str, dict[str, str]] = {
         "insights.col_category": "Category",
         "insights.no_recommendation": "No specific recommendation from the data yet.",
         "insights.ask_about_gap_secondary": "Ask Yusor about this gap",
+        "insights.pill_grow": "Grow internally",
+        "insights.pill_hire": "Hire externally",
+        "insights.note_grow": (
+            "No one holds this skill yet. {n} employees in adjacent roles ({roles}) "
+            "can grow into it — they see this gap on their Growth Opportunities page "
+            "and can upload a CV for a personal development plan."
+        ),
+        "insights.note_hire": (
+            "No one holds this skill and no role in this department is adjacent to it "
+            "— recommend hiring externally."
+        ),
+        "insights.col_candidates": "Internal candidates",
+        "insights.col_plans": "Growth plans started",
+        "insights.view_candidates": "View candidates ({n})",
+        "insights.col_employee": "Employee",
+        "insights.col_job_title": "Current role",
+        "insights.col_plan": "Growth plan",
+        "insights.plan_yes": "Started",
+        "insights.plan_no": "Not yet",
         # ---- Detail card (glass label/value grid) ----
         "detail.identity": "Employee",
         "detail.submitted": "Submitted",
@@ -882,8 +901,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "sugg.check_balance.query": "كم يوم إجازة سنوية متبقٍّ لي، وهل يمكن ترحيله للسنة القادمة؟",
         "sugg.explain_policy.label": "اشرح سياسة",
         "sugg.explain_policy.query": "ما هو الحد الأدنى للإجازة السنوية في العام؟",
-        "sugg.skill_gaps.label": "فجوات مهارات الفريق",
-        "sugg.skill_gaps.query": "ما هي فجوات المهارات الموجودة في قسمي؟",
+        "sugg.skill_gaps.label": "فجوات المهارات والمواهب الداخلية",
+        "sugg.skill_gaps.query": "ما الأقسام التي لديها فجوات في المهارات، ومن هم المرشحون الداخليون الذين يمكن تطويرهم لسدّها؟",
         "sugg.pending_approvals.label": "الموافقات المعلّقة",
         "sugg.pending_approvals.query": "ما هي الطلبات التي تنتظر موافقتي الآن؟",
         "sugg.bank_policy.label": "سياسة تحديث الحساب البنكي",
@@ -993,6 +1012,25 @@ STRINGS: dict[str, dict[str, str]] = {
         "insights.col_category": "الفئة",
         "insights.no_recommendation": "لا توجد توصية محددة من البيانات حتى الآن.",
         "insights.ask_about_gap_secondary": "اسأل يُسر عن هذه الفجوة",
+        "insights.pill_grow": "تطوير داخلي",
+        "insights.pill_hire": "توظيف خارجي",
+        "insights.note_grow": (
+            "لا يمتلك أحد هذه المهارة بعد. يمكن تطوير {n} موظفاً في أدوار قريبة ({roles}) "
+            "لسدّها — تظهر لهم هذه الفجوة في صفحة فرص النمو ويمكنهم رفع سيرهم الذاتية "
+            "للحصول على خطة تطوير شخصية."
+        ),
+        "insights.note_hire": (
+            "لا يمتلك أحد هذه المهارة ولا يوجد دور قريب منها في هذا القسم "
+            "— يُوصى بالتوظيف الخارجي."
+        ),
+        "insights.col_candidates": "المرشحون الداخليون",
+        "insights.col_plans": "خطط تطوير بدأت",
+        "insights.view_candidates": "عرض المرشحين ({n})",
+        "insights.col_employee": "الموظف",
+        "insights.col_job_title": "الدور الحالي",
+        "insights.col_plan": "خطة التطوير",
+        "insights.plan_yes": "بدأت",
+        "insights.plan_no": "لم تبدأ",
         "detail.identity": "الموظف",
         "detail.submitted": "تاريخ التقديم",
         "detail.status": "الحالة",

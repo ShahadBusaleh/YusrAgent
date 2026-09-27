@@ -148,7 +148,7 @@ def _login_bg_data_uri() -> str | None:
 
 # =============================================================
 # Design system: colors, type scale, spacing, radii, components.
-# Single design file for the whole team — see AGENTS.md/TEAM.md
+# Single design file for the whole team — see TEAM.md
 # Phase 3. Everything below (including the legacy component
 # classes hero()/stat_card()/queue_stats()/grievance_queue_stats()
 # still call into) is restyled on this one light palette; there is
@@ -872,6 +872,8 @@ section[data-testid="stSidebar"] .stButton > button:hover {
 }
 .v2-pill--critical { background: #F6DDDA; color: #8E342B; }
 .v2-pill--attention { background: #F7E9CE; color: #7B5723; }
+.v2-pill--grow { background: #DCEFE3; color: #1F6B3E; }
+.v2-pill-row { display: flex; gap: .4rem; flex-wrap: wrap; }
 
 .v2-gap-note {
   color: var(--yz-muted);

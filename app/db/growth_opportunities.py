@@ -68,6 +68,22 @@ def get_latest_growth_plan(
     return dict(row) if row else None
 
 
+def employees_with_growth_plan(
+    conn: sqlite3.Connection,
+    skill_id: str,
+) -> set[str]:
+    """Employee ids that have generated at least one plan for this skill."""
+
+    ensure_growth_plan_table(conn)
+
+    rows = conn.execute(
+        "SELECT DISTINCT employee_id FROM candidate_growth_plans WHERE skill_id = ?",
+        (skill_id,),
+    ).fetchall()
+
+    return {row[0] for row in rows}
+
+
 def save_growth_plan(
     conn: sqlite3.Connection,
     employee_id: str,

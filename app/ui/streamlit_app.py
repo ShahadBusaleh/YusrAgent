@@ -481,39 +481,75 @@ def _team_insights_v2() -> None:
     for item in [*missing_critical, *missing_other]:
         skill = str(item.get("skill_name") or "Skill")
         category = str(item.get("category") or "—")
-        current = int(item.get("current_headcount") or 0)
         critical = bool(item.get("is_critical"))
         pill_class = "critical" if critical else "attention"
         pill_text = i18n.t("insights.critical_gap_pill") if critical else i18n.t("insights.gap_pill")
-        recommendation = str(item.get("recommendation") or "").strip()
-        note = recommendation or i18n.t("insights.no_recommendation")
+
+        # internal_candidates is the same pool that sees this gap on the
+        # Growth Opportunities page, so manager and employee views agree.
+        pool = item.get("internal_candidates") or {}
+        pool_count = int(pool.get("count") or 0)
+        plans_started = int(pool.get("plans_started") or 0)
+        # An API without internal_candidates must not read as "no pool":
+        # only hire_recommended=True means there is truly no close role.
+        if not pool and not item.get("hire_recommended"):
+            note = str(item.get("recommendation") or "") or i18n.t("insights.no_recommendation")
+            route_pill = f'<span class="v2-pill v2-pill--grow">{html.escape(i18n.t("insights.pill_grow"))}</span>'
+        elif pool_count:
+            roles = ", ".join(
+                f"{t.get('job_title')} ({t.get('headcount')})" for t in pool.get("titles") or []
+            )
+            note = i18n.t("insights.note_grow", n=pool_count, roles=roles)
+            route_pill = f'<span class="v2-pill v2-pill--grow">{html.escape(i18n.t("insights.pill_grow"))}</span>'
+        else:
+            note = i18n.t("insights.note_hire")
+            route_pill = f'<span class="v2-pill v2-pill--attention">{html.escape(i18n.t("insights.pill_hire"))}</span>'
 
         st.markdown(
             f"""
             <div class="v2-gap-card">
               <div class="v2-gap-top">
                 <div class="v2-gap-name">{html.escape(skill)}</div>
-                <span class="v2-pill v2-pill--{pill_class}">{pill_text}</span>
+                <div class="v2-pill-row">
+                  <span class="v2-pill v2-pill--{pill_class}">{pill_text}</span>
+                  {route_pill}
+                </div>
               </div>
               <div class="v2-gap-note">{html.escape(note)}</div>
               <div class="v2-gap-stats">
                 <div><div class="v2-mini-label">{html.escape(i18n.t("insights.col_category"))}</div><div class="v2-mini-value">{html.escape(category)}</div></div>
-                <div><div class="v2-mini-label">{html.escape(i18n.t("insights.col_headcount"))}</div><div class="v2-mini-value">{current}</div></div>
+                <div><div class="v2-mini-label">{html.escape(i18n.t("insights.col_candidates"))}</div><div class="v2-mini-value">{pool_count}</div></div>
+                <div><div class="v2-mini-label">{html.escape(i18n.t("insights.col_plans"))}</div><div class="v2-mini-value">{plans_started} / {pool_count}</div></div>
               </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
-        left, right, spacer = st.columns([1.15, 1.65, 5])
+        if pool_count:
+            with st.expander(i18n.t("insights.view_candidates", n=pool_count)):
+                styles.data_table(
+                    [
+                        {
+                            "id": e.get("employee_id"),
+                            "name": e.get("full_name") or "—",
+                            "title": e.get("job_title") or "—",
+                            "plan": i18n.t("insights.plan_yes")
+                            if e.get("has_growth_plan")
+                            else i18n.t("insights.plan_no"),
+                        }
+                        for e in pool.get("employees") or []
+                    ],
+                    [
+                        ("name", i18n.t("insights.col_employee")),
+                        ("title", i18n.t("insights.col_job_title")),
+                        ("plan", i18n.t("insights.col_plan")),
+                    ],
+                    key=f"candidates_{department_id}_{item.get('skill_id')}",
+                )
+
+        left, spacer = st.columns([1.65, 6.15])
         with left:
-            with st.popover(i18n.t("insights.view_details")):
-                st.write(i18n.t("insights.popover_skill", value=skill))
-                st.write(f"**{i18n.t('insights.col_category')}:** {category}")
-                st.write(i18n.t("insights.popover_current", value=current))
-                if recommendation:
-                    st.write(recommendation)
-        with right:
             with st.container(key=f"yz_btn_secondary_gap_{department_id}_{skill}"):
                 if st.button(
                     i18n.t("insights.ask_about_gap_secondary"),
@@ -521,9 +557,8 @@ def _team_insights_v2() -> None:
                     use_container_width=True,
                 ):
                     st.session_state["chat_query"] = (
-                        f"Explain the {skill} skill gap in the {department_name} department. "
-                        f"Current mapped coverage is {current}. "
-                        f"Explain what this means using available HR data and policy."
+                        f"Explain the {skill} skill gap in the {department_name} department "
+                        f"and which internal candidates can grow into it."
                     )
                     st.session_state["_yz_pending_nav"] = "Ask Yusor"
                     st.rerun()

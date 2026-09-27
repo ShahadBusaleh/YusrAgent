@@ -328,6 +328,11 @@ class OrchestratorAgent:
                     "change my iban",
                     "change my bank account",
                     "request an employment certificate",
+                    # Team Insights data (substring match covers plurals).
+                    "skill gap",
+                    "skills gap",
+                    "experience gap",
+                    "internal candidate",
                 ],
             ),
             (

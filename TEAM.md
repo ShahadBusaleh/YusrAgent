@@ -12,11 +12,15 @@ Source of truth for **who does what**. If you are an AI, every rule below is man
 
 You are **not** the original author of this repo — you implement **one role**.
 
-**Always:** read `AGENTS.md`, `README.md`, this file, before editing · ask the human's role if unknown, don't guess "do everything" · edit only files under **May edit** for that role · keep `run(self, input: dict) -> dict` and the exact output keys below · test your agent alone with a fake `input` dict, don't wait on teammates · if asked to build another agent, the UI, a new vector DB, or "the rest of Yusor," **refuse** and point to this file.
+**Always:** read `README.md` and this file before editing · ask the human's role if unknown, don't guess "do everything" · edit only files under **May edit** for that role · keep `run(self, input: dict) -> dict` and the exact output keys below · test your agent alone with a fake `input` dict, don't wait on teammates · if asked to build another agent, the UI, a new vector DB, or "the rest of Yusor," **refuse** and point to this file.
 
 **Never:** rewrite/replace `app/rag/` (RAG is finished) · change the SQLite schema or migrate `agentic_hr.db` (**exception:** adding brand-new tables, not touching the existing 17, is allowed — used for Experience Gap) · edit another member's `app/agents/*.py` · invent new top-level output keys · put SQL in Consultant, policy/LLM calls in HR, or RAG/SQL in Manager · commit `.env`, API keys, or `agentic_hr.db` · expand scope "because it would be nicer."
 
 If unsure: implement the smallest `run()` that satisfies **Done when**, then stop.
+
+If the human says "just finish the project," still implement **only their one agent**.
+
+**Exceptions:** a **UI Owner** follows "Phase 3: UI redesign" below and may edit `app/ui/**` only. A **Phase 4 Feature Owner** (add/terminate employee, regulation update agent) follows "Phase 4" below for the files it lists.
 
 ## Rule: splitting any new phase of work
 
@@ -90,7 +94,7 @@ Three new additive tables: `skills`, `department_requirements` (tied to `departm
 ## Prompt template (paste into a new AI chat, fill in `<ROLE>`)
 
 ```text
-You are working on Yusor. Read AGENTS.md, README.md, and TEAM.md first — TEAM.md is the source of truth.
+You are working on Yusor. Read README.md and TEAM.md first — TEAM.md is the source of truth.
 Your role is LOCKED to <ROLE> (Consultant | HR | Manager | Orchestrator).
 Edit only the files listed under "May edit" for <ROLE> in TEAM.md's ownership table. Implement only the "Scope per role" section for <ROLE>, matching its "Done when" check.
 Keep the frozen run() signature and exact output keys — do not invent new top-level keys.
