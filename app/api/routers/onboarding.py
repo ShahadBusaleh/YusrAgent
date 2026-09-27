@@ -6,6 +6,10 @@
   requester's own pending new_hire proposal payload. The CV can't travel in
   the /agent/query text (4000-character limit). The employee_cvs row itself is
   written only by _sync_new_hire after an HR manager approves.
+- GET /onboarding/salary-scale, POST /onboarding/hire-checks and
+  GET /onboarding/article-80: read-only data for the forms. The same HR
+  agent functions re-check every request on submit, so the forms can't
+  be bypassed through Ask Yusor.
 - On API startup and once a day: finalize terminations whose last working
   day has been reached (app/db/separations.py).
 """
@@ -20,6 +24,7 @@ from datetime import datetime, time, timedelta, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from openai import OpenAIError
+from pydantic import BaseModel
 
 from app.agents.cv_parser import (
     CVParseError,
@@ -28,6 +33,7 @@ from app.agents.cv_parser import (
     parse_cv,
 )
 from app.agents.growth_plan import extract_pdf_text
+from app.agents.hr_agent import check_new_hire_pay, get_article_80_grounds, get_salary_scale
 from app.api.deps import CurrentUser, require_role, roles_at_least
 from app.db.audit import write_audit
 from app.db.connection import get_connection, get_db
@@ -148,6 +154,54 @@ def attach_cv(
         details=proposal_id,
     )
     return {"proposal_id": proposal_id, "filename": cv.filename, "attached": True}
+
+
+class HireChecksIn(BaseModel):
+    job_grade: str | None = None
+    nationality: str | None = None
+    basic_salary: float | None = None
+    housing_allowance: float = 0
+    transport_allowance: float = 0
+
+
+@router.get("/salary-scale")
+def salary_scale(
+    user: CurrentUser = Depends(require_role(*roles_at_least("hr_specialist"))),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict:
+    """Company scale per job_grade (min/max basic, typical allowance
+    shares) built from active employees."""
+    return get_salary_scale(conn)
+
+
+@router.post("/hire-checks")
+def hire_checks(
+    body: HireChecksIn,
+    user: CurrentUser = Depends(require_role(*roles_at_least("hr_specialist"))),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict:
+    """The new-hire pay blocks and warnings, for the form preview."""
+    return check_new_hire_pay(
+        conn,
+        job_grade=body.job_grade,
+        nationality=body.nationality,
+        basic_salary=body.basic_salary,
+        housing_allowance=body.housing_allowance,
+        transport_allowance=body.transport_allowance,
+    )
+
+
+@router.get("/article-80")
+def article_80(
+    user: CurrentUser = Depends(require_role(*roles_at_least("hr_specialist"))),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict:
+    """Article 80 grounds and their procedural conditions, parsed from the
+    current LAW075 row."""
+    article = get_article_80_grounds(conn)
+    if article is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article 80 (LAW075) not found.")
+    return article
 
 
 # ---------------------------------------------------------------------------

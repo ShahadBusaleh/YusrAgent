@@ -285,6 +285,9 @@ def _submit_staffing(
             warning = after_submit(submitted.group(1)) if after_submit else None
             if warning:
                 flash.append(("warning", warning))
+            warnings = _submitted_warnings(submitted.group(1))
+            if warnings:
+                flash.append(("warning", warnings))
             st.session_state["staff_flash"] = flash
             _reset_staff_form(prefix)
         else:
@@ -520,6 +523,123 @@ def _attach_cv(proposal_id: str) -> str | None:
     return None
 
 
+def _pct(ratio) -> str:
+    return f"{float(ratio or 0):.0%}"
+
+
+def _load_salary_scale() -> dict | None:
+    """GET /onboarding/salary-scale, kept until the form is reset."""
+    if "hire_scale_cache" not in st.session_state:
+        try:
+            st.session_state["hire_scale_cache"] = api.raise_for_api(
+                api.request("GET", "/onboarding/salary-scale")
+            ) or {}
+        except RuntimeError as exc:
+            st.warning(i18n.t("staff.scale_unavailable", detail=str(exc)))
+            return None
+    return st.session_state["hire_scale_cache"]
+
+
+def _basic_floor_error(scale: dict | None, basic: float) -> str | None:
+    """Localized copy of the HR agent's basic-salary floor block."""
+    if not scale or basic <= 0 or basic >= float(scale.get("basic_floor") or 0):
+        return None
+    return i18n.t(
+        "staff.block_basic_floor",
+        floor=_money(scale.get("basic_floor")),
+        share=f"{float(scale.get('basic_floor_share') or 0):g}",
+        lowest=_money(scale.get("lowest_basic")),
+    )
+
+
+def _hire_checks(job_grade: str, nationality: str, basic: float, housing: float, transport: float) -> dict:
+    try:
+        return api.raise_for_api(
+            api.request(
+                "POST",
+                "/onboarding/hire-checks",
+                json={
+                    "job_grade": job_grade,
+                    "nationality": nationality,
+                    "basic_salary": basic,
+                    "housing_allowance": housing,
+                    "transport_allowance": transport,
+                },
+            )
+        ) or {}
+    except RuntimeError as exc:
+        return {"problems": [str(exc)], "warnings": []}
+
+
+def _warning_text(warning: dict) -> str:
+    """A new-hire / end-of-service warning in the interface language."""
+    code = str(warning.get("code") or "")
+    if code == "nitaqat_half":
+        return i18n.t(
+            "warn.nitaqat_half",
+            wage=_money(warning.get("wage")),
+            threshold=f"{float(warning.get('threshold') or 0):,.0f}",
+        )
+    if code == "grade_range":
+        return i18n.t(
+            "warn.grade_range",
+            basic=_money(warning.get("basic")),
+            grade=warning.get("grade"),
+            min=_money(warning.get("min")),
+            max=_money(warning.get("max")),
+            n=warning.get("employees"),
+        )
+    if code in ("housing_ratio", "transport_ratio"):
+        basis = (
+            i18n.t("warn.basis_grade", grade=warning.get("grade"))
+            if warning.get("basis") == "grade"
+            else i18n.t("warn.basis_company")
+        )
+        return i18n.t(
+            f"warn.{code}",
+            ratio=_pct(warning.get("ratio")),
+            basis=basis,
+            typical=_pct(warning.get("typical")),
+            amount=_money(warning.get("typical_amount")),
+        )
+    if code == "reason_review_unavailable":
+        return i18n.t("warn.reason_review_unavailable")
+    if warning.get("source") == "llm" and code.startswith("reason_"):
+        verdict = code.removeprefix("reason_")
+        text = (warning.get("text_ar") if i18n.is_rtl() else None) or warning.get("explanation") or warning.get("text")
+        out = i18n.t("warn.ai_review", verdict=i18n.t(f"warn.verdict_{verdict}"), text=text or "—")
+        if warning.get("suggested_type"):
+            out += " " + i18n.t("warn.suggested_type", type=i18n.t(f"term.{warning['suggested_type']}"))
+        return out
+    return str(warning.get("text") or "")
+
+
+def _render_request_warnings(payload: dict, *, for_approver: bool = False) -> None:
+    """Warnings saved on a new_hire / end-of-service request."""
+    warnings = [w for w in (payload or {}).get("warnings") or [] if isinstance(w, dict)]
+    if not warnings:
+        return
+    st.markdown(f"**{i18n.t('warn.title')}**")
+    for warning in warnings:
+        st.warning(_warning_text(warning))
+    if for_approver:
+        st.caption(i18n.t("warn.approve_hint"))
+
+
+def _submitted_warnings(proposal_id: str) -> str | None:
+    """Flash text listing the warnings saved on a just-submitted request."""
+    try:
+        record = api.raise_for_api(api.request("GET", f"/records/{proposal_id}")) or {}
+    except RuntimeError:
+        return None
+    warnings = [w for w in (record.get("payload") or {}).get("warnings") or [] if isinstance(w, dict)]
+    if not warnings:
+        return None
+    return i18n.t("warn.submitted", n=len(warnings)) + "\n\n" + "\n".join(
+        f"- {_warning_text(w)}" for w in warnings
+    )
+
+
 def _render_new_hire_form(open_terms: dict) -> None:
     with st.container(key="staff_card_hire"):
         _render_cv_prefill()
@@ -563,17 +683,51 @@ def _render_new_hire_form(open_terms: dict) -> None:
         if manager_until:
             st.warning(i18n.t("notice.manager_warning", date=_friendly_when(manager_until)))
 
-        c3, c4 = st.columns(2)
+        c3, c4, c5 = st.columns(3)
         employment_type = c3.selectbox(
             i18n.t("staff.employment_type"), _EMPLOYMENT_TYPES, key="hire_employment_type"
         )
         hire_date = c4.date_input(
             i18n.t("staff.hire_date"), value=date.today(), format="DD-MM-YYYY", key="hire_date"
         )
+        scale = _load_salary_scale()
+        grades = (scale or {}).get("grades") or {}
+        job_grade = c5.selectbox(
+            i18n.t("staff.job_grade"),
+            [None, *grades],
+            key="hire_job_grade",
+            format_func=lambda g: "—" if g is None else g,
+        )
+        band = grades.get(job_grade)
+        if band:
+            st.caption(
+                i18n.t(
+                    "staff.grade_range",
+                    grade=job_grade,
+                    min=_money(band["min_basic"]),
+                    max=_money(band["max_basic"]),
+                    n=band["employees"],
+                    housing=_pct(band["housing_ratio"]),
+                    transport=_pct(band["transport_ratio"]),
+                )
+            )
         s1, s2, s3 = st.columns(3)
         basic = s1.number_input(i18n.t("staff.basic_salary"), min_value=0.0, step=100.0, key="hire_basic")
         housing = s2.number_input(i18n.t("staff.housing_allowance"), min_value=0.0, step=100.0, key="hire_housing")
         transport = s3.number_input(i18n.t("staff.transport_allowance"), min_value=0.0, step=50.0, key="hire_transport")
+
+        floor_error = _basic_floor_error(scale, basic)
+        if floor_error:
+            st.error(floor_error)
+        elif basic > 0 and job_grade:
+            # Same HR-agent checks that run again on submit.
+            checks = _hire_checks(job_grade, nationality, basic, housing, transport)
+            if checks.get("problems") or checks.get("warnings"):
+                st.markdown(f"**{i18n.t('staff.checks_title')}**")
+            for problem in checks.get("problems") or []:
+                st.error(problem)
+            for warning in checks.get("warnings") or []:
+                st.warning(_warning_text(warning))
 
         submit = st.button(i18n.t("staff.submit"), type="primary", key="hire_submit")
 
@@ -586,12 +740,16 @@ def _render_new_hire_form(open_terms: dict) -> None:
             (i18n.t("staff.full_name"), full_name.strip()),
             (i18n.t("staff.job_title"), job_title.strip()),
             (i18n.t("staff.department"), department_id),
+            (i18n.t("staff.job_grade"), job_grade),
             (i18n.t("staff.basic_salary"), basic > 0),
         )
         if not ok
     ]
     if missing:
         st.error(i18n.t("staff.required", fields=", ".join(missing)))
+        return
+    if floor_error:
+        st.error(floor_error)
         return
     if _english_only_error(
         [
@@ -612,6 +770,7 @@ def _render_new_hire_form(open_terms: dict) -> None:
             ("mobile", mobile.strip()),
             ("department_id", department_id),
             ("job_title", job_title.strip()),
+            ("job_grade", job_grade),
             ("manager_id", (manager or {}).get("employee_id")),
             ("employment_type", employment_type),
             ("hire_date", hire_date.strftime("%d-%m-%Y")),
@@ -626,6 +785,81 @@ def _render_new_hire_form(open_terms: dict) -> None:
 # Art. 75 notice for a monthly-paid employee — same values as
 # app.agents.hr_agent._NOTICE_DAYS, which re-checks them on submit.
 _NOTICE_DAYS = {"resignation": 30, "termination_by_employer": 60}
+
+
+# Same value as app.agents.hr_agent.REASON_MIN_CHARS, re-checked on submit.
+_REASON_MIN_CHARS = 20
+
+
+def _load_article_80() -> dict | None:
+    """GET /onboarding/article-80: grounds + required procedures, parsed
+    from our LAW075 row. Kept until the form is reset."""
+    if "term_art80_cache" not in st.session_state:
+        try:
+            st.session_state["term_art80_cache"] = api.raise_for_api(
+                api.request("GET", "/onboarding/article-80")
+            ) or {}
+        except RuntimeError as exc:
+            st.error(i18n.t("art80.unavailable", detail=str(exc)))
+            return None
+    return st.session_state["term_art80_cache"]
+
+
+def _render_article_80_fields(today: date) -> tuple[list[tuple[str, object]], list[str]]:
+    """Ground dropdown, details and the article's procedural confirmations.
+    Returns (query fields, localized errors to show on submit)."""
+    article = _load_article_80()
+    if not article:
+        return [], [i18n.t("art80.missing")]
+    grounds = {g["number"]: g for g in article.get("grounds") or []}
+    number = st.selectbox(
+        i18n.t("art80.ground"),
+        [None, *grounds],
+        key="term_art80_ground",
+        format_func=lambda n: "—" if n is None else i18n.t("art80.ground_option", n=n, text=grounds[n]["text"]),
+    )
+    st.caption(i18n.t("art80.source", law_id=article.get("law_id"), article=article.get("article")))
+    details = st.text_area(i18n.t("art80.details", n=_REASON_MIN_CHARS), key="term_art80_details")
+
+    errors: list[str] = []
+    fields: list[tuple[str, object]] = [("article_80_details", details.strip())]
+    if number is None:
+        errors.append(i18n.t("art80.missing"))
+    else:
+        fields.insert(0, ("article_80_ground", number))
+    if len(details.strip()) < _REASON_MIN_CHARS:
+        errors.append(
+            i18n.t("staff.reason_short", field=i18n.t("art80.details_label"), n=_REASON_MIN_CHARS, have=len(details.strip()))
+        )
+
+    unconfirmed = []
+    requirements = grounds[number]["requirements"] if number is not None else []
+    if requirements:
+        st.markdown(f"**{i18n.t('art80.procedures')}**")
+    for requirement in requirements:
+        kind = requirement["kind"]
+        label = i18n.t(f"art80.req_{kind}")
+        left, right = st.columns([3, 1])
+        confirmed = left.checkbox(label, key=f"term_art80_ok_{number}_{kind}")
+        left.caption(f"“{requirement['text']}”")
+        when = None
+        if requirement.get("needs_date"):
+            when = right.date_input(
+                i18n.t("art80.date"),
+                value=None,
+                max_value=today,
+                format="DD-MM-YYYY",
+                key=f"term_art80_date_{number}_{kind}",
+            )
+        if not confirmed or (requirement.get("needs_date") and when is None):
+            unconfirmed.append(label)
+        elif when is not None:
+            fields.append((requirement["field"], when.strftime("%d-%m-%Y")))
+        else:
+            fields.append((requirement["field"], "yes"))
+    if unconfirmed:
+        errors.append(i18n.t("art80.unconfirmed", items="; ".join(unconfirmed)))
+    return fields, errors
 
 
 def _render_termination_form(open_terms: dict) -> None:
@@ -680,7 +914,13 @@ def _render_termination_form(open_terms: dict) -> None:
             waived = st.checkbox(i18n.t("notice.waived"), key="term_notice_waived")
             if waived:
                 waiver_note = st.text_area(i18n.t("notice.waiver_note"), key="term_waiver_note")
-        reason = st.text_area(i18n.t("staff.reason"), key="term_reason")
+        art80_fields: list[tuple[str, object]] = []
+        art80_errors: list[str] = []
+        if termination_type == "article_80":
+            art80_fields, art80_errors = _render_article_80_fields(today)
+            reason = ""
+        else:
+            reason = st.text_area(i18n.t("staff.reason"), key="term_reason")
 
         submit = st.button(
             i18n.t("staff.submit"), type="primary", key="term_submit", disabled=bool(existing)
@@ -694,12 +934,21 @@ def _render_termination_form(open_terms: dict) -> None:
         for label, ok in (
             (i18n.t("staff.employee"), employee),
             (i18n.t("staff.termination_type"), termination_type),
-            (i18n.t("staff.reason"), reason.strip()),
+            (i18n.t("staff.reason"), reason.strip() or termination_type == "article_80"),
         )
         if not ok
     ]
     if missing:
         st.error(i18n.t("staff.required", fields=", ".join(missing)))
+        return
+    if termination_type != "article_80" and len(reason.strip()) < _REASON_MIN_CHARS:
+        st.error(
+            i18n.t("staff.reason_short", field=i18n.t("staff.reason"), n=_REASON_MIN_CHARS, have=len(reason.strip()))
+        )
+        return
+    if art80_errors:
+        for error in art80_errors:
+            st.error(error)
         return
     early = bool(notice_days) and termination_date < earliest
     if early and not waived:
@@ -708,8 +957,13 @@ def _render_termination_form(open_terms: dict) -> None:
     if early and not waiver_note.strip():
         st.error(i18n.t("notice.note_required"))
         return
+    art80_details = dict(art80_fields).get("article_80_details") or ""
     if _english_only_error(
-        [(i18n.t("staff.reason"), reason), (i18n.t("notice.waiver_note"), waiver_note)]
+        [
+            (i18n.t("staff.reason"), reason),
+            (i18n.t("notice.waiver_note"), waiver_note),
+            (i18n.t("art80.details_label"), art80_details),
+        ]
     ):
         return
 
@@ -722,6 +976,7 @@ def _render_termination_form(open_terms: dict) -> None:
             ("reason", reason.strip()),
             ("notice_waived", "yes" if early else None),
             ("notice_waiver_note", waiver_note.strip() if early else None),
+            *art80_fields,
         ],
     )
     _submit_staffing(query, "term_")
@@ -799,6 +1054,18 @@ def _render_final_settlement(settlement: dict) -> None:
             "amount": "× " + _ratio_text(eos.get("fraction")),
             "article": _cite(eos.get("fraction_law")),
         },
+        *(
+            [
+                {
+                    "item": i18n.t("art80.ground"),
+                    "basis": f"({settlement['article_80'].get('ground_number')}) {settlement['article_80'].get('ground_text')}",
+                    "amount": "",
+                    "article": _cite(settlement["article_80"]),
+                }
+            ]
+            if settlement.get("article_80")
+            else []
+        ),
         {
             "item": i18n.t("settlement.eos_amount"),
             "basis": "",
@@ -1179,6 +1446,7 @@ def _settlement_document(record: dict) -> dict:
                     (i18n.t("settlement.doc_department"), _record_department(record)),
                     (i18n.t("settlement.doc_nationality"), pick("nationality", "nationality_ar")),
                     (i18n.t("settlement.doc_type"), type_label),
+                    *_article_80_rows(settlement.get("article_80") or payload.get("article_80")),
                 ],
             },
             {
@@ -1401,6 +1669,7 @@ def _render_record_detail(proposal_id: str) -> None:
         if record.get("subject_id"):
             styles.detail_card([(i18n.t("details.employee_id_created"), record.get("subject_id"))])
         _render_new_hire_details(payload)
+        _render_request_warnings(payload)
     elif action_type == "regulation_update":
         from app.ui import regulations_view
 
@@ -1412,6 +1681,7 @@ def _render_record_detail(proposal_id: str) -> None:
         elif sep.get("state") == "finalized":
             st.caption(i18n.t("notice.finalized", date=_friendly_when(sep.get("at")) or "—"))
         _render_termination_details(payload)
+        _render_request_warnings(payload)
         _render_settlement_download(record)
     else:
         _render_generic_proposal_details(
@@ -1947,6 +2217,12 @@ def _render_approval_review(row: dict, names: dict, proposals: dict) -> None:
 
         proposal = proposals.get(row.get("proposal_id"))
         _render_proposal_details(proposal)
+        if (proposal or {}).get("action_type") in ("new_hire", "termination"):
+            proposal_payload = proposal.get("payload_json")
+            _render_request_warnings(
+                proposal_payload if isinstance(proposal_payload, dict) else {},
+                for_approver=status == "pending",
+            )
 
         if status != "pending":
             # Already decided — no decision form. Re-showing Approve/Send
@@ -2188,6 +2464,8 @@ def _render_termination_profile(profile: dict) -> None:
         ]
     )
     st.caption(i18n.t("profile.monthly_wage_note"))
+    if profile.get("article_80"):
+        styles.detail_card(_article_80_rows(profile["article_80"]))
 
     for warning in profile.get("warnings") or []:
         code = warning.get("code")
@@ -2699,6 +2977,7 @@ def _render_new_hire_details(payload: dict) -> None:
         [
             (i18n.t("detail.new_employee"), hire.get("full_name")),
             (i18n.t("staff.job_title"), hire.get("job_title")),
+            (i18n.t("staff.job_grade"), hire.get("job_grade")),
             (i18n.t("staff.department"), f"{_department_label(hire.get('department_id'), hire.get('department_name'))} ({hire.get('department_id')})"),
             (i18n.t("staff.manager"), hire.get("manager_id")),
             (i18n.t("staff.gender"), hire.get("gender")),
@@ -2716,8 +2995,40 @@ def _render_new_hire_details(payload: dict) -> None:
     )
 
 
+def _article_80_rows(article_80: dict | None) -> list[tuple[str, object]]:
+    """Ground (with citation), details and confirmed procedures."""
+    if not article_80:
+        return []
+    rows = [
+        (
+            i18n.t("art80.ground"),
+            i18n.t(
+                "art80.ground_value",
+                n=article_80.get("ground_number"),
+                text=article_80.get("ground_text"),
+                article=article_80.get("article"),
+                law_id=article_80.get("law_id"),
+            ),
+        ),
+        (i18n.t("art80.details_label"), article_80.get("details")),
+    ]
+    for procedure in article_80.get("procedures") or []:
+        rows.append(
+            (
+                i18n.t("art80.procedures"),
+                i18n.t(
+                    "art80.procedure_value",
+                    label=i18n.t(f"art80.req_{procedure.get('kind')}"),
+                    date=_friendly_when(procedure.get("date")) or "✓",
+                ),
+            )
+        )
+    return rows
+
+
 def _render_termination_details(payload: dict) -> None:
     termination_type = payload.get("termination_type")
+    article_80 = payload.get("article_80")
     styles.detail_card(
         [
             (i18n.t("staff.employee"), payload.get("employee_id")),
@@ -2726,7 +3037,7 @@ def _render_termination_details(payload: dict) -> None:
                 i18n.t(f"term.{termination_type}") if termination_type else None,
             ),
             (i18n.t("staff.termination_date"), _friendly_when(payload.get("termination_date"))),
-            (i18n.t("detail.reason"), payload.get("reason")),
+            *(_article_80_rows(article_80) if article_80 else [(i18n.t("detail.reason"), payload.get("reason"))]),
             (
                 i18n.t("profile.notice"),
                 i18n.t("notice.waived_detail", note=payload.get("notice_waiver_note") or "—")
