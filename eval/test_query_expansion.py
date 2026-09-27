@@ -30,3 +30,34 @@ def test_sick_procedure_adds_notification_terms(query):
 ])
 def test_other_questions_unchanged(query):
     assert expand_query(query) == query
+
+
+@pytest.mark.parametrize("query, term", [
+    ("How can an establishment access the Wage Protection System?", "Mudad"),
+    ("What information is included in the employee payment details in the Wage Protection file?", "bank identifier"),
+    ("What are the different types of wage components that can be included in a Wage Protection file?", "housing allowance"),
+])
+def test_wps_questions_add_row_vocabulary(query, term):
+    assert term in expand_query(query)
+
+
+def _chunk(cid, table, category, text="unpaid leave approval"):
+    return {"id": cid, "source_table": table, "text": f"Category: {category}\nRule: {text}"}
+
+
+def test_company_policy_takes_last_slot():
+    from app.agents.consultant_agent import _filter_relevant_chunks
+
+    chunks = [_chunk(f"LAW05{i}", "saudi_labor_law", "Unpaid Leave") for i in range(4)]
+    chunks.append(_chunk("AAM-POL-020", "company_policies", "Leave"))
+    kept = _filter_relevant_chunks("Who must approve unpaid leave?", chunks)
+    assert [c["id"] for c in kept] == ["LAW050", "LAW051", "AAM-POL-020"]
+
+
+def test_list_question_keeps_same_category_rows():
+    from app.agents.consultant_agent import _filter_relevant_chunks
+
+    chunks = [_chunk(f"WPS02{i}", "wps", "Wage data", "wage components basic housing") for i in range(6)]
+    chunks.insert(3, _chunk("WPS001", "wps", "General", "wage components program"))
+    kept = _filter_relevant_chunks("What are the wage components?", chunks)
+    assert [c["id"] for c in kept] == ["WPS020", "WPS021", "WPS022", "WPS023", "WPS024"]

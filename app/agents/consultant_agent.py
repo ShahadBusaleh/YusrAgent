@@ -369,6 +369,15 @@ def _calculate_relevance_score(
     )
 
 
+_ENUMERATION_RE = re.compile(
+    r"\b(?:what|which)\s+(?:information|details|fields|data|items)\b"
+    r"|\b(?:types?|kinds?|components?|elements?|list)\s+of\b"
+    r"|\bcomponents?\b",
+    re.IGNORECASE,
+)
+_MAX_LIST_CHUNKS = 5
+
+
 def _filter_relevant_chunks(
     query: str,
     chunks: list[dict],
@@ -435,7 +444,43 @@ def _filter_relevant_chunks(
             if chunk["consultant_relevance_score"] > 0
         ]
 
-    return relevant_chunks[:max_chunks]
+    selected = relevant_chunks[:max_chunks]
+
+    # Company policy is the Consultant's first source. When three law rows
+    # fill the cap, the matching company rule (AAM-POL-020 for "who approves
+    # unpaid leave?", ranked 5th) was dropped; give it the last slot.
+    if not any(
+        chunk.get("source_table") == "company_policies"
+        for chunk in selected
+    ):
+        company = next(
+            (
+                chunk
+                for chunk in relevant_chunks[max_chunks:]
+                if chunk.get("source_table") == "company_policies"
+            ),
+            None,
+        )
+        if company is not None and len(selected) == max_chunks:
+            selected = selected[:-1] + [company]
+
+    # "What are the wage components?" is answered by several one-line WPS
+    # rows of one category (basic wage, housing allowance, ...). Three
+    # could never cover the list, so keep same-category siblings too.
+    if _ENUMERATION_RE.search(query or ""):
+        categories = {
+            _parse_chunk_fields(chunk.get("text", "")).get("category")
+            for chunk in selected
+        }
+        for chunk in relevant_chunks[max_chunks:]:
+            if len(selected) >= _MAX_LIST_CHUNKS:
+                break
+            if chunk in selected:
+                continue
+            if _parse_chunk_fields(chunk.get("text", "")).get("category") in categories:
+                selected.append(chunk)
+
+    return selected
 
 
 # =========================================================

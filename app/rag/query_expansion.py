@@ -34,6 +34,36 @@ _RULES: list[tuple[re.Pattern, str]] = [
         ),
         "notify department head first day of sickness medical certificate",
     ),
+    (
+        # WPS003 names the platform ("handled through Mudad"); employees
+        # ask how to "access" or "log in to" the Wage Protection System.
+        re.compile(
+            r"\b(?:access\w*|log\s*in|login|sign\s*in|use|reach)\b.*\b(?:wage\s+protection|wps)\b"
+            r"|\b(?:wage\s+protection|wps)\b.*\b(?:access\w*|log\s*in|login|sign\s*in)\b",
+            re.IGNORECASE,
+        ),
+        "Mudad platform",
+    ),
+    (
+        # The WPS rows call the per-employee fields "wage record" items
+        # (WPS022-WPS025); "payment details" alone matched the file-header
+        # rows (WPS011, WPS015) instead.
+        re.compile(
+            r"\b(?:employee|payment|wage)\s+(?:payment\s+)?(?:details|information|data|fields)\b",
+            re.IGNORECASE,
+        ),
+        "wage record identifies employee name bank account bank identifier payment information",
+    ),
+    (
+        # "wage components" is the question's word; the rows name each one
+        # (WPS026-WPS029).
+        re.compile(
+            r"\b(?:wage|salary|pay)\s+(?:components?|elements?|breakdown)\b"
+            r"|\b(?:types?|kinds?|parts?)\s+of\s+(?:wages?|salary|pay)\b",
+            re.IGNORECASE,
+        ),
+        "wage record basic wage housing allowance other payments total entitlements",
+    ),
 ]
 
 
