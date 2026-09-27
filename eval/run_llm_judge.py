@@ -16,6 +16,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -80,6 +82,16 @@ def build_prompt(case: dict, result: dict) -> str:
         "all passed" if result.get("outcome") in ("PASS", "FIXED")
         else "; ".join(failures) or result.get("error") or "unknown"
     )
+    # The notes explain what the case is testing (e.g. m-07 deliberately
+    # feeds a failed Consultant result); without them the judge marked
+    # the intended behaviour down.
+    notes = case.get("notes") or "none"
+    case_input = case.get("input")
+    input_block = (
+        f"\nAgent input (upstream results the case passes in with the query):\n"
+        f"{json.dumps(case_input, ensure_ascii=False, indent=2)}\n"
+        if case_input else ""
+    )
 
     return f"""
 You are an evaluator for an Agentic HR system called Yusor.
@@ -91,6 +103,9 @@ Agent:
 
 User query:
 {query}
+{input_block}
+What this case tests (author's notes):
+{notes}
 
 Expected behavior / evaluation requirements:
 {json.dumps(expect, ensure_ascii=False, indent=2)}
@@ -104,6 +119,29 @@ Note: expectations such as db_delta (database row changes), facts_has and
 payload_equals are verified by the harness against the database and the
 agent's internal state; they are not fields the output must contain. Do not
 penalize their absence from the output.
+
+cites_any lists acceptable citations: citing ANY ONE of them meets it. Do
+not penalize the others being absent, or extra relevant citations.
+facts_empty: true means the agent must return no data (e.g. a request for
+someone else's record); an empty output is then the correct answer.
+
+For HR, proposed_action_type refers to proposed_action.action_type (the
+database write the agent proposes). request_assessment.action_type only
+labels the topic of the request (e.g. "bank_update" while it still needs
+information); it is not a proposed action. proposed_action_type: null is
+met when proposed_action is null.
+
+The HR agent never writes prose for the user: it returns structured facts,
+sources and at most one proposed action, and the Manager agent turns them
+into the reply. Policy explanations ("how is leave calculated?") are the
+Consultant's job, and greetings are answered by the Orchestrator. For HR,
+judge only whether the facts are the right records for the request, are
+limited to them, and whether the request assessment/action is right; do not
+penalize the absence of an explanation, a greeting or a written answer.
+
+If the notes say an upstream agent failed on purpose, the expected
+behaviour is to report what is available and say what is missing; do not
+penalize the missing part.
 
 Evaluate the actual output using these four criteria.
 
@@ -160,10 +198,43 @@ Return ONLY valid JSON in exactly this structure:
 # LLM call
 # ---------------------------------------------------------------------------
 
+_RETRY_AFTER_RE = re.compile(r"try again in ([\d.]+)(ms|s)", re.IGNORECASE)
+_MAX_ATTEMPTS = 4
+
+
+def _rate_limit_wait(exc: Exception) -> float | None:
+    """Seconds Groq asks us to wait on a TPM 429, or None if not a 429."""
+    if type(exc).__name__ != "RateLimitError":
+        return None
+    # A daily (TPD) limit won't clear by waiting a few seconds.
+    if "tokens per day" in str(exc):
+        return None
+    match = _RETRY_AFTER_RE.search(str(exc))
+    if not match:
+        return 15.0
+    value = float(match.group(1))
+    return (value / 1000 if match.group(2).lower() == "ms" else value) + 1.0
+
+
+def _create_with_retry(client, **kwargs):
+    # The judge sends ~1.5-4k tokens per case against an 8k tokens/minute
+    # limit, so back-to-back cases hit 429 about one time in five.
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        try:
+            return client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            wait = _rate_limit_wait(exc)
+            if wait is None or attempt == _MAX_ATTEMPTS:
+                raise
+            print(f"(rate limited, retrying in {wait:.1f}s)", end=" ", flush=True)
+            time.sleep(wait)
+
+
 def judge_case(client, model: str, case: dict, result: dict) -> dict:
     prompt = build_prompt(case, result)
 
-    response = client.chat.completions.create(
+    response = _create_with_retry(
+        client,
         model=model,
         messages=[
             {

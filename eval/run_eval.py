@@ -143,9 +143,32 @@ def _call_agent(case: dict, user: dict) -> dict:
     raise ValueError(f"Unknown target {target!r}")
 
 
+# The copy starts from the live DB, so leave approved while demoing the UI
+# leaked into the cases (EMP-0002 dropped from 17 to 6 annual days, and an
+# approved 18-20 Dec request overlapped h-14/m-04). Reset the demo user's
+# leave to the state the expectations were written against.
+_BASELINE_SQL = [
+    "DELETE FROM leave_requests WHERE employee_id = 'EMP-0002' "
+    "AND status IN ('approved', 'pending')",
+    "UPDATE leave_balances SET annual_entitlement = 21.0, annual_used = 4.0, "
+    "annual_remaining = 17.0 WHERE employee_id = 'EMP-0002'",
+]
+
+
+def _apply_baseline(db_path: Path) -> None:
+    conn = sqlite3.connect(db_path)
+    try:
+        for sql in _BASELINE_SQL:
+            conn.execute(sql)
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def run_case(case: dict, workdir: Path) -> dict:
     db_path = workdir / f"{case['id']}.db"
     shutil.copyfile(SOURCE_DB, db_path)
+    _apply_baseline(db_path)
     # get_settings() reads SQLITE_PATH on every call, so this redirects all
     # agent DB access (and _submit_for_approval writes) to the copy.
     os.environ["SQLITE_PATH"] = str(db_path)

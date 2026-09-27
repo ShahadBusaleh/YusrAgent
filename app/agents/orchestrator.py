@@ -261,8 +261,12 @@ class OrchestratorAgent:
     # =========================================================
 
     def classify_intent(self, query: str) -> str:
+        return self._classify_intent_or_none(query) or "OTHER"
+
+    def _classify_intent_or_none(self, query: str) -> str | None:
         """
-        Classify the request into exactly one intent:
+        Classify the request into exactly one intent (None if the LLM
+        call failed both attempts):
 
         HR
         CONSULTANT
@@ -532,7 +536,7 @@ User request:
                     exc_info=True,
                 )
 
-        return "OTHER"
+        return None
 
     # =========================================================
     # 3. BOTH REQUEST ORDER
@@ -967,7 +971,8 @@ User request:
         # STEP 2 — INTENT
         # =====================================================
 
-        intent = self.classify_intent(query)
+        classified_intent = self._classify_intent_or_none(query)
+        intent = classified_intent or "OTHER"
 
         # Grievances may legitimately name a colleague; everything else
         # asking for another employee's personal data is refused.
@@ -1187,6 +1192,9 @@ User request:
 
             # Detected intent
             "intent": intent,
+            # OTHER because the classifier call failed, not because the
+            # question is off-topic: don't tell the user it's out of scope.
+            "intent_unclassified": classified_intent is None,
 
             # Agent outputs
             "hr_result": hr_result,

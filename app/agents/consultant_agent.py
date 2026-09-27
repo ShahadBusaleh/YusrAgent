@@ -11,7 +11,7 @@ from openai import OpenAI
 from app.agents.arabic_text import glossary_instruction
 from app.agents.base import BaseAgent
 from app.config import get_settings
-from app.rag.retrieve import retrieve
+from app.rag.retrieve import chunk_article, cited_articles, retrieve
 
 from app.llm import llm_client
 from app.security.governance import (
@@ -411,10 +411,23 @@ def _filter_relevant_chunks(
         ] >= min_score
     ]
 
+    # A question about a named article gets every row of that article,
+    # otherwise the cap dropped e.g. the 21/30-day rules of Article 109.
+    articles = cited_articles(query)
+    if articles:
+        article_chunks = [
+            chunk
+            for chunk in ranked_chunks
+            if chunk_article(chunk) in articles
+        ]
+        if article_chunks:
+            return article_chunks
+
     # Keep at least the strongest retrieved document — but only if it
     # shares any vocabulary with the question at all. A zero-overlap
     # chunk is noise; returning [] lets the caller say the evidence is
     # insufficient instead of stretching an unrelated rule.
+
     if not relevant_chunks:
         return [
             chunk

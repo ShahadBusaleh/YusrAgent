@@ -1,4 +1,5 @@
 import logging
+import re
 
 from app.agents import arabic_text as ar
 from app.agents.base import BaseAgent
@@ -80,6 +81,15 @@ def _missing_payload_fields(proposed_action: dict) -> list[str]:
     ]
 
 
+# Greetings and thanks classify as OTHER; answer them as such instead of
+# calling them out of scope.
+_GREETING_RE = re.compile(
+    r"^(hi|hello|hey|good (morning|afternoon|evening)|thanks?( you)?|"
+    r"salam|as-?salamu? alaikum|مرحبا|مرحباً|أهلا|أهلاً|السلام عليكم|"
+    r"صباح الخير|مساء الخير|شكرا|شكراً)[\s!.,؟?]*$",
+    re.IGNORECASE,
+)
+
 def _failure_message(reasons: list[str]) -> str:
     """Short, user-safe explanation for a FAIL. Raw reasons stay in
     `reasons` for logs/UI debugging; this is what the employee reads."""
@@ -95,6 +105,17 @@ def _failure_message(reasons: list[str]) -> str:
         return "Your request couldn't be submitted for approval. Please try again."
     if "policy lookup failed" in text:
         return "I couldn't reach the HR policy documents right now. Please try again in a moment."
+    if text == "greeting.":
+        return (
+            "Hello! I'm Yusor, your HR assistant. I can help with leave, payroll, "
+            "attendance, your personal details, certificates, and HR policy."
+        )
+    if "outside hr scope" in text:
+        return (
+            "That's outside what I can help with. I'm Yusor, your HR assistant: "
+            "ask me about leave, payroll, attendance, your personal details, "
+            "certificates, or HR policy."
+        )
     return (
         "I couldn't find a reliable answer to that. I can help with leave, payroll, "
         "attendance, your personal details, certificates, and HR policy questions."
@@ -653,6 +674,18 @@ class ManagerAgent(BaseAgent):
 
         if not check_authorization(user, {"type": "agent_query"}):
             reasons.append("User is not authorized to submit agent queries.")
+
+        # Neither HR nor Consultant runs for OTHER, so the generic path
+        # failed it as "unsupported" and told the user "I couldn't find a
+        # reliable answer", as if a lookup had failed (o-07: weather).
+        if (
+            input.get("intent") == "OTHER"
+            and not input.get("intent_unclassified")
+            and not reasons
+        ):
+            if _GREETING_RE.match(query.strip()):
+                return _fail(["Greeting."])
+            return _fail(["Question is outside HR scope."])
 
         # Grievance workflow:
         # Manager only validates whether the grievance can proceed to Human HR.
