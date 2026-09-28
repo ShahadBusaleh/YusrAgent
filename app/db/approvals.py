@@ -419,6 +419,11 @@ def _record_decision(
         "decided_at": decided_at,
         "note": row[0] if row else None,
     }
+    if payload.get("warnings"):
+        # The warnings the approver saw above Approve, kept with their note.
+        payload["decision"]["warnings_acknowledged"] = [
+            w.get("code") for w in payload["warnings"] if isinstance(w, dict)
+        ]
     conn.execute(
         "UPDATE proposed_actions SET payload_json = ? WHERE proposal_id = ?",
         (json.dumps(payload), proposal_id),
@@ -501,6 +506,8 @@ def _final_settlement(profile: dict, frozen_at: str) -> dict:
         "settlement_deadline": profile.get("settlement"),
         "total": (profile.get("total") or {}).get("value"),
         "articles": [{"law_id": law_id, "article": article} for law_id, article in articles],
+        # Art. 80 ground and confirmed procedures (None for other types).
+        "article_80": profile.get("article_80"),
         "disclaimer": profile.get("disclaimer"),
     }
 
@@ -564,12 +571,12 @@ def _sync_new_hire(
         INSERT INTO employees (
             employee_id, full_name, employee_name_en, gender, email, mobile,
             city, work_city, nationality, is_saudi, department_id,
-            job_title, job_title_en, employment_status, employment_type,
+            job_title, job_title_en, job_grade, employment_status, employment_type,
             hire_date, manager_id, salary, basic_salary, basic_salary_sar,
             housing_allowance, housing_allowance_sar, transport_allowance,
             transport_allowance_sar, is_hr_approver, created_at
         ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active', ?,
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active', ?,
             ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?
         )
         """,
@@ -587,6 +594,7 @@ def _sync_new_hire(
             hire.get("department_id"),
             hire.get("job_title"),
             hire.get("job_title"),
+            hire.get("job_grade"),
             hire.get("employment_type") or "Full-time",
             hire.get("hire_date"),
             hire.get("manager_id"),

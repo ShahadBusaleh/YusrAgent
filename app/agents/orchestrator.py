@@ -337,6 +337,21 @@ class OrchestratorAgent:
                     "skills gap",
                     "experience gap",
                     "internal candidate",
+                    # Phase 4 new hire / end of service: the same trigger
+                    # phrases hr_agent._is_new_hire / _is_termination match.
+                    # The LLM classifier sent some of these to OTHER.
+                    "hire new employee",
+                    "hire a new employee",
+                    "add new employee",
+                    "add a new employee",
+                    "onboard new employee",
+                    "onboard a new employee",
+                    "terminate employee",
+                    "terminate the employment of",
+                    "terminate the service of",
+                    "end the employment of",
+                    "end the service of",
+                    "end of service for employee",
                 ],
             ),
             (

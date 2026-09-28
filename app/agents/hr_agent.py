@@ -2,8 +2,10 @@ import json
 import re
 from calendar import monthrange
 from datetime import date, datetime, timedelta
+from statistics import median
 
 from app.agents.base import BaseAgent
+from app.agents.separation_review import review_reason
 from app.agents.leave_intent import (
     detects_leave_submission_intent,
     extract_leave_fields,
@@ -769,6 +771,7 @@ _NEW_HIRE_FIELDS = (
     "mobile",
     "department_id",
     "job_title",
+    "job_grade",
     "manager_id",
     "employment_type",
     "hire_date",
@@ -781,9 +784,19 @@ _NEW_HIRE_REQUIRED = (
     "full_name",
     "department_id",
     "job_title",
+    "job_grade",
     "basic_salary",
     "hire_date",
 )
+
+# Article 80 procedure kind -> the "key: value" field that confirms it.
+# Which kinds a ground needs is read from the LAW075 text, not listed here.
+_ART80_PROCEDURE_FIELDS = {
+    "objection": "article_80_objection_date",
+    "written_warning": "article_80_warning_date",
+    "authority_report": "article_80_report_date",
+    "confirmation": "article_80_confirmed",
+}
 
 _TERMINATION_FIELDS = (
     "employee_id",
@@ -792,7 +805,28 @@ _TERMINATION_FIELDS = (
     "reason",
     "notice_waived",
     "notice_waiver_note",
+    "article_80_ground",
+    "article_80_details",
+    *_ART80_PROCEDURE_FIELDS.values(),
 )
+
+# --- New-hire pay checks (Saudi private sector) ---
+# A Saudi whose wage (basic + housing, the GOSI-registered wage) is below
+# this counts as 0.5 in Nitaqat (Saudization).
+NITAQAT_FULL_COUNT_MIN_WAGE_SAR = 4000
+# Hard floor for a basic salary: this share of the lowest basic salary of
+# any active employee. Catches typos like "1"; it is our own sanity floor,
+# not a legal minimum wage.
+BASIC_SALARY_FLOOR_SHARE = 0.5
+# An allowance is "far" from typical when its share of basic differs from
+# the typical share by more than this fraction of the typical share.
+ALLOWANCE_RATIO_TOLERANCE = 0.4
+# Grades with fewer active employees use company-wide allowance ratios.
+_MIN_GRADE_SAMPLE = 3
+
+# --- End-of-service reason checks ---
+REASON_MIN_CHARS = 20
+_REASON_MIN_WORDS = 3
 
 # Structured "key: value" pairs separated by ";" or new lines — the shape
 # the Ask Yusor forms send. Only known keys are read, so a free-text
@@ -853,6 +887,7 @@ def _is_termination(query: str) -> bool:
             "terminate the service of",
             "end the employment of",
             "end the service of",
+            "end of service for employee",
         ),
     )
 
@@ -881,13 +916,353 @@ def _format_day(value: date) -> str:
     return value.strftime("%d-%m-%Y")
 
 
-def _to_amount(value: str | None) -> float | None:
+def _signed_amount(value: str | None) -> float | None:
     text = re.sub(r"(?i)sar|,", "", str(value or "")).strip()
     try:
-        amount = float(text)
+        return float(text)
     except ValueError:
         return None
-    return amount if amount >= 0 else None
+
+
+def _to_amount(value: str | None) -> float | None:
+    amount = _signed_amount(value)
+    return amount if amount is not None and amount >= 0 else None
+
+
+# ---------------------------------------------------------------------------
+# New-hire pay checks. Blocks stop the request; warnings ride in the
+# proposal payload for the approver. The company scale comes from active
+# employees in the DB, so it follows the data instead of hardcoded figures.
+# ---------------------------------------------------------------------------
+
+
+def _median_ratio(rows: list[tuple[float, float, float]], index: int) -> float:
+    return round(median(row[index] / row[0] for row in rows), 3)
+
+
+def get_salary_scale(conn) -> dict:
+    """Read-only company salary scale: min/max basic per job_grade and the
+    typical housing/transport share of basic, from active employees."""
+
+    rows = conn.execute(
+        """
+        SELECT job_grade, basic_salary_sar,
+               COALESCE(housing_allowance_sar, 0), COALESCE(transport_allowance_sar, 0)
+        FROM employees
+        WHERE employment_status = 'Active' AND basic_salary_sar > 0
+        """
+    ).fetchall()
+    everyone = [(float(r[1]), float(r[2]), float(r[3])) for r in rows]
+    by_grade: dict[str, list[tuple[float, float, float]]] = {}
+    for grade, basic, housing, transport in rows:
+        if grade:
+            by_grade.setdefault(str(grade), []).append((float(basic), float(housing), float(transport)))
+
+    grades = {}
+    for grade in sorted(by_grade):
+        items = by_grade[grade]
+        sample = items if len(items) >= _MIN_GRADE_SAMPLE else everyone
+        grades[grade] = {
+            "min_basic": min(row[0] for row in items),
+            "max_basic": max(row[0] for row in items),
+            "employees": len(items),
+            "housing_ratio": _median_ratio(sample, 1),
+            "transport_ratio": _median_ratio(sample, 2),
+            "ratio_basis": "grade" if sample is items else "company",
+        }
+
+    lowest = min((row[0] for row in everyone), default=0.0)
+    return {
+        "grades": grades,
+        "lowest_basic": lowest,
+        "basic_floor": round(lowest * BASIC_SALARY_FLOOR_SHARE, 2),
+        "basic_floor_share": BASIC_SALARY_FLOOR_SHARE,
+        "nitaqat_min_wage": NITAQAT_FULL_COUNT_MIN_WAGE_SAR,
+        "allowance_tolerance": ALLOWANCE_RATIO_TOLERANCE,
+        "source": "employees (active)",
+    }
+
+
+def _is_saudi(nationality: str | None) -> bool:
+    # Same test _sync_new_hire uses to fill employees.is_saudi.
+    return str(nationality or "").strip().lower() == "saudi"
+
+
+def check_new_hire_pay(
+    conn,
+    *,
+    job_grade: str | None,
+    nationality: str | None,
+    basic_salary,
+    housing_allowance=0,
+    transport_allowance=0,
+    scale: dict | None = None,
+) -> dict:
+    """Read-only pay checks for a new hire.
+
+    Returns {"problems": [...], "warnings": [...]}: problems block the
+    request, warnings go to the approver. Each warning carries a `code`,
+    an English `text` and the figures the UI needs to translate it.
+    """
+
+    scale = scale or get_salary_scale(conn)
+    problems: list[str] = []
+    warnings: list[dict] = []
+
+    basic = _signed_amount(basic_salary) if isinstance(basic_salary, str) else basic_salary
+    amounts = {}
+    for name, value in (("housing_allowance", housing_allowance), ("transport_allowance", transport_allowance)):
+        amount = _signed_amount(value) if isinstance(value, str) else value
+        if amount is None:
+            problems.append(f"{name} must be an amount in SAR (0 or more).")
+        elif amount < 0:
+            problems.append(f"{name} cannot be negative.")
+        amounts[name] = amount
+
+    if basic is None or basic <= 0:
+        problems.append("basic_salary must be a positive amount in SAR.")
+    elif basic < scale["basic_floor"]:
+        problems.append(
+            f"basic_salary {basic:,.2f} SAR is too low: the minimum accepted is "
+            f"{scale['basic_floor']:,.2f} SAR ({scale['basic_floor_share']:g} × the lowest "
+            f"basic salary of any active employee, {scale['lowest_basic']:,.2f} SAR). "
+            "Check the amount."
+        )
+
+    grade = str(job_grade or "").strip().upper()
+    band = scale["grades"].get(grade)
+    if not grade:
+        problems.append("job_grade is required.")
+    elif band is None:
+        problems.append("job_grade must be one of: " + ", ".join(scale["grades"]) + ".")
+
+    if problems:
+        return {"problems": problems, "warnings": warnings}
+
+    housing = amounts["housing_allowance"]
+    transport = amounts["transport_allowance"]
+
+    wage = basic + housing
+    if _is_saudi(nationality) and wage < scale["nitaqat_min_wage"]:
+        warnings.append(
+            {
+                "code": "nitaqat_half",
+                "text": (
+                    f"Saudi employee with a wage (basic + housing) of {wage:,.2f} SAR, "
+                    f"below {scale['nitaqat_min_wage']:,} SAR: counts as 0.5 in Nitaqat "
+                    "(Saudization)."
+                ),
+                "wage": wage,
+                "threshold": scale["nitaqat_min_wage"],
+            }
+        )
+
+    if not band["min_basic"] <= basic <= band["max_basic"]:
+        warnings.append(
+            {
+                "code": "grade_range",
+                "text": (
+                    f"Basic salary {basic:,.2f} SAR is outside the company range for "
+                    f"grade {grade}: {band['min_basic']:,.2f}–{band['max_basic']:,.2f} SAR "
+                    f"(from {band['employees']} active employees)."
+                ),
+                "grade": grade,
+                "basic": basic,
+                "min": band["min_basic"],
+                "max": band["max_basic"],
+                "employees": band["employees"],
+            }
+        )
+
+    for code, name, amount in (
+        ("housing_ratio", "Housing allowance", housing),
+        ("transport_ratio", "Transport allowance", transport),
+    ):
+        typical = band[code]
+        ratio = amount / basic
+        if typical and abs(ratio - typical) > typical * scale["allowance_tolerance"]:
+            basis = f"grade {grade}" if band["ratio_basis"] == "grade" else "all active employees"
+            warnings.append(
+                {
+                    "code": code,
+                    "text": (
+                        f"{name} is {ratio:.0%} of basic; typical for {basis} is "
+                        f"{typical:.0%} ({basic * typical:,.2f} SAR)."
+                    ),
+                    "grade": grade,
+                    "ratio": round(ratio, 3),
+                    "typical": typical,
+                    "typical_amount": round(basic * typical, 2),
+                    "basis": band["ratio_basis"],
+                }
+            )
+
+    return {"problems": problems, "warnings": warnings}
+
+
+# ---------------------------------------------------------------------------
+# End-of-service reason and Article 80 checks.
+# ---------------------------------------------------------------------------
+
+_LETTERS_RE = re.compile(r"[^\W\d_]+")
+# A "word" that is one short chunk repeated: "aaaa", "haha", "asdfasdf".
+_REPEATED_CHUNK_RE = re.compile(r"(.{1,4}?)\1+")
+_VOWEL_RE = re.compile(r"[aeiouy]")
+
+
+def _is_real_word(word: str) -> bool:
+    word = word.lower()
+    if len(word) < 2 or _REPEATED_CHUNK_RE.fullmatch(word):
+        return False
+    # Latin words need a vowel; other scripts (Arabic) pass on length.
+    return not word.isascii() or bool(_VOWEL_RE.search(word))
+
+
+def check_reason_text(label: str, text: str | None, min_chars: int = REASON_MIN_CHARS) -> list[str]:
+    """Hard blocks for a free-text reason: too short, or no real words
+    (only symbols, digits, repeated letters or the same word over again)."""
+
+    text = str(text or "").strip()
+    if len(text) < min_chars:
+        return [
+            f"{label} must be at least {min_chars} characters (it has {len(text)}). "
+            "Describe what happened."
+        ]
+    words = {w.lower() for w in _LETTERS_RE.findall(text) if _is_real_word(w)}
+    if len(words) < _REASON_MIN_WORDS:
+        return [
+            f"{label} must be written in real words (at least {_REASON_MIN_WORDS} "
+            "different ones), not symbols or repeated letters."
+        ]
+    return []
+
+
+_ART80_ITEM_RE = re.compile(r"\((\d+)\)\s*(.*?)(?=\s*\(\d+\)|$)", re.DOTALL)
+_SENTENCE_RE = re.compile(r"[^.]+(?:\.|$)")
+
+
+def _procedure_kind(text: str) -> str | None:
+    lower = text.lower()
+    if "written warning" in lower:
+        return "written_warning"
+    if "report" in lower and "authorit" in lower:
+        return "authority_report"
+    if "objection" in lower:
+        return "objection"
+    return None
+
+
+def get_article_80_grounds(conn) -> dict | None:
+    """Read-only: the Article 80 grounds and the procedural conditions
+    each one needs, parsed from the current LAW075 row (so an approved
+    regulation_update to that row is picked up). None if the row is gone."""
+
+    row = conn.execute(
+        """
+        SELECT id, article, title, rule, conditions, exceptions
+        FROM saudi_labor_law WHERE id = ? AND article = ?
+        """,
+        _LAW_ARTICLE_80,
+    ).fetchone()
+    if row is None:
+        return None
+
+    # Conditions apply to every ground; each sentence is one confirmation.
+    general = []
+    for sentence in _SENTENCE_RE.findall(row["conditions"] or ""):
+        sentence = sentence.strip()
+        if sentence and sentence != "-":
+            general.append({"kind": _procedure_kind(sentence) or "confirmation", "text": sentence})
+
+    # Exceptions like "For absence, dismissal must be preceded by a written
+    # warning" apply to the ground that mentions that subject.
+    scoped = []
+    for sentence in _SENTENCE_RE.findall(row["exceptions"] or ""):
+        match = re.match(r"\s*For ([^,]+),", sentence)
+        kind = _procedure_kind(sentence)
+        if match and kind:
+            scoped.append((match.group(1).strip().lower()[:5], kind, sentence.strip()))
+
+    grounds = []
+    for number, text in _ART80_ITEM_RE.findall(row["rule"] or ""):
+        text = re.sub(r"[;.,\s]+$", "", text.strip())
+        text = re.sub(r"\s*;?\s*(?:and|or)$", "", text)
+        requirements = []
+        kind = _procedure_kind(text)
+        if kind:
+            requirements.append({"kind": kind, "text": text})
+        for stem, scoped_kind, sentence in scoped:
+            if stem in text.lower() and scoped_kind not in {r["kind"] for r in requirements}:
+                requirements.append({"kind": scoped_kind, "text": sentence})
+        requirements.extend(general)
+        for requirement in requirements:
+            requirement["field"] = _ART80_PROCEDURE_FIELDS[requirement["kind"]]
+            requirement["needs_date"] = requirement["kind"] != "confirmation"
+        grounds.append({"number": int(number), "text": text, "requirements": requirements})
+
+    return {
+        "law_id": row["id"],
+        "article": row["article"],
+        "title": row["title"],
+        "grounds": grounds,
+    }
+
+
+def _article_80_problems(conn, fields: dict, hire_date: date | None, today: date) -> tuple[list[str], dict | None]:
+    """Validate the Article 80 ground, details and procedures. Returns
+    (problems, the payload's article_80 block)."""
+
+    article = get_article_80_grounds(conn)
+    if not article or not article["grounds"]:
+        return ["The Article 80 text (LAW075) could not be read, so this request can't be checked."], None
+
+    listing = "; ".join(f"({g['number']}) {g['text']}" for g in article["grounds"])
+    raw_ground = str(fields.get("article_80_ground") or "").strip()
+    number_match = re.match(r"\(?(\d+)\)?", raw_ground)
+    ground = None
+    if number_match:
+        ground = next((g for g in article["grounds"] if g["number"] == int(number_match.group(1))), None)
+    if ground is None:
+        return [
+            "article_80_ground is required: give the number of the Article 80 ground "
+            f"({article['law_id']}) — {listing}."
+        ], None
+
+    details = fields.get("article_80_details") or fields.get("reason")
+    problems = check_reason_text("article_80_details", details)
+
+    procedures = []
+    for requirement in ground["requirements"]:
+        value = str(fields.get(requirement["field"]) or "").strip()
+        if not requirement["needs_date"]:
+            if value.lower() not in {"yes", "true", "1"}:
+                problems.append(f"{requirement['field']}: yes is required — {requirement['text']}")
+            else:
+                procedures.append({"kind": requirement["kind"], "text": requirement["text"], "confirmed": True})
+            continue
+        when = _parse_day(value)
+        if when is None:
+            problems.append(
+                f"{requirement['field']} (DD-MM-YYYY) is required to confirm: {requirement['text']}"
+            )
+        elif when > today:
+            problems.append(f"{requirement['field']} cannot be in the future.")
+        elif hire_date and when < hire_date:
+            problems.append(f"{requirement['field']} cannot be before the employee's hire date.")
+        else:
+            procedures.append(
+                {"kind": requirement["kind"], "text": requirement["text"], "confirmed": True, "date": _format_day(when)}
+            )
+
+    block = {
+        "law_id": article["law_id"],
+        "article": article["article"],
+        "ground_number": ground["number"],
+        "ground_text": ground["text"],
+        "details": str(details or "").strip(),
+        "procedures": procedures,
+    }
+    return problems, block
 
 
 def _open_termination(conn, employee_id: str) -> dict | None:
@@ -969,14 +1344,19 @@ def _new_hire_request(conn, requester_id: str, query: str) -> dict:
     if department is None:
         problems.append(f"Department {department_id} does not exist.")
 
+    job_grade = fields["job_grade"].strip().upper()
+    pay = check_new_hire_pay(
+        conn,
+        job_grade=job_grade,
+        nationality=fields.get("nationality"),
+        basic_salary=fields["basic_salary"],
+        housing_allowance=fields.get("housing_allowance") or "0",
+        transport_allowance=fields.get("transport_allowance") or "0",
+    )
+    problems.extend(pay["problems"])
     basic_salary = _to_amount(fields["basic_salary"])
-    if not basic_salary:
-        problems.append("basic_salary must be a positive amount in SAR.")
-
     housing = _to_amount(fields.get("housing_allowance") or "0")
     transport = _to_amount(fields.get("transport_allowance") or "0")
-    if housing is None or transport is None:
-        problems.append("Allowances must be amounts in SAR (0 or more).")
 
     hire_date = _parse_day(fields["hire_date"])
     if hire_date is None:
@@ -1044,6 +1424,7 @@ def _new_hire_request(conn, requester_id: str, query: str) -> dict:
         "department_id": department_id,
         "department_name": department["department_name"],
         "job_title": fields["job_title"],
+        "job_grade": job_grade,
         "manager_id": manager_id,
         "employment_type": employment_type,
         "hire_date": _format_day(hire_date),
@@ -1066,6 +1447,7 @@ def _new_hire_request(conn, requester_id: str, query: str) -> dict:
             f"{new_employee['hire_date']}. The employee record and login are "
             "created only after an HR manager approves.",
             *([manager_notice] if manager_notice else []),
+            *(f"Warning: {w['text']}" for w in pay["warnings"]),
         ],
         sources,
         proposed_action={
@@ -1081,6 +1463,8 @@ def _new_hire_request(conn, requester_id: str, query: str) -> dict:
                 # hire HIGH risk.
                 "basic_salary": basic_salary,
                 "new_employee": new_employee,
+                # Shown to the approver above Approve; they don't block.
+                "warnings": pay["warnings"],
             },
         },
     )
@@ -1096,12 +1480,18 @@ def _termination_request(conn, requester_id: str, query: str) -> dict:
 
     sources = [f"employees:{target_id or requester_id}"]
 
+    termination_type = re.sub(r"[\s-]+", "_", (fields.get("termination_type") or "").strip().lower())
+    # Article 80 replaces the free-text reason with a ground + details.
+    reason_value = fields.get("reason")
+    if termination_type == "article_80":
+        reason_value = fields.get("article_80_details") or reason_value
+
     missing = [
         field
         for field, value in (
             ("employee_id", target_id),
-            ("termination_type", fields.get("termination_type")),
-            ("reason", fields.get("reason")),
+            ("termination_type", termination_type),
+            ("article_80_details" if termination_type == "article_80" else "reason", reason_value),
         )
         if not value
     ]
@@ -1111,7 +1501,7 @@ def _termination_request(conn, requester_id: str, query: str) -> dict:
             "termination",
             "NEEDS_INFORMATION",
             [
-                "To terminate an employee, provide "
+                "To end an employee's service, provide "
                 + ", ".join(missing)
                 + ' as "key: value" pairs. termination_type is one of: '
                 + ", ".join(TERMINATION_TYPES)
@@ -1126,13 +1516,12 @@ def _termination_request(conn, requester_id: str, query: str) -> dict:
             requester_id,
             "termination",
             "NOT_AUTHORIZED",
-            ["You cannot submit a termination request for yourself."],
+            ["You cannot submit an end-of-service request for yourself."],
             sources,
         )
 
     problems: list[str] = []
 
-    termination_type = re.sub(r"[\s-]+", "_", fields["termination_type"].strip().lower())
     if termination_type not in TERMINATION_TYPES:
         problems.append(
             "termination_type must be one of: " + ", ".join(TERMINATION_TYPES) + "."
@@ -1151,13 +1540,13 @@ def _termination_request(conn, requester_id: str, query: str) -> dict:
             # One termination at a time: point to the one already in progress.
             if existing["status"] == "pending_approval":
                 problems.append(
-                    f"Employee {target_id} already has a termination request waiting "
+                    f"Employee {target_id} already has an end-of-service request waiting "
                     f"for approval ({existing['proposal_id']}, last working day "
                     f"{existing['termination_date']})."
                 )
             else:
                 problems.append(
-                    f"Employee {target_id} already has an approved termination "
+                    f"Employee {target_id} already has an approved end of service "
                     f"({existing['proposal_id']}) and is in the notice period until "
                     f"{existing['termination_date']}."
                 )
@@ -1206,17 +1595,33 @@ def _termination_request(conn, requester_id: str, query: str) -> dict:
     if termination_date and hire_date and termination_date < hire_date:
         problems.append("termination_date cannot be before the employee's hire date.")
 
+    article_80 = None
+    if termination_type == "article_80":
+        art80_problems, article_80 = _article_80_problems(conn, fields, hire_date, today)
+        problems.extend(art80_problems)
+    else:
+        problems.extend(check_reason_text("reason", reason_value))
+
     if problems:
         return _staffing_result(
             requester_id, "termination", "NEEDS_INFORMATION", problems, sources
         )
 
+    # The LLM reads the reason against the type; its findings are warnings
+    # for the approver, never blocks. Runs only once the hard checks pass.
+    warnings = review_reason(
+        termination_type,
+        reason_value,
+        article_80_ground=(article_80 or {}).get("ground_text"),
+    )
+
     notes.insert(
         0,
-        f"Termination of {employee.get('full_name')} ({target_id}) as "
+        f"End of service for {employee.get('full_name')} ({target_id}) as "
         f"{termination_type} on {_format_day(termination_date)}. The record is "
         "updated only after an HR manager approves.",
     )
+    notes.extend(f"Warning: {w['text']}" for w in warnings)
 
     return _staffing_result(
         requester_id,
@@ -1230,11 +1635,14 @@ def _termination_request(conn, requester_id: str, query: str) -> dict:
                 "employee_id": target_id,
                 "termination_type": termination_type,
                 "termination_date": _format_day(termination_date),
-                "reason": fields["reason"],
+                "reason": str(reason_value).strip(),
                 "requested_by": requester_id,
                 "notice_days_required": notice_days,
                 "notice_waived": notice_waived,
                 "notice_waiver_note": waiver_note or None,
+                **({"article_80": article_80} if article_80 else {}),
+                # Shown to the approver above Approve; they don't block.
+                "warnings": warnings,
             },
         },
     )
@@ -1254,7 +1662,7 @@ def _staffing_request(user: dict, query: str) -> dict:
             requester_id,
             action_type,
             "NOT_AUTHORIZED",
-            ["Only HR staff can submit new-hire or termination requests."],
+            ["Only HR staff can submit new-hire or end-of-service requests."],
             sources,
         )
 
@@ -1263,7 +1671,7 @@ def _staffing_request(user: dict, query: str) -> dict:
             requester_id,
             "multiple_actions",
             "NEEDS_INFORMATION",
-            ["Please submit the new hire and the termination as separate requests."],
+            ["Please submit the new hire and the end of service as separate requests."],
             sources,
         )
 
@@ -1527,6 +1935,8 @@ def get_termination_profile(conn, proposal: dict) -> dict:
             "pending_requests": pending_requests,
         },
         "warnings": warnings,
+        # Art. 80 ground, details and confirmed procedures, as requested.
+        "article_80": payload.get("article_80"),
         "contract_end_case": _cite(_LAW_END_CASES),
         "disclaimer": TERMINATION_DISCLAIMER,
     }
