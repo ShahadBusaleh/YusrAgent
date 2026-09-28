@@ -784,6 +784,7 @@ def _build_sources(
         sources.append(
             {
                 "id": source_id,
+                "source_ids": chunk.get("source_ids") or [source_id],
                 "display_name": display_name,
                 "text": source_text,
                 "source_table": chunk.get("source_table"),
@@ -882,6 +883,7 @@ def _generate_consultant_recommendation(
         7. For every relevant policy rule, include a citation in the exact format [Source: ID]. Use only IDs that appear in the retrieved policy evidence.        8. State clearly if the retrieved evidence is insufficient.
         9. Human HR review is ALWAYS required.
         10. If employee-specific information is required, indicate that it is required.
+        11. Only include rules, conditions, or exceptions that the evidence states. Leave out anything it does not cover.
         """.strip()
     else:
         system_prompt = """
@@ -893,7 +895,7 @@ def _generate_consultant_recommendation(
 
     1. Answer only from the retrieved policy evidence.
     2. Explain the policy rules that directly answer the user's question.
-    3. Clearly identify rules, conditions, requirements, and exceptions.
+    3. Identify the rules, conditions, requirements, and exceptions that the evidence actually states. Leave out any of these the evidence does not mention; do not add a heading or a sentence to fill it.
     4. Do NOT access employee-specific data or the HR database.
     5. Do NOT evaluate employee eligibility or employee-specific conditions.
     6. Do NOT calculate employee leave balances.
@@ -923,12 +925,18 @@ RETRIEVED POLICY EVIDENCE:
 Answer the question using ONLY the retrieved
 policy evidence.
 
-Explain the relevant:
+Explain whichever of these the evidence states:
 
 - Policy rules
 - Conditions
 - Requirements
 - Exceptions
+
+Leave out any part the evidence does not cover: no empty or
+placeholder headings, and no general statements (such as
+"subject to statutory limits") unless the evidence says them.
+Only answer what was asked; do not add a summary that repeats
+or extends the points above.
 
 For each relevant policy rule, mention the Article number
 when it is relevant and available.
@@ -1004,7 +1012,11 @@ def _generate_for_reader(
 
     if lang == "ar":
         validation_sources = [
-            {"id": chunk.get("id"), "text": chunk.get("text", "")}
+            {
+                "id": chunk.get("id"),
+                "source_ids": chunk.get("source_ids"),
+                "text": chunk.get("text", ""),
+            }
             for chunk in chunks
         ]
         try:
@@ -1552,6 +1564,7 @@ class ConsultantAgent(BaseAgent):
         validation_sources = [
             {
                 "id": chunk.get("id"),
+                "source_ids": chunk.get("source_ids"),
                 "text": chunk.get(
                     "text",
                     "",

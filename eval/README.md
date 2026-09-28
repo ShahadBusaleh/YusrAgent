@@ -68,7 +68,9 @@ EMP-0001 is an `hr_manager`.
 |---|---|---|
 | `python -m unittest discover -s eval -p "test_*.py" -v` | Offline unit tests (Arabic answers and translation, query expansion, regulations parser, staffing, growth API, supporting modules — see below). Model calls are mocked. | No |
 | `python -m eval.build_ragas_dataset` | Runs the Consultant on `golden/consultant_rag.jsonl` and saves answers + retrieved contexts to `golden/consultant_rag_results.jsonl`. | Yes |
-| `python -m eval.run_ragas` | Scores those results with Ragas: faithfulness, context precision, context recall, answer relevancy → `golden/ragas_results.jsonl`. | Yes |
+| `python -m eval.run_ragas` | Scores those results with Ragas: faithfulness, context precision, context recall, answer relevancy, plus source-id recall/precision (`id_recall`, `id_precision`) → `golden/ragas_results.jsonl`, and prints the means and how many cases are missing each metric. Cases already fully scored are skipped; use `--fresh` after rebuilding the dataset. `--timeout` sets seconds per metric call (default 300). | Yes |
+
+Reference answers in `golden/consultant_rag.jsonl` state only what their `reference_source_ids` files say. Out-of-scope questions (no reference source, the answer should refuse) are in `golden/consultant_out_of_scope.jsonl` and are not Ragas-scored, since context precision/recall are 0 by definition there.
 | `python -m eval.run_llm_judge` | LLM-as-a-Judge over the latest `results/eval-*.json` (all four agents) → `results/llm-judge-*.json`. Uses the fuller `judge_output` saved by `run_eval.py`. Options: `--input`, `--model`, `--id`. | Yes |
 
 `ragas` is not in `requirements.txt`; install it separately (`pip install ragas`) before running the Ragas scripts. The LLM-based tools use the shared provider quota (Groq: 8k tokens/minute, 200k/day). Prefer `--offline` and the unit tests for day-to-day checks.

@@ -5,7 +5,8 @@ query word to appear in one chunk, so natural questions matched nothing and
 it was switched off, leaving dense-only search — which ranked "annual leave
 after five years" (LAW038) above the basic 21-day rule (LAW037) for "what is
 the duration of annual leave?". BM25 scores partial matches, and the corpus
-(one small chunk per policy_texts file, as ingested) fits in memory.
+(the same chunks as ingested: one per law/policy file, one per WPS
+category) fits in memory.
 """
 
 from __future__ import annotations

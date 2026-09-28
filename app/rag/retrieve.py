@@ -17,6 +17,7 @@ def _hit_to_chunk(hit) -> dict:
 
     return {
     "id": payload.get("id"),
+    "source_ids": payload.get("source_ids") or [payload.get("id")],
     "source_table": payload.get("source_table"),
     "source_name": payload.get("source_name"),
     "filename": payload.get("filename"),

@@ -162,8 +162,19 @@ class KeywordSearchCases(unittest.TestCase):
         from app.rag.keyword import keyword_search
         chunk = keyword_search("end of service award", top_k=1)[0]
         self.assertEqual(
-            set(chunk), {"id", "source_table", "source_name", "filename", "text", "score"}
+            set(chunk),
+            {"id", "source_ids", "source_table", "source_name", "filename", "text", "score"},
         )
+
+    def test_wps_rules_merged_by_category(self):
+        from app.rag.ingest import load_chunks
+        from app.security.governance import verify_citations
+        wage_data = next(c for c in load_chunks() if c["id"] == "WPS021-WPS030")
+        self.assertEqual(wage_data["source_ids"], [f"WPS0{n}" for n in range(21, 31)])
+        self.assertIn("Housing allowance", wage_data["text"])
+        # An answer may cite a rule inside the section or the section itself.
+        self.assertTrue(verify_citations("[Source: WPS027] [Source: WPS021-WPS030]", [wage_data]))
+        self.assertFalse(verify_citations("[Source: WPS034]", [wage_data]))
 
     def test_stop_words_only_query_returns_nothing(self):
         from app.rag.keyword import keyword_search

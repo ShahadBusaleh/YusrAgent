@@ -762,7 +762,8 @@ def _upsert(chunks: list[dict]) -> int:
             id=ingest._point_id(c["source_table"], c["id"]),
             vector=vector,
             payload={
-                "id": c["id"], "source_table": c["source_table"],
+                "id": c["id"], "source_ids": c.get("source_ids") or [c["id"]],
+                "source_table": c["source_table"],
                 "source_name": ingest.SOURCE_NAMES.get(c["source_table"], c["source_table"]),
                 "filename": c["filename"], "text": c["text"],
             },
@@ -840,11 +841,7 @@ def prepare_demo() -> dict:
     assert folder is not None
     if not any(folder.glob("*/*.txt")):
         shutil.copytree(reg_db.TRACKED_POLICY_DIR, folder, dirs_exist_ok=True)
-    chunks = []
-    for table, sub in {"company_policies": "company_policies", "saudi_labor_law": "saudi_labor_law", "wps": "WPS"}.items():
-        for path in sorted((folder / sub).glob("*.txt")):
-            chunks.append({"id": ingest._source_id_from_filename(path), "source_table": table,
-                           "filename": path.name, "text": path.read_text(encoding="utf-8").strip()})
+    chunks = ingest.load_chunks(folder)
     return {"folder": str(folder), "points": _upsert(chunks), "collection": get_settings().qdrant_collection}
 
 

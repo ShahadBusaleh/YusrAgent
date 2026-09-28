@@ -242,7 +242,11 @@ def _response_text(target: str, out: dict) -> str:
 def _source_ids(out: dict) -> list[str]:
     ids = []
     for src in out.get("sources") or []:
-        ids.append(str(src.get("id")) if isinstance(src, dict) else str(src))
+        if isinstance(src, dict):
+            ids.append(str(src.get("id")))
+            ids.extend(str(i) for i in src.get("source_ids") or [])
+        else:
+            ids.append(str(src))
     return ids
 
 

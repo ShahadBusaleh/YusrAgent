@@ -1,3 +1,4 @@
+import argparse
 import json
 from pathlib import Path
 
@@ -44,8 +45,33 @@ def load_reference_contexts(source_ids):
     return [source_map[source_id] for source_id in source_ids]
 
 
+def load_saved_results():
+    if not OUTPUT_PATH.exists():
+        return {}
+    with OUTPUT_PATH.open(encoding="utf-8") as f:
+        return {
+            result["id"]: result
+            for result in map(json.loads, filter(str.strip, f))
+        }
+
+
 def main():
-    cases = load_cases()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--id",
+        action="append",
+        dest="ids",
+        help="Rebuild only these case IDs (repeatable); other saved results are kept.",
+    )
+    args = parser.parse_args()
+
+    all_cases = load_cases()
+    cases = all_cases
+    saved = {}
+    if args.ids:
+        cases = [case for case in all_cases if case["id"] in set(args.ids)]
+        saved = load_saved_results()
+
     agent = ConsultantAgent()
 
     results = []
@@ -69,6 +95,14 @@ def main():
             if source.get("id")
         ]
 
+        # A WPS section chunk ("WPS021-WPS030") holds several rule ids;
+        # run_ragas scores id recall against these.
+        member_ids = [
+            source.get("source_ids") or [source.get("id")]
+            for source in output.get("sources", [])
+            if source.get("id")
+        ]
+
         reference_source_ids = case.get("reference_source_ids", [])
 
         result = {
@@ -77,6 +111,7 @@ def main():
             "answer": output.get("recommendation", ""),
             "contexts": contexts,
             "retrieved_source_ids": source_ids,
+            "retrieved_member_ids": member_ids,
             "reference_answer": case["reference_answer"],
             "reference_contexts": load_reference_contexts(
                 reference_source_ids
@@ -91,6 +126,10 @@ def main():
         print("  retrieved:", source_ids)
         print("  reference:", reference_source_ids)
         print("  contexts:", len(contexts))
+
+    if args.ids:
+        saved.update({result["id"]: result for result in results})
+        results = [saved[case["id"]] for case in all_cases if case["id"] in saved]
 
     with OUTPUT_PATH.open("w", encoding="utf-8") as f:
         for result in results:

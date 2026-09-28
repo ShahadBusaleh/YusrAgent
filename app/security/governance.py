@@ -213,12 +213,13 @@ def verify_citations(response: str, sources: list) -> bool:
 
     for source in sources or []:
         if isinstance(source, dict):
-            source_id = source.get("id")
+            source_ids = [source.get("id"), *(source.get("source_ids") or [])]
         else:
-            source_id = source
+            source_ids = [source]
 
-        if source_id:
-            retrieved_ids.add(str(source_id).strip().lower())
+        for source_id in source_ids:
+            if source_id:
+                retrieved_ids.add(str(source_id).strip().lower())
 
     citation_pattern = re.compile(
         r"\[\s*source\s*:\s*([^\]]+)\]",
