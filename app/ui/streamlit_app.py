@@ -302,6 +302,14 @@ def _logout() -> None:
     st.rerun()
 
 
+def _role_with_title(me: dict) -> str:
+    """Role label plus the signed-in user's job title, e.g. "Employee · Accountant"."""
+    role = me.get("role", "employee")
+    label = _role_labels().get(role, role)
+    job_title = str(me.get("job_title") or "").strip()
+    return f"{label} · {job_title}" if job_title else label
+
+
 def _sidebar(me: dict, pending_count: int = 0) -> str:
     role = me.get("role", "employee")
     pages = PAGES_BY_ROLE.get(role, PAGES_BY_ROLE["employee"])
@@ -323,7 +331,7 @@ def _sidebar(me: dict, pending_count: int = 0) -> str:
               <div class="yz-avatar">{html.escape(_initials(str(display_name)))}</div>
               <div>
                 <div class="yz-profile-name">{html.escape(str(display_name))}</div>
-                <div class="yz-profile-role">{html.escape(_role_labels().get(role, role))}</div>
+                <div class="yz-profile-role">{html.escape(_role_with_title(me))}</div>
               </div>
             </div>
             <div class="yz-sidebar-divider"></div>
@@ -558,6 +566,7 @@ def _team_insights_v2() -> None:
                 styles.data_table(
                     candidate_rows,
                     [
+                        ("id", i18n.t("insights.col_employee_id")),
                         ("name", i18n.t("insights.col_employee")),
                         ("title", i18n.t("insights.col_job_title")),
                         ("plan", i18n.t("insights.col_plan")),
@@ -975,7 +984,7 @@ def _shell() -> None:
     display_name = str(me.get("full_name") or me.get("username") or "User")
     styles.page_header(
         display_name,
-        _role_labels().get(role, role),
+        _role_with_title(me),
         name_rtl=_is_rtl(display_name),
         action_text=action_text,
         action_page=action_page,
