@@ -3063,21 +3063,6 @@ def _render_leave_proposal_details(payload: dict, key_prefix: str) -> None:
     if payload.get("assigned_cover_employee_name"):
         rows.append((i18n.t("detail.assigned_cover"), payload.get("assigned_cover_employee_name")))
     styles.detail_card(rows)
-    candidates = payload.get("cover_candidates")
-    if isinstance(candidates, list):
-        suggested_id = payload.get("suggested_cover_employee_id")
-        others = [
-            c
-            for c in candidates
-            if isinstance(c, dict) and c.get("employee_id") != suggested_id
-        ]
-        if others:
-            with st.popover(i18n.t("detail.other_cover_options", n=len(others))):
-                styles.data_table(
-                    [{"name": c.get("full_name") or "—", "role": c.get("job_title") or "—"} for c in others],
-                    [("name", i18n.t("detail.col_name")), ("role", i18n.t("detail.col_role"))],
-                    key=f"covercandidates_{key_prefix}",
-                )
 
 
 def _staffing_label(proposal: dict | None) -> str:
