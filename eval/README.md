@@ -13,7 +13,7 @@ Full results are saved to `eval/results/` (git-ignored).
 
 ## Who owns what
 
-Each teammate edits **only their own case file**, the same split as TEAM.md:
+Each teammate edits **only their own case file**, the same split as [docs/TEAM.md](../docs/TEAM.md):
 
 | File | Owner | Runs |
 |---|---|---|

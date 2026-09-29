@@ -7,6 +7,6 @@
 - `simulated_*.json` — SIMULATED data for the demo (REGULATION_SOURCE=simulated).
   The amendment is fictional and is never presented as real law. Simulate mode
   only runs against a demo DB copy, a demo Qdrant collection and a demo
-  policy-text folder (see TEAM.md, Phase 4).
+  policy-text folder (see docs/TEAM.md, Phase 4).
 - `boe_labor_law_excerpt.html` — a verbatim excerpt of the official Labor Law
   page (5 article blocks, fetched 2026-09-26), used only by the parser tests.
