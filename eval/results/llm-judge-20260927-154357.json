@@ -1,0 +1,28 @@
+[
+  {
+    "id": "h-16",
+    "target": "hr",
+    "query": "Change my IBAN to SA0380000000608010167518",
+    "rule_based_outcome": "PASS",
+    "scores": {
+      "correctness": 3,
+      "relevance": 5,
+      "groundedness": 4,
+      "completeness": 3,
+      "reason": "The agent correctly flags NEEDS_INFORMATION but incorrectly includes a non‑null action_type, deviating from expected null. The response is relevant and mostly grounded, but the extra action_type reduces overall correctness and completeness."
+    }
+  },
+  {
+    "id": "o-04",
+    "target": "orchestrator",
+    "query": "What does Article 109 say about annual leave?",
+    "rule_based_outcome": "PASS",
+    "scores": {
+      "correctness": 5,
+      "relevance": 5,
+      "groundedness": 5,
+      "completeness": 4,
+      "reason": "Accurately describes Article 109 and cites sources, directly answers the question, but omits some details (e.g., leave length) that could make the response fully complete."
+    }
+  }
+]
