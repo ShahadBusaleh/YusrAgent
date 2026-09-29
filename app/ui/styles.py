@@ -2270,6 +2270,7 @@ def data_table(
     raw_html_keys: set[str] | None = None,
     on_view: Callable[[dict], None] | None = None,
     view_label: str | None = None,
+    view_enabled: Callable[[dict], bool] | None = None,
     row_id: str = "id",
     key: str = "table",
     empty_message: str = "No records.",
@@ -2282,7 +2283,8 @@ def data_table(
     hover, the status pill (when `status_key` names a column), an optional
     already-built-HTML column (`raw_html_keys`, e.g. the inbox's colored
     type badge — caller is responsible for escaping any raw data in it),
-    and an optional real "View"/"Review" button per row via `on_view(row)`.
+    and an optional real "View"/"Review" button per row via `on_view(row)`
+    (rows where `view_enabled(row)` is False show "—" instead).
     """
     styles_map = {**status_pills(), **(status_styles or {})}
     view_label = view_label or i18n.t("grievances.col_view")
@@ -2316,7 +2318,9 @@ def data_table(
                     col.markdown(f'<div class="dt-cell">{html.escape(text)}</div>', unsafe_allow_html=True)
             if on_view:
                 with cols[-1]:
-                    if st.button(view_label, key=f"dtviewbtn_{key}_{i}", use_container_width=True):
+                    if view_enabled is not None and not view_enabled(row):
+                        st.markdown('<div class="dt-cell">—</div>', unsafe_allow_html=True)
+                    elif st.button(view_label, key=f"dtviewbtn_{key}_{i}", use_container_width=True):
                         on_view(row)
 
 

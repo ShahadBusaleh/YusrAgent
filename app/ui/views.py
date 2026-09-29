@@ -2147,7 +2147,9 @@ def page_inbox() -> None:
 
     def _open_review(row: dict) -> None:
         st.session_state["inbox_open"] = (row["_kind"], row["_id"])
+        st.session_state["inbox_scroll"] = "#yz-inbox-detail"
 
+    st.markdown('<div id="yz-inbox-list"></div>', unsafe_allow_html=True)
     styles.data_table(
         visible_rows,
         [
@@ -2168,7 +2170,14 @@ def page_inbox() -> None:
     opened = st.session_state.get("inbox_open")
     if opened:
         kind, item_id = opened
+        selected = next(
+            (i for i, r in enumerate(visible_rows) if (r.get("_kind"), r.get("_id")) == (kind, item_id)),
+            None,
+        )
+        if selected is not None:
+            st.markdown(styles.selected_row_css("inbox", selected), unsafe_allow_html=True)
         st.divider()
+        st.markdown('<div id="yz-inbox-detail"></div>', unsafe_allow_html=True)
         if kind == "approval":
             row = next(
                 (r for r in pending_approvals if str(r.get("approval_id") or "") == item_id), None
@@ -2181,6 +2190,11 @@ def page_inbox() -> None:
             )
             if g:
                 _render_grievance_review(g, names)
+
+    # Set by Review (to the details) and by Close (back to the list).
+    target = st.session_state.pop("inbox_scroll", None)
+    if target:
+        _scroll_to(target)
 
 
 def _render_approval_review(row: dict, names: dict, proposals: dict) -> None:
@@ -2207,6 +2221,7 @@ def _render_approval_review(row: dict, names: dict, proposals: dict) -> None:
         with top_r:
             if st.button(i18n.t("inbox.close"), key=f"close_{approval_id}", use_container_width=True):
                 st.session_state.pop("inbox_open", None)
+                st.session_state["inbox_scroll"] = "#yz-inbox-list"
                 st.rerun()
 
         st.markdown(_approval_card_html(row, person), unsafe_allow_html=True)
@@ -2221,7 +2236,8 @@ def _render_approval_review(row: dict, names: dict, proposals: dict) -> None:
             explain = st.button(i18n.t("inbox.explain_this"), key=f"explain_{approval_id}", use_container_width=True)
             if explain or (brief_key not in st.session_state and other_key in st.session_state):
                 try:
-                    brief_response = api.request("GET", f"/approvals/{approval_id}/brief", timeout=120.0)
+                    with st.spinner(i18n.t("inbox.brief_loading")):
+                        brief_response = api.request("GET", f"/approvals/{approval_id}/brief", timeout=120.0)
                     brief = api.raise_for_api(brief_response)
                     if isinstance(brief, dict):
                         st.session_state[brief_key] = brief
@@ -2560,7 +2576,8 @@ def _localized_grievance(g: dict) -> dict:
     detail = st.session_state.get(cache_key)
     if detail is None:
         try:
-            detail = api.raise_for_api(api.request("GET", f"/grievances/{grievance_id}", timeout=120.0)) or {}
+            with st.spinner(i18n.t("common.opening")):
+                detail = api.raise_for_api(api.request("GET", f"/grievances/{grievance_id}", timeout=120.0)) or {}
         except RuntimeError:
             detail = {}
         st.session_state[cache_key] = detail
@@ -2588,6 +2605,7 @@ def _render_grievance_review(g: dict, names: dict) -> None:
         with top_r:
             if st.button(i18n.t("inbox.close"), key=f"close_g_{grievance_id}", use_container_width=True):
                 st.session_state.pop("inbox_open", None)
+                st.session_state["inbox_scroll"] = "#yz-inbox-list"
                 st.rerun()
 
         styles.detail_card(
@@ -2723,7 +2741,9 @@ def page_grievances() -> None:
 
     def _open_view(row: dict) -> None:
         st.session_state["grievance_view_id"] = row.get("_gid")
+        st.session_state["gv_scroll"] = "#yz-gv-detail"
 
+    st.markdown('<div id="yz-gv-list"></div>', unsafe_allow_html=True)
     styles.data_table(
         rows,
         [
@@ -2743,9 +2763,18 @@ def page_grievances() -> None:
 
     view_id = st.session_state.get("grievance_view_id")
     if view_id:
+        selected = next((i for i, r in enumerate(rows) if str(r.get("_gid")) == str(view_id)), None)
+        if selected is not None:
+            st.markdown(styles.selected_row_css("grievancesfull", selected), unsafe_allow_html=True)
         g = next((g for g in grievances if str(g.get("grievance_id") or "") == str(view_id)), None)
         if g:
+            st.markdown('<div id="yz-gv-detail"></div>', unsafe_allow_html=True)
             _render_grievance_readonly(g, names)
+
+    # Set by View (to the details) and by Close (back to the list).
+    target = st.session_state.pop("gv_scroll", None)
+    if target:
+        _scroll_to(target)
 
 
 def _render_grievance_readonly(g: dict, names: dict) -> None:
@@ -2765,6 +2794,7 @@ def _render_grievance_readonly(g: dict, names: dict) -> None:
         with top_r:
             if st.button(i18n.t("inbox.close"), key=f"close_gview_{grievance_id}", use_container_width=True):
                 st.session_state.pop("grievance_view_id", None)
+                st.session_state["gv_scroll"] = "#yz-gv-list"
                 st.rerun()
 
         st.write(g.get("complaint") or "—")

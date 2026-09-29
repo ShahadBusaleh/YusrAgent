@@ -527,26 +527,55 @@ def _team_insights_v2() -> None:
         )
 
         if pool_count:
-            with st.expander(i18n.t("insights.view_candidates", n=pool_count)):
+            skill_id = str(item.get("skill_id") or "")
+            table_key = f"candidates_{department_id}_{skill_id}"
+            candidate_rows = [
+                {
+                    "id": e.get("employee_id"),
+                    "name": e.get("full_name") or "—",
+                    "title": e.get("job_title") or "—",
+                    "plan": i18n.t("insights.plan_yes")
+                    if e.get("has_growth_plan")
+                    else i18n.t("insights.plan_no"),
+                    "has_plan": bool(e.get("has_growth_plan")),
+                }
+                for e in pool.get("employees") or []
+            ]
+            opened = st.session_state.get("insights_plan_open") or {}
+            open_here = opened.get("department_id") == department_id and opened.get("skill_id") == skill_id
+
+            def _open_plan(row: dict, skill_id: str = skill_id) -> None:
+                st.session_state["insights_plan_open"] = {
+                    "department_id": department_id,
+                    "skill_id": skill_id,
+                    "employee_id": row["id"],
+                }
+                st.session_state["insights_scroll"] = f"#yz-plan-{skill_id}"
+                st.rerun()
+
+            st.markdown(f'<div id="yz-gap-{html.escape(skill_id)}"></div>', unsafe_allow_html=True)
+            with st.expander(i18n.t("insights.view_candidates", n=pool_count), expanded=open_here):
                 styles.data_table(
-                    [
-                        {
-                            "id": e.get("employee_id"),
-                            "name": e.get("full_name") or "—",
-                            "title": e.get("job_title") or "—",
-                            "plan": i18n.t("insights.plan_yes")
-                            if e.get("has_growth_plan")
-                            else i18n.t("insights.plan_no"),
-                        }
-                        for e in pool.get("employees") or []
-                    ],
+                    candidate_rows,
                     [
                         ("name", i18n.t("insights.col_employee")),
                         ("title", i18n.t("insights.col_job_title")),
                         ("plan", i18n.t("insights.col_plan")),
                     ],
-                    key=f"candidates_{department_id}_{item.get('skill_id')}",
+                    on_view=_open_plan,
+                    view_label=i18n.t("insights.view_plan"),
+                    view_enabled=lambda row: row["has_plan"],
+                    key=table_key,
                 )
+                if open_here:
+                    selected = next(
+                        (i for i, row in enumerate(candidate_rows) if row["id"] == opened.get("employee_id")),
+                        None,
+                    )
+                    if selected is not None:
+                        st.markdown(styles.selected_row_css(table_key, selected), unsafe_allow_html=True)
+                    st.markdown(f'<div id="yz-plan-{html.escape(skill_id)}"></div>', unsafe_allow_html=True)
+                    _render_candidate_plan(opened)
 
         left, spacer = st.columns([1.65, 6.15])
         with left:
@@ -562,6 +591,11 @@ def _team_insights_v2() -> None:
                     )
                     st.session_state["_yz_pending_nav"] = "Ask Yusor"
                     st.rerun()
+
+    # Set by View plan (to the plan) and by Close (back to the gap).
+    target = st.session_state.pop("insights_scroll", None)
+    if target:
+        views._scroll_to(target)
 
     if covered:
         with st.expander(i18n.t("insights.covered_skills", n=len(covered))):
@@ -581,6 +615,55 @@ def _team_insights_v2() -> None:
                 ],
                 key="covered_skills",
             )
+
+
+def _render_candidate_plan(opened: dict) -> None:
+    """Growth plan of the candidate opened from a Team Insights gap card.
+
+    Fetched once per (candidate, language) and kept in session state, so
+    Streamlit reruns neither re-call the API nor add duplicate audit rows.
+    """
+    lang = st.session_state.get("lang") or "en"
+    cache_key = (opened["department_id"], opened["skill_id"], opened["employee_id"], lang)
+    cached = st.session_state.get("insights_plan_cache") or {}
+    if cached.get("key") != cache_key:
+        try:
+            with st.spinner(i18n.t("insights.plan_loading")):
+                data = api.raise_for_api(
+                    api.request(
+                        "GET",
+                        f"/experience-gap/{opened['department_id']}/skills/{opened['skill_id']}"
+                        f"/candidates/{opened['employee_id']}/plan",
+                        timeout=60.0,
+                    )
+                )
+            cached = {"key": cache_key, "data": data, "error": None}
+        except (RuntimeError, httpx.HTTPError) as exc:
+            cached = {"key": cache_key, "data": None, "error": str(exc)}
+        st.session_state["insights_plan_cache"] = cached
+
+    with st.container(key=f"insights_plan_{opened['skill_id']}_{opened['employee_id']}"):
+        if cached["error"]:
+            st.error(cached["error"])
+        else:
+            plan = cached["data"] or {}
+            st.markdown(f"#### {i18n.t('insights.plan_title', name=plan.get('full_name') or '—')}")
+            st.caption(
+                i18n.t(
+                    "insights.plan_meta",
+                    title=plan.get("job_title") or "—",
+                    skill=plan.get("skill_name") or "—",
+                    date=plan.get("created_at") or "—",
+                    filename=plan.get("cv_filename") or "CV",
+                )
+            )
+            st.markdown(plan.get("plan_text") or "")
+        with st.container(key=f"yz_btn_secondary_close_plan_{opened['skill_id']}"):
+            if st.button(i18n.t("insights.close_plan"), key=f"close_plan_{opened['skill_id']}"):
+                st.session_state.pop("insights_plan_open", None)
+                st.session_state.pop("insights_plan_cache", None)
+                st.session_state["insights_scroll"] = f"#yz-gap-{opened['skill_id']}"
+                st.rerun()
 
 
 @st.cache_data(ttl=60, show_spinner=False)

@@ -82,5 +82,67 @@ class GrowthUploadCases(unittest.TestCase):
         self.save.assert_not_called()
 
 
+class CandidatePlanForHRCases(unittest.TestCase):
+    """HR manager reads a candidate's growth plan from Team Insights."""
+
+    URL = "/experience-gap/IT/skills/DATA/candidates/EMP-0001/plan"
+
+    def setUp(self):
+        from app.api import deps
+        from app.api.routers import experience_gap
+
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.app = FastAPI()
+        self.app.include_router(experience_gap.router)
+        self.role = "hr_manager"
+        self.app.dependency_overrides[deps.get_current_user] = lambda: CurrentUser(
+            user_id="hr", employee_id="EMP-0048", username="hr.manager", role=self.role
+        )
+        self.app.dependency_overrides[experience_gap.get_db] = lambda: None
+        self.client = self.stack.enter_context(TestClient(self.app))
+        self.gap = self.stack.enter_context(patch.object(experience_gap, "get_department_experience_gap", return_value=[{
+            "skill_id": "DATA", "skill_name": "Data analysis", "status": "MISSING",
+            "_candidate_employees": [{"employee_id": "EMP-0001", "full_name": "Sara Example", "job_title": "Analyst"}],
+        }]))
+        self.plan = self.stack.enter_context(patch.object(experience_gap, "get_latest_growth_plan", return_value={
+            "plan_id": 7, "plan_text": "Step 1: learn SQL", "cv_filename": "cv.pdf", "created_at": "2026-09-01",
+        }))
+        self.stack.enter_context(patch.object(experience_gap, "localize_many", side_effect=lambda texts, *a: texts))
+        self.stack.enter_context(patch.object(experience_gap, "database_path", return_value=":memory:"))
+        self.audit = self.stack.enter_context(patch.object(experience_gap, "write_audit"))
+
+    def test_hr_manager_sees_candidate_plan_without_cv_text_and_it_is_audited(self):
+        result = self.client.get(self.URL)
+        self.assertEqual(result.status_code, 200)
+        body = result.json()
+        self.assertEqual(body["plan_text"], "Step 1: learn SQL")
+        self.assertEqual(body["full_name"], "Sara Example")
+        self.assertNotIn("cv_text", body)
+        self.audit.assert_called_once()
+        self.assertEqual(self.audit.call_args.kwargs["event_type"], "growth_plan_view")
+
+    def test_non_candidate_is_not_readable(self):
+        result = self.client.get("/experience-gap/IT/skills/DATA/candidates/EMP-0099/plan")
+        self.assertEqual(result.status_code, 404)
+        self.plan.assert_not_called()
+        self.audit.assert_not_called()
+
+    def test_covered_skill_is_not_readable(self):
+        self.gap.return_value[0]["status"] = "OK"
+        self.assertEqual(self.client.get(self.URL).status_code, 404)
+        self.plan.assert_not_called()
+
+    def test_candidate_without_plan_returns_404(self):
+        self.plan.return_value = None
+        self.assertEqual(self.client.get(self.URL).status_code, 404)
+        self.audit.assert_not_called()
+
+    def test_employee_role_is_forbidden(self):
+        self.role = "employee"
+        self.assertEqual(self.client.get(self.URL).status_code, 403)
+        self.gap.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
