@@ -1,0 +1,198 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\Welcome\Downloads\Yusr\YusrAgent\.venv\Scripts\python.exe
+rootdir: C:\Users\Welcome\Downloads\Yusr\YusrAgent
+plugins: anyio-4.15.1, langsmith-0.14.1
+collecting ... collected 159 items
+
+eval/test_arabic_answers.py::TemplateCases::test_english_response_unchanged PASSED [  0%]
+eval/test_arabic_answers.py::TemplateCases::test_failure_messages_have_arabic PASSED [  1%]
+eval/test_arabic_answers.py::TemplateCases::test_free_text_notice_is_translated_alone PASSED [  1%]
+eval/test_arabic_answers.py::TemplateCases::test_leave_balance_rendered_without_llm PASSED [  2%]
+eval/test_arabic_answers.py::TemplateCases::test_payroll_and_attendance_templates PASSED [  3%]
+eval/test_arabic_answers.py::TemplateCases::test_submission_notes PASSED [  3%]
+eval/test_arabic_answers.py::ArabicPolicyAnswerCases::test_arabic_answer_needs_citation PASSED [  4%]
+eval/test_arabic_answers.py::ArabicPolicyAnswerCases::test_arabic_answer_with_invented_number_fails PASSED [  5%]
+eval/test_arabic_answers.py::ArabicPolicyAnswerCases::test_arabic_consultant_answer_used_directly PASSED [  5%]
+eval/test_arabic_answers.py::ArabicPolicyAnswerCases::test_arabic_indic_digits_are_checked PASSED [  6%]
+eval/test_arabic_answers.py::ArabicPolicyAnswerCases::test_grounded_arabic_answer_passes PASSED [  6%]
+eval/test_arabic_answers.py::ArabicPolicyAnswerCases::test_ungrounded_arabic_falls_back_to_english PASSED [  7%]
+eval/test_arabic_answers.py::GlossaryCases::test_glossary_in_chat_translation PASSED [  8%]
+eval/test_arabic_answers.py::GlossaryCases::test_glossary_in_translation_prompts PASSED [  8%]
+eval/test_arabic_answers.py::KeywordSearchCases::test_basic_annual_leave_rule_found PASSED [  9%]
+eval/test_arabic_answers.py::KeywordSearchCases::test_chunk_shape_matches_retriever PASSED [ 10%]
+eval/test_arabic_answers.py::KeywordSearchCases::test_stop_words_only_query_returns_nothing PASSED [ 10%]
+eval/test_arabic_answers.py::KeywordSearchCases::test_wps_rules_merged_by_category PASSED [ 11%]
+eval/test_arabic_answers.py::CitedAnswerTranslationCases::test_citation_tags_removed_before_translation PASSED [ 11%]
+eval/test_arabic_answers.py::CitedAnswerTranslationCases::test_list_markers_and_number_words_accepted PASSED [ 12%]
+eval/test_arabic_answers.py::CitationStripCases::test_empty_citation_label_line_dropped PASSED [ 13%]
+eval/test_arabic_answers.py::CitationStripCases::test_label_with_content_kept PASSED [ 13%]
+eval/test_arabic_beyond_chat.py::LanguageHeaderCases::test_accept_language PASSED [ 14%]
+eval/test_arabic_beyond_chat.py::ErrorMessageCases::test_exact_and_pattern_messages PASSED [ 15%]
+eval/test_arabic_beyond_chat.py::ErrorMessageCases::test_passthrough PASSED [ 15%]
+eval/test_arabic_beyond_chat.py::LocalizeTextCases::test_arabic_to_english PASSED [ 16%]
+eval/test_arabic_beyond_chat.py::LocalizeTextCases::test_caches_success_only PASSED [ 16%]
+eval/test_arabic_beyond_chat.py::LocalizeTextCases::test_failure_retried_after_cooldown PASSED [ 17%]
+eval/test_arabic_beyond_chat.py::LocalizeTextCases::test_localize_many_keeps_order PASSED [ 18%]
+eval/test_arabic_beyond_chat.py::LocalizeTextCases::test_no_db_path_never_opens_a_database PASSED [ 18%]
+eval/test_arabic_beyond_chat.py::LocalizeTextCases::test_prefetch_can_be_disabled PASSED [ 19%]
+eval/test_arabic_beyond_chat.py::LocalizeTextCases::test_rejects_reply_instead_of_translation PASSED [ 20%]
+eval/test_arabic_beyond_chat.py::LocalizeTextCases::test_skips_english_and_arabic_input PASSED [ 20%]
+eval/test_arabic_beyond_chat.py::LocalizeTextCases::test_survives_memory_cache_loss PASSED [ 21%]
+eval/test_arabic_beyond_chat.py::LocalizeTextCases::test_uses_document_prompt PASSED [ 22%]
+eval/test_arabic_beyond_chat.py::PrefetchCases::test_background_job_writes_to_callers_db PASSED [ 22%]
+eval/test_arabic_beyond_chat.py::PersistentCacheCases::test_read_never_creates_table PASSED [ 23%]
+eval/test_arabic_beyond_chat.py::PersistentCacheCases::test_round_trip PASSED [ 23%]
+eval/test_arabic_beyond_chat.py::GrowthPlanLanguageCases::test_arabic_plan PASSED [ 24%]
+eval/test_arabic_beyond_chat.py::GrowthPlanLanguageCases::test_english_default_unchanged PASSED [ 25%]
+eval/test_arabic_beyond_chat.py::UiStringCases::test_every_key_has_both_languages PASSED [ 25%]
+eval/test_arabic_beyond_chat.py::UiStringCases::test_localized_summaries PASSED [ 26%]
+eval/test_growth_api.py::GrowthUploadCases::test_instruction_only_cv_does_not_generate_or_save PASSED [ 27%]
+eval/test_growth_api.py::GrowthUploadCases::test_missing_employee_returns_404_without_saving PASSED [ 27%]
+eval/test_growth_api.py::GrowthUploadCases::test_personal_data_only_cv_does_not_generate_or_save PASSED [ 28%]
+eval/test_growth_api.py::GrowthUploadCases::test_refused_or_invalid_plan_returns_retry_message_without_saving PASSED [ 28%]
+eval/test_growth_api.py::GrowthUploadCases::test_saves_the_same_sanitized_text_sent_for_generation PASSED [ 29%]
+eval/test_growth_api.py::GrowthUploadCases::test_service_failures_are_safe_and_not_saved 
+eval/test_growth_api.py::GrowthUploadCases::test_service_failures_are_safe_and_not_saved PASSED [ 30%]
+eval/test_llm_keys.py::RotationCases::test_all_keys_on_daily_limit_raise_fast PASSED [ 30%]
+eval/test_llm_keys.py::RotationCases::test_falls_back_to_single_llm_api_key PASSED [ 31%]
+eval/test_llm_keys.py::RotationCases::test_keys_never_logged PASSED      [ 32%]
+eval/test_llm_keys.py::RotationCases::test_other_errors_are_not_retried PASSED [ 32%]
+eval/test_llm_keys.py::RotationCases::test_pool_status PASSED            [ 33%]
+eval/test_llm_keys.py::RotationCases::test_rate_limited_key_fails_over_within_the_same_call PASSED [ 33%]
+eval/test_llm_keys.py::RotationCases::test_rest_time_from_header_and_message PASSED [ 34%]
+eval/test_llm_keys.py::RotationCases::test_round_robin_spreads_load PASSED [ 35%]
+eval/test_llm_keys.py::RotationCases::test_single_key_waits_out_a_short_limit PASSED [ 35%]
+eval/test_llm_keys.py::RotationCases::test_transient_error_tries_next_key PASSED [ 36%]
+eval/test_llm_keys.py::ConfigCases::test_llm_api_keys_parsing PASSED     [ 37%]
+eval/test_query_expansion.py::test_carry_forward_adds_postponement_terms[Can an employee carry forward unused annual leave to the next year?] PASSED [ 37%]
+eval/test_query_expansion.py::test_carry_forward_adds_postponement_terms[How many annual leave days do I have remaining, and can I carry them forward?] PASSED [ 38%]
+eval/test_query_expansion.py::test_carry_forward_adds_postponement_terms[Can I carry over my leave?] PASSED [ 38%]
+eval/test_query_expansion.py::test_sick_procedure_adds_notification_terms[What must an employee do when they get sick and miss work?] PASSED [ 39%]
+eval/test_query_expansion.py::test_sick_procedure_adds_notification_terms[I'm sick, who should I notify?] PASSED [ 40%]
+eval/test_query_expansion.py::test_other_questions_unchanged[How many paid sick leave days do I get?] PASSED [ 40%]
+eval/test_query_expansion.py::test_other_questions_unchanged[What is the sick leave pay after 30 days?] PASSED [ 41%]
+eval/test_query_expansion.py::test_other_questions_unchanged[What happens to unused leave at termination?] PASSED [ 42%]
+eval/test_query_expansion.py::test_other_questions_unchanged[What is the duration of annual leave?] PASSED [ 42%]
+eval/test_query_expansion.py::test_wps_questions_add_row_vocabulary[How can an establishment access the Wage Protection System?-Mudad] PASSED [ 43%]
+eval/test_query_expansion.py::test_wps_questions_add_row_vocabulary[What information is included in the employee payment details in the Wage Protection file?-bank identifier] PASSED [ 44%]
+eval/test_query_expansion.py::test_wps_questions_add_row_vocabulary[What are the different types of wage components that can be included in a Wage Protection file?-housing allowance] PASSED [ 44%]
+eval/test_query_expansion.py::test_company_policy_takes_last_slot PASSED [ 45%]
+eval/test_query_expansion.py::test_list_question_keeps_same_category_rows PASSED [ 45%]
+eval/test_regulations.py::ParserCases::test_article_numbers PASSED       [ 46%]
+eval/test_regulations.py::ParserCases::test_excerpt_of_real_page PASSED  [ 47%]
+eval/test_regulations.py::ParserCases::test_normalised_hash_ignores_diacritics_and_spacing PASSED [ 47%]
+eval/test_regulations.py::ParserCases::test_user_agent_has_no_personal_data PASSED [ 48%]
+eval/test_regulations.py::LiveDetectionCases::test_changed_article_creates_one_high_risk_request PASSED [ 49%]
+eval/test_regulations.py::LiveDetectionCases::test_duplicate_protection PASSED [ 49%]
+eval/test_regulations.py::LiveDetectionCases::test_first_run_stores_baseline_without_requests PASSED [ 50%]
+eval/test_regulations.py::LiveDetectionCases::test_llm_down_falls_back_to_needs_review PASSED [ 50%]
+eval/test_regulations.py::LiveDetectionCases::test_mass_removal_is_a_source_error_not_repeal PASSED [ 51%]
+eval/test_regulations.py::LiveDetectionCases::test_no_change_run PASSED  [ 52%]
+eval/test_regulations.py::LiveDetectionCases::test_removed_and_added_articles PASSED [ 52%]
+eval/test_regulations.py::SimulatedCases::test_approve_applies_versions_audit_and_reindex PASSED [ 53%]
+eval/test_regulations.py::SimulatedCases::test_conflict_case PASSED      [ 54%]
+eval/test_regulations.py::SimulatedCases::test_failed_reindex_is_retried PASSED [ 54%]
+eval/test_regulations.py::SimulatedCases::test_reject_is_never_reproposed PASSED [ 55%]
+eval/test_regulations.py::ApiCases::test_apply_refused_when_not_in_demo_environment PASSED [ 55%]
+eval/test_regulations.py::ApiCases::test_decided_twice_is_refused PASSED [ 56%]
+eval/test_regulations.py::ApiCases::test_edit_then_approve_needs_a_second_person PASSED [ 57%]
+eval/test_regulations.py::ApiCases::test_four_eyes_backstop_on_generic_approvals_path PASSED [ 57%]
+eval/test_regulations.py::ApiCases::test_pending_list_includes_system_requests PASSED [ 58%]
+eval/test_regulations.py::ApiCases::test_records_display PASSED          [ 59%]
+eval/test_regulations.py::ApiCases::test_send_back_is_reanalysed_and_linked PASSED [ 59%]
+eval/test_regulations.py::GuardCases::test_last_check_is_per_mode PASSED [ 60%]
+eval/test_regulations.py::GuardCases::test_live_is_the_default_mode PASSED [ 61%]
+eval/test_regulations.py::GuardCases::test_refused_against_the_real_db_writes_nothing PASSED [ 61%]
+eval/test_regulations.py::GuardCases::test_shared_collection_and_tracked_folder_are_refused PASSED [ 62%]
+eval/test_staffing_regression.py::StaffingFastPathCases::test_staffing_requests_route_to_hr_without_the_llm PASSED [ 62%]
+eval/test_staffing_regression.py::StaffingFastPathCases::test_teammates_both_fast_path_still_works PASSED [ 63%]
+eval/test_staffing_regression.py::DecisionBriefProfileCases::test_other_briefs_have_no_profile PASSED [ 64%]
+eval/test_staffing_regression.py::DecisionBriefProfileCases::test_termination_brief_has_profile PASSED [ 64%]
+eval/test_staffing_validation.py::NewHirePay::test_allowance_ratio_warnings_from_db PASSED [ 65%]
+eval/test_staffing_validation.py::NewHirePay::test_approved_hire_writes_job_grade PASSED [ 66%]
+eval/test_staffing_validation.py::NewHirePay::test_inside_range_typical_allowances_no_warning PASSED [ 66%]
+eval/test_staffing_validation.py::NewHirePay::test_job_grade_required_and_known PASSED [ 67%]
+eval/test_staffing_validation.py::NewHirePay::test_negative_allowance_blocked PASSED [ 67%]
+eval/test_staffing_validation.py::NewHirePay::test_nitaqat_uses_basic_plus_housing PASSED [ 68%]
+eval/test_staffing_validation.py::NewHirePay::test_outside_grade_range_warning PASSED [ 69%]
+eval/test_staffing_validation.py::NewHirePay::test_salary_one_blocked PASSED [ 69%]
+eval/test_staffing_validation.py::NewHirePay::test_salary_zero_blocked PASSED [ 70%]
+eval/test_staffing_validation.py::NewHirePay::test_saudi_3500_nitaqat_warning PASSED [ 71%]
+eval/test_staffing_validation.py::EndOfServiceReason::test_asdfasdf_blocked PASSED [ 71%]
+eval/test_staffing_validation.py::EndOfServiceReason::test_llm_down_is_a_warning_not_a_block PASSED [ 72%]
+eval/test_staffing_validation.py::EndOfServiceReason::test_llm_warning_saved PASSED [ 72%]
+eval/test_staffing_validation.py::EndOfServiceReason::test_one_letter_blocked PASSED [ 73%]
+eval/test_staffing_validation.py::EndOfServiceReason::test_real_reason_ready_and_reviewed PASSED [ 74%]
+eval/test_staffing_validation.py::Article80::test_complete_request_and_settlement PASSED [ 74%]
+eval/test_staffing_validation.py::Article80::test_edited_law_text_is_followed PASSED [ 75%]
+eval/test_staffing_validation.py::Article80::test_grounds_come_from_law075_row PASSED [ 76%]
+eval/test_staffing_validation.py::Article80::test_missing_procedure_blocked PASSED [ 76%]
+eval/test_staffing_validation.py::Article80::test_short_details_blocked PASSED [ 77%]
+eval/test_staffing_validation.py::Article80::test_without_ground_blocked PASSED [ 77%]
+eval/test_staffing_validation.py::LiveReasonReview::test_contradictory_reason_warns PASSED [ 78%]
+eval/test_staffing_validation.py::AskYusorChat::test_article_80_without_ground_blocked PASSED [ 79%]
+eval/test_staffing_validation.py::AskYusorChat::test_bad_reasons_blocked PASSED [ 79%]
+eval/test_staffing_validation.py::AskYusorChat::test_contradictory_reason_warning_saved PASSED [ 80%]
+eval/test_staffing_validation.py::AskYusorChat::test_outside_grade_warning_saved PASSED [ 81%]
+eval/test_staffing_validation.py::AskYusorChat::test_salary_one_and_zero_blocked PASSED [ 81%]
+eval/test_staffing_validation.py::AskYusorChat::test_saudi_3500_warning_saved PASSED [ 82%]
+eval/test_staffing_validation.py::UiEndOfService::test_both_languages SKIPPED [ 83%]
+eval/test_supporting_modules.py::LeaveCases::test_days_override_model_count PASSED [ 83%]
+eval/test_supporting_modules.py::LeaveCases::test_explicit_submissions 
+eval/test_supporting_modules.py::LeaveCases::test_explicit_submissions PASSED [ 84%]
+eval/test_supporting_modules.py::LeaveCases::test_invalid_date_and_missing_dates 
+eval/test_supporting_modules.py::LeaveCases::test_invalid_date_and_missing_dates PASSED [ 84%]
+eval/test_supporting_modules.py::LeaveCases::test_past_dates PASSED      [ 85%]
+eval/test_supporting_modules.py::LeaveCases::test_policy_and_negation_are_not_submissions 
+eval/test_supporting_modules.py::LeaveCases::test_policy_and_negation_are_not_submissions PASSED [ 86%]
+eval/test_supporting_modules.py::LeaveCases::test_reversed_dates PASSED  [ 86%]
+eval/test_supporting_modules.py::LeaveCases::test_today_single_day PASSED [ 87%]
+eval/test_supporting_modules.py::TranslationCases::test_added_number_falls_back PASSED [ 88%]
+eval/test_supporting_modules.py::TranslationCases::test_arabic_and_persian_digits_normalised PASSED [ 88%]
+eval/test_supporting_modules.py::TranslationCases::test_arabic_output_digits_remain_exact PASSED [ 89%]
+eval/test_supporting_modules.py::TranslationCases::test_duplicate_placeholder_falls_back PASSED [ 89%]
+eval/test_supporting_modules.py::TranslationCases::test_identifiers_never_sent_as_plain_text PASSED [ 90%]
+eval/test_supporting_modules.py::TranslationCases::test_lost_placeholder_falls_back PASSED [ 91%]
+eval/test_supporting_modules.py::GrowthCases::test_apologetic_refusal_is_rejected PASSED [ 91%]
+eval/test_supporting_modules.py::GrowthCases::test_cv_preparation_is_idempotent PASSED [ 92%]
+eval/test_supporting_modules.py::GrowthCases::test_empty_cv_rejected PASSED [ 93%]
+eval/test_supporting_modules.py::GrowthCases::test_extracted_cv_is_masked_for_storage PASSED [ 93%]
+eval/test_supporting_modules.py::GrowthCases::test_extraction_stops_at_budget PASSED [ 94%]
+eval/test_supporting_modules.py::GrowthCases::test_injected_cv_filtered_and_delimited PASSED [ 94%]
+eval/test_supporting_modules.py::GrowthCases::test_instruction_only_cv_rejected_before_model_call 
+eval/test_supporting_modules.py::GrowthCases::test_instruction_only_cv_rejected_before_model_call PASSED [ 95%]
+eval/test_supporting_modules.py::GrowthCases::test_model_refusal_or_invalid_plan_raises_before_save 
+eval/test_supporting_modules.py::GrowthCases::test_model_refusal_or_invalid_plan_raises_before_save PASSED [ 96%]
+eval/test_supporting_modules.py::GrowthCases::test_natural_language_refusal_rejected PASSED [ 96%]
+eval/test_supporting_modules.py::GrowthCases::test_personal_data_masked_before_model PASSED [ 97%]
+eval/test_supporting_modules.py::GrowthCases::test_quoted_refusal_in_advice_is_accepted PASSED [ 98%]
+eval/test_supporting_modules.py::GrowthCases::test_unicode_plan_content_preserved PASSED [ 98%]
+eval/test_supporting_modules.py::PayrollCases::test_arabic_pdf_has_embedded_unicode_fonts PASSED [ 99%]
+eval/test_supporting_modules.py::PayrollCases::test_unicode_and_shaping_enabled PASSED [100%]
+
+============================== warnings summary ===============================
+.venv\Lib\site-packages\starlette\testclient.py:36
+  C:\Users\Welcome\Downloads\Yusr\YusrAgent\.venv\Lib\site-packages\starlette\testclient.py:36: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+    _PortalFactoryType = typing.Callable[[], typing.ContextManager[anyio.abc.BlockingPortal]]
+
+app\api\routers\regulations.py:298
+  C:\Users\Welcome\Downloads\Yusr\YusrAgent\app\api\routers\regulations.py:298: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @router.on_event("startup")
+
+app\api\routers\regulations.py:310
+  C:\Users\Welcome\Downloads\Yusr\YusrAgent\app\api\routers\regulations.py:310: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @router.on_event("shutdown")
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: C:\Users\Welcome\Downloads\Yusr\YusrAgent\eval\results\unit-tests-20260929-131438.xml -
+======= 158 passed, 1 skipped, 3 warnings, 25 subtests passed in 16.02s =======
