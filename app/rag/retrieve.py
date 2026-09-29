@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import time
 
@@ -10,20 +11,21 @@ from app.rag.ingest import SOURCE_NAMES, load_chunks
 from app.rag.keyword import keyword_search
 from app.rag.query_expansion import expand_query
 
+logger = logging.getLogger(__name__)
+
 
 def _hit_to_chunk(hit) -> dict:
     payload = hit.payload or {}
-
-
     return {
-    "id": payload.get("id"),
-    "source_ids": payload.get("source_ids") or [payload.get("id")],
-    "source_table": payload.get("source_table"),
-    "source_name": payload.get("source_name"),
-    "filename": payload.get("filename"),
-    "text": payload.get("text"),
-    "score": float(getattr(hit, "score", 0.0) or 0.0),
-}
+        "id": payload.get("id"),
+        "source_ids": payload.get("source_ids") or [payload.get("id")],
+        "source_table": payload.get("source_table"),
+        "source_name": payload.get("source_name"),
+        "filename": payload.get("filename"),
+        "text": payload.get("text"),
+        "score": float(getattr(hit, "score", 0.0) or 0.0),
+    }
+
 
 _ARTICLE_RE = re.compile(r"(?:\barticle|\bart\.|المادة)\s*(\d{1,3})\b", re.IGNORECASE)
 
@@ -62,12 +64,12 @@ def retrieve(query: str, top_k: int = 5) -> list[dict]:
     # 1. Qdrant client
     start = time.perf_counter()
     client = get_qdrant_client()
-    print(f"[RAG] get_qdrant_client: {(time.perf_counter() - start) * 1000:.2f} ms")
+    logger.debug("get_qdrant_client: %.2f ms", (time.perf_counter() - start) * 1000)
 
     # 2. Embedding
     start = time.perf_counter()
     vector = embed_text(query)
-    print(f"[RAG] embed_text: {(time.perf_counter() - start) * 1000:.2f} ms")
+    logger.debug("embed_text: %.2f ms", (time.perf_counter() - start) * 1000)
 
     # 3. Dense search
     start = time.perf_counter()
@@ -79,10 +81,7 @@ def retrieve(query: str, top_k: int = 5) -> list[dict]:
         with_payload=True,
     )
 
-    print(
-        f"[RAG] dense query: "
-        f"{(time.perf_counter() - start) * 1000:.2f} ms"
-    )
+    logger.debug("dense query: %.2f ms", (time.perf_counter() - start) * 1000)
 
     # 4. Keyword search
     start = time.perf_counter()
@@ -92,13 +91,10 @@ def retrieve(query: str, top_k: int = 5) -> list[dict]:
     try:
         keyword = keyword_search(query, top_k=top_k)
     except Exception as e:
-        print(f"[RAG] keyword search failed: {e}")
+        logger.warning("keyword search failed: %s", e)
         keyword = []
 
-    print(
-        f"[RAG] keyword search: "
-        f"{(time.perf_counter() - start) * 1000:.2f} ms"
-    )
+    logger.debug("keyword search: %.2f ms", (time.perf_counter() - start) * 1000)
 
     # 5. RRF
     start = time.perf_counter()
@@ -131,15 +127,9 @@ def retrieve(query: str, top_k: int = 5) -> list[dict]:
         reverse=True,
     )
 
-    print(
-        f"[RAG] RRF: "
-        f"{(time.perf_counter() - start) * 1000:.2f} ms"
-    )
+    logger.debug("RRF: %.2f ms", (time.perf_counter() - start) * 1000)
 
-    print(
-        f"[RAG] TOTAL: "
-        f"{(time.perf_counter() - total_start) * 1000:.2f} ms"
-    )
+    logger.debug("TOTAL: %.2f ms", (time.perf_counter() - total_start) * 1000)
 
     if articles:
         pinned = _article_chunks(articles)
