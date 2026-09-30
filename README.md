@@ -210,5 +210,5 @@ This is a demo with synthetic data, so a few things are deliberately simple:
 Built by a four-person team:
 [@ShahadBusaleh](https://github.com/ShahadBusaleh) ·
 [@aeshahs22-ops](https://github.com/aeshahs22-ops) ·
-Amal Albaraiki ·
+[@Amal Albaraiki](https://github.com/AmalAlbaraiki) . 
 [@ghaidaaljahmi-ux](https://github.com/ghaidaaljahmi-ux)
