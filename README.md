@@ -93,7 +93,7 @@ cp .env.example .env        # Windows PowerShell: copy .env.example .env
 
 ### Configure
 
-Fill in `.env` (it is git-ignored, so never commit it): `JWT_SECRET`, `QDRANT_URL`, `QDRANT_API_KEY` and `LLM_API_KEY`. Make sure `LLM_BASE_URL` and `LLM_MODEL` belong to the same provider (both Groq or both OpenAI). A mismatch causes 404 errors from the agent pipeline.
+Fill in `.env` (it is git-ignored, so never commit it): `JWT_SECRET`, `QDRANT_URL`, `QDRANT_API_KEY` and `LLM_API_KEY`. Generate `JWT_SECRET` with `python -c "import secrets; print(secrets.token_urlsafe(48))"`. If it is missing or left as the example value, the API still starts, but it uses a random secret that changes on every restart and logs you out. Make sure `LLM_BASE_URL` and `LLM_MODEL` belong to the same provider (both Groq or both OpenAI). A mismatch causes 404 errors from the agent pipeline.
 
 Optional settings:
 
@@ -104,6 +104,7 @@ Optional settings:
 | `REGULATION_AUTO_CHECK` | `1` | `0` turns off the daily Labor Law check (laws.boe.gov.sa). |
 | `REGULATION_SOURCE` | real sites | `simulated` = demo data. Only runs with a demo `SQLITE_PATH`, a demo `QDRANT_COLLECTION` and a `REGULATION_DEMO_POLICY_DIR` outside `policy_texts/`. |
 | `YUSOR_PREFETCH_TRANSLATIONS` | `1` | `0` stops background Arabic translation of stored text (the eval harness does this). |
+| `CORS_ORIGINS` | `http://localhost:8501,http://127.0.0.1:8501` | Browser origins allowed to call the API, comma-separated. The Streamlit UI calls the API server-side, so it doesn't need this. `*` allows all. |
 
 ### Index the policy documents (once)
 
@@ -185,7 +186,8 @@ LLM-as-judge and Ragas scoring (faithfulness, context precision/recall, answer r
 This is a demo with synthetic data, so a few things are deliberately simple:
 
 - Seeded accounts share one documented password, and `app/security/passwords.py` uses unsalted SHA-256 hashing (isolated in one module so bcrypt/argon2 can replace it). Replace both before any real use.
-- CORS currently allows all origins.
+- CORS allows only the local Streamlit origins by default (`CORS_ORIGINS`).
+- If `JWT_SECRET` is missing or left as a placeholder, the API signs tokens with a random per-process secret, so a published default can never be used to forge a login.
 - Secrets (JWT secret, Qdrant and LLM keys) are read from environment variables only. See `.env.example`.
 
 ## Documentation
@@ -210,5 +212,9 @@ This is a demo with synthetic data, so a few things are deliberately simple:
 Built by a four-person team:
 [@ShahadBusaleh](https://github.com/ShahadBusaleh) ·
 [@aeshahs22-ops](https://github.com/aeshahs22-ops) ·
-[@Amal Albaraiki](https://github.com/AmalAlbaraiki) . 
+[@AmalAlbaraiki](https://github.com/AmalAlbaraiki) ·
 [@ghaidaaljahmi-ux](https://github.com/ghaidaaljahmi-ux)
+
+## License
+
+Released under the [MIT License](LICENSE).

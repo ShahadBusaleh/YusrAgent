@@ -1,8 +1,9 @@
 # Yusor — System Architecture
 
-A description of the current system (September 2026), written so a diagramming
-tool or another AI can draw it. Section 1 is a ready-to-paste prompt; sections
-2–6 are the full node/edge list; section 7 is a Mermaid version.
+A description of the current system (September 2026). Section 1 is a
+one-page overview (it also works as a prompt for a diagramming tool);
+sections 2–6 list every component and connection; section 7 is a Mermaid
+diagram.
 
 ---
 

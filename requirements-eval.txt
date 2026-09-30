@@ -1,0 +1,5 @@
+# Extra packages for the evaluation scripts (eval/). The app itself only
+# needs requirements.txt.
+-r requirements.txt
+ragas==0.4.3
+pytest==9.1.1

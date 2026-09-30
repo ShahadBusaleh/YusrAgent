@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,6 +12,8 @@ from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
+
+logger = logging.getLogger(__name__)
 
 
 def _int(name: str, default: int) -> int:
@@ -35,6 +39,8 @@ class Settings:
     # rotates across them. llm_api_key stays the first one, so existing
     # "is a key configured?" checks keep working.
     llm_api_keys: tuple[str, ...] = ()
+    # Browser origins allowed by CORS (CORS_ORIGINS, comma-separated).
+    cors_origins: tuple[str, ...] = ()
 
 
 def _llm_keys() -> tuple[str, ...]:
@@ -45,6 +51,42 @@ def _llm_keys() -> tuple[str, ...]:
     return tuple(dict.fromkeys(k for k in keys if k))
 
 
+# Values published in this repo (.env.example, older defaults). Tokens signed
+# with them could be forged by anyone, so they count as "not set".
+_PLACEHOLDER_JWT_SECRETS = {
+    "dev-only-change-me",
+    "replace-with-a-long-random-string",
+    "yusor-local-dev-secret-replace-me",
+}
+_EPHEMERAL_JWT_SECRET = secrets.token_urlsafe(48)
+_warned_jwt_secret = False
+
+
+def _jwt_secret() -> str:
+    """JWT_SECRET, or a random per-process secret when it is missing or a
+    known placeholder. The fallback keeps the app running (demo Space, fresh
+    clone) without a forgeable key; sessions just end when the API restarts."""
+    global _warned_jwt_secret
+    value = os.getenv("JWT_SECRET", "").strip()
+    if value and value not in _PLACEHOLDER_JWT_SECRETS:
+        return value
+    if not _warned_jwt_secret:
+        logger.warning(
+            "JWT_SECRET is not set (or is a placeholder); using a random "
+            "secret for this process. Set JWT_SECRET in .env to keep users "
+            "logged in across restarts."
+        )
+        _warned_jwt_secret = True
+    return _EPHEMERAL_JWT_SECRET
+
+
+def _cors_origins() -> tuple[str, ...]:
+    """The Streamlit UI calls the API server-side, so only other browser
+    front-ends need CORS. "*" allows every origin."""
+    raw = os.getenv("CORS_ORIGINS", "http://localhost:8501,http://127.0.0.1:8501")
+    return tuple(o.strip() for o in raw.split(",") if o.strip())
+
+
 def get_settings() -> Settings:
     sqlite = os.getenv("SQLITE_PATH", "agentic_hr.db")
     sqlite_path = Path(sqlite)
@@ -52,7 +94,7 @@ def get_settings() -> Settings:
         sqlite_path = ROOT / sqlite_path
     return Settings(
         sqlite_path=sqlite_path,
-        jwt_secret=os.getenv("JWT_SECRET", "dev-only-change-me"),
+        jwt_secret=_jwt_secret(),
         jwt_access_minutes=_int("JWT_ACCESS_MINUTES", 15),
         jwt_refresh_days=_int("JWT_REFRESH_DAYS", 7),
         api_base_url=os.getenv("API_BASE_URL", "http://127.0.0.1:8000").rstrip("/"),
@@ -68,6 +110,7 @@ def get_settings() -> Settings:
         ),
         llm_model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
         llm_api_keys=_llm_keys(),
+        cors_origins=_cors_origins(),
     )
 
 

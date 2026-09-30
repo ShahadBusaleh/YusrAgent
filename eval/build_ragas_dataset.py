@@ -1,6 +1,5 @@
 import argparse
 import json
-from pathlib import Path
 
 from app.agents.consultant_agent import ConsultantAgent
 from app.config import ROOT

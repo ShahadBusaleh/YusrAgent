@@ -225,10 +225,10 @@ def _build_recommendation(
         )
     else:
         develop = (
-            f" No employee in this department is in an adjacent role "
-            f"today, so there is no realistic internal candidate to "
-            f"develop — recommend hiring externally for this "
-            f"experience."
+            " No employee in this department is in an adjacent role "
+            "today, so there is no realistic internal candidate to "
+            "develop — recommend hiring externally for this "
+            "experience."
         )
 
     return (lead + develop).strip()

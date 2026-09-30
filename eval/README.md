@@ -73,7 +73,7 @@ EMP-0001 is an `hr_manager`.
 Reference answers in `golden/consultant_rag.jsonl` state only what their `reference_source_ids` files say. Out-of-scope questions (no reference source, the answer should refuse) are in `golden/consultant_out_of_scope.jsonl` and are not Ragas-scored, since context precision/recall are 0 by definition there.
 | `python -m eval.run_llm_judge` | LLM-as-a-Judge over the latest `results/eval-*.json` (all four agents) → `results/llm-judge-*.json`. Uses the fuller `judge_output` saved by `run_eval.py`. Options: `--input`, `--model`, `--id`. | Yes |
 
-`ragas` is not in `requirements.txt`; install it separately (`pip install ragas`) before running the Ragas scripts. The LLM-based tools use the shared provider quota (Groq: 8k tokens/minute, 200k/day). Prefer `--offline` and the unit tests for day-to-day checks.
+The Ragas scripts need extra packages: `pip install -r requirements-eval.txt`. The LLM-based tools use the shared provider quota (Groq: 8k tokens/minute, 200k/day). Prefer `--offline` and the unit tests for day-to-day checks.
 
 ### Supporting-module regression checks
 

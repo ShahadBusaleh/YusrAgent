@@ -199,7 +199,7 @@ Snapshot of the local `agentic_hr.db` on 2026-09-26. Transactional tables
 | grievances | 7 |
 | audit_log | 198 |
 | company_policies | 27 |
-| saudi_labor_law | 70 |
+| saudi_labor_law | 81 (70 original + 11 from `app/seed_labor_law_2025.py`) |
 | regulation_versions | 245 (baseline article versions) |
 | skills | 72 (seed/placeholder — see above) |
 | department_requirements | 72 (seed/placeholder — see above) |
