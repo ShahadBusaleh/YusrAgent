@@ -1,6 +1,6 @@
 # Yusor — HR Multi-Agent Assistant
 
-**Yusor** (يُسر) is a bilingual (Arabic / English), policy-grounded HR assistant built as a multi-agent system. Employees ask questions and submit requests in plain language. Specialist agents answer from the HR database and from Saudi Labor Law and company policy documents. A supervisor agent checks every answer before the user sees it, and risky actions wait for human approval.
+**Yusor** (يُسر)[https://drive.google.com/drive/folders/1OD2wvYFTHIAyO9OaUVcE1hvelW9TOnow?usp=sharing] is a bilingual (Arabic / English), policy-grounded HR assistant built as a multi-agent system. Employees ask questions and submit requests in plain language. Specialist agents answer from the HR database and from Saudi Labor Law and company policy documents. A supervisor agent checks every answer before the user sees it, and risky actions wait for human approval.
 
 > All employee data in this repository is **synthetic**. The project is a demo and portfolio piece, not a production HR system (see [Security notes](#security-notes)).
 
